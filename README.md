@@ -220,6 +220,45 @@ kiro-stack/
 
 ---
 
+## Chat Assistant (Python CLI)
+
+项目自带一个 Python 命令行对话助手 `chat.py`，零依赖，开箱即用：
+
+```bash
+# 交互式对话
+python chat.py
+
+# 指定模型
+python chat.py -m claude-sonnet-4.6
+
+# 单次提问（非交互）
+python chat.py "用Python写一个快速排序"
+
+# 设置系统提示词
+python chat.py -s "你是一个资深Python专家"
+
+# 非流式模式
+python chat.py --no-stream
+```
+
+**交互模式命令：**
+
+| 命令 | 说明 |
+|------|------|
+| `/model <name>` | 切换模型 |
+| `/models` | 列出可用模型 |
+| `/clear` | 清空对话历史 |
+| `/history` | 查看对话记录 |
+| `/save [file]` | 保存对话到 JSON |
+| `/system <msg>` | 设置系统提示词 |
+| `/tokens` | 查看 token 统计 |
+| `/stream` | 切换流式/非流式 |
+| `/exit` | 退出 |
+
+> 多行输入：行末加 `\` 续行
+
+---
+
 ## Disclaimer
 
 > ⚠️ **Please read carefully before use**

@@ -79,8 +79,8 @@ def get_kiro_headers(auth_manager: "KiroAuthManager", token: str) -> dict:
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "User-Agent": f"aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-{fingerprint}",
-        "x-amz-user-agent": f"aws-sdk-js/1.0.27 KiroIDE-0.7.45-{fingerprint}",
+        "User-Agent": f"Kiro-Cli/1.26.2 ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E {fingerprint}",
+        "x-amz-user-agent": f"Kiro-Cli/1.26.2 os/linux lang/rust {fingerprint}",
         "x-amzn-codewhisperer-optout": "true",
         "x-amzn-kiro-agent-mode": "vibe",
         "amz-sdk-invocation-id": str(uuid.uuid4()),

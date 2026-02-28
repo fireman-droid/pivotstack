@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const KiroVersion = "0.7.45"
+const KiroVersion = "1.26.2"
 
 // 双端点配置（429 时自动 fallback）
 type kiroEndpoint struct {
@@ -168,11 +168,11 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 	machineId := account.MachineId
 	var userAgent, amzUserAgent string
 	if machineId != "" {
-		userAgent = fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/linux lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-%s-%s", KiroVersion, machineId)
-		amzUserAgent = fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE %s %s", KiroVersion, machineId)
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E %s", KiroVersion, machineId)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust %s", KiroVersion, machineId)
 	} else {
-		userAgent = fmt.Sprintf("aws-sdk-js/1.0.27 ua/2.1 os/linux lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-%s", KiroVersion)
-		amzUserAgent = fmt.Sprintf("aws-sdk-js/1.0.27 KiroIDE %s", KiroVersion)
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", KiroVersion)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", KiroVersion)
 	}
 
 	// 根据配置排序端点

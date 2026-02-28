@@ -929,6 +929,8 @@
                             </label>
                         </div>
                         <button class="btn btn-secondary btn-sm" onclick="showExportModal()" data-i18n="accounts.export"></button>
+
+                        <button class="btn btn-sm" style="background:#10b981;color:#fff;border:none;cursor:pointer" onclick="showDBImportModal()">从数据库补充</button>
                         <button class="btn btn-primary btn-sm" onclick="showModal('add')" data-i18n="accounts.add"></button>
                     </div>
                 </div>
@@ -1012,7 +1014,7 @@
                     data-i18n="settings.saveEndpoint"></button>
             </div>
             <div class="card">
-                <div class="card-header"><span class="card-title" data-i18n="settings.adminPassword"></span></div>
+                <div class="card-header"><span class="card-title" data-i18n="settings.password"></span></div>
                 <div class="form-group"><label data-i18n="settings.newPassword"></label><input type="password"
                         id="newPassword" data-i18n-placeholder="settings.newPasswordPlaceholder"></div>
                 <button class="btn btn-primary" onclick="changePassword()" data-i18n="settings.changePassword"></button>
@@ -1137,7 +1139,7 @@
                 'settings.endpointHint': '选择首选端点，自动选择模式下会根据可用性自动选择端点',
                 'settings.saveEndpoint': '保存端点设置',
                 'settings.endpointSaved': '端点设置已保存',
-                'settings.adminPassword': '管理密码',
+                'settings.password': '管理密码',
                 'settings.newPassword': '新密码',
                 'settings.newPasswordPlaceholder': '输入新密码',
                 'settings.changePassword': '修改密码',
@@ -1349,7 +1351,7 @@
                 'settings.endpointHint': 'Select preferred endpoint. In auto-select mode, the endpoint is automatically selected based on availability.',
                 'settings.saveEndpoint': 'Save Endpoint Settings',
                 'settings.endpointSaved': 'Endpoint settings saved',
-                'settings.adminPassword': 'Admin Password',
+                'settings.password': 'Admin Password',
                 'settings.newPassword': 'New Password',
                 'settings.newPasswordPlaceholder': 'Enter new password',
                 'settings.changePassword': 'Change Password',
@@ -2533,6 +2535,133 @@
             } catch (e) { }
             loadAccounts();
         }
+    
+        // ==================== 数据库导入 ====================
+        function showDBImportModal() {
+            // First check DB status
+            fetch('/admin/api/import/db-status', {
+                headers: { 'X-Admin-Password': password }
+            })
+            .then(r => r.json())
+            .then(data => {
+                const avail = data.available || 0;
+                const dbInfo = data.database || '';
+                const currentAccounts = accountsData ? accountsData.length : 0;
+                const html = `
+                <div style="padding:20px">
+                    <h3 style="margin:0 0 16px;color:#1e293b">从数据库补充账号</h3>
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:16px">
+                        <div style="font-size:13px;color:#166534">
+                            <div>当前账号池: <strong>${currentAccounts}</strong> 个</div>
+                            <div>数据库可用: <strong>${avail}</strong> 个未激活普通账号</div>
+                            <div style="color:#6b7280;font-size:12px;margin-top:4px">${dbInfo}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:12px">
+                        <div>
+                            <label style="font-size:13px;color:#374151;font-weight:500">最少保持可用账号数</label>
+                            <input type="number" id="dbImportMin" value="3" min="1" max="50"
+                                style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;margin-top:4px">
+                        </div>
+                        <div>
+                            <label style="font-size:13px;color:#374151;font-weight:500">最多导入数量</label>
+                            <input type="number" id="dbImportLimit" value="5" min="1" max="50"
+                                style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;margin-top:4px">
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <input type="checkbox" id="dbImportForce">
+                            <label for="dbImportForce" style="font-size:13px;color:#374151">强制导入（不检查当前数量）</label>
+                        </div>
+                    </div>
+                    <div id="dbImportResult" style="margin-top:12px;display:none"></div>
+                    <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
+                        <button onclick="closeModal()" class="btn btn-secondary btn-sm">取消</button>
+                        <button onclick="doDBImport()" id="dbImportBtn" class="btn btn-sm" style="background:#10b981;color:#fff;border:none;cursor:pointer;padding:6px 16px">开始补充</button>
+                    </div>
+                </div>`;
+                showCustomModal(html);
+            })
+            .catch(err => {
+                alert('无法连接数据库: ' + err.message);
+            });
+        }
+
+        function showCustomModal(html) {
+            let overlay = document.getElementById('dbImportOverlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'dbImportOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+                overlay.onclick = function(e) { if (e.target === overlay) closeDBModal(); };
+                document.body.appendChild(overlay);
+            }
+            const box = document.createElement('div');
+            box.style.cssText = 'background:#fff;border-radius:12px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3)';
+            box.innerHTML = html;
+            overlay.innerHTML = '';
+            overlay.appendChild(box);
+            overlay.style.display = 'flex';
+        }
+
+        function closeDBModal() {
+            const overlay = document.getElementById('dbImportOverlay');
+            if (overlay) overlay.style.display = 'none';
+        }
+
+        async function doDBImport() {
+            const min = parseInt(document.getElementById('dbImportMin').value) || 3;
+            const limit = parseInt(document.getElementById('dbImportLimit').value) || 5;
+            const force = document.getElementById('dbImportForce').checked;
+            const btn = document.getElementById('dbImportBtn');
+            const resultDiv = document.getElementById('dbImportResult');
+
+            btn.disabled = true;
+            btn.textContent = '导入中...';
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<div style="color:#6b7280;font-size:13px">正在从数据库导入账号，请稍候...</div>';
+
+            try {
+                const resp = await fetch('/admin/api/import/db', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Password': password
+                    },
+                    body: JSON.stringify({ min, limit, force })
+                });
+                const data = await resp.json();
+
+                if (data.error) {
+                    resultDiv.innerHTML = `<div style="color:#dc2626;font-size:13px;padding:8px;background:#fef2f2;border-radius:6px">${data.error}</div>`;
+                } else {
+                    let detailHtml = '';
+                    if (data.details) {
+                        if (data.details.imported && data.details.imported.length > 0) {
+                            detailHtml += '<div style="margin-top:8px;font-size:12px;color:#166534">';
+                            data.details.imported.forEach(a => { detailHtml += '✓ ' + a.email + '<br>'; });
+                            detailHtml += '</div>';
+                        }
+                        if (data.details.failed && data.details.failed.length > 0) {
+                            detailHtml += '<div style="margin-top:8px;font-size:12px;color:#dc2626">';
+                            data.details.failed.forEach(a => { detailHtml += '✗ ' + a.email + ': ' + a.error + '<br>'; });
+                            detailHtml += '</div>';
+                        }
+                    }
+                    const color = data.imported > 0 ? '#166534' : '#6b7280';
+                    const bg = data.imported > 0 ? '#f0fdf4' : '#f9fafb';
+                    resultDiv.innerHTML = `<div style="color:${color};font-size:13px;padding:8px;background:${bg};border-radius:6px">${data.message}${detailHtml}</div>`;
+                    // Refresh accounts list
+                    if (data.imported > 0) loadAccounts();
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div style="color:#dc2626;font-size:13px;padding:8px;background:#fef2f2;border-radius:6px">请求失败: ${err.message}</div>`;
+            }
+
+            btn.disabled = false;
+            btn.textContent = '开始补充';
+        }
+
+
     </script>
 </body>
 

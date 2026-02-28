@@ -1597,6 +1597,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetVersion(w, r)
 	case path == "/export" && r.Method == "POST":
 		h.apiExportAccounts(w, r)
+	case path == "/import/db" && r.Method == "POST":
+		h.apiImportFromDB(w, r)
+	case path == "/import/db-status" && r.Method == "GET":
+		h.apiGetDBStatus(w, r)
 	default:
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
