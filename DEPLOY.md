@@ -1,29 +1,55 @@
-# Kiro Stack Docker 部署指南
+# Kiro Stack 服务器部署指南
 
-## 1. 准备服务器
+## 服务器信息
 
-- 系统：Ubuntu 20.04+ / Debian 11+ / CentOS 8+
-- Docker + Docker Compose 已安装
-- 开放端口：`8088`（API + 管理面板）
+- 服务器 IP: `8.148.251.30`
+- SSH 用户: `root`
+- SSH 密码: `Lin20050201`
+- 项目路径: `/var/www/kiro-stack`
+- Gitee 仓库: `https://gitee.com/ji-bo-chang-oli-gave-it-to/kiro-stack.git`
+
+## 快速连接
 
 ```bash
-# 安装 Docker（如果没装）
-curl -fsSL https://get.docker.com | sh
-sudo systemctl enable docker && sudo systemctl start docker
+ssh root@8.148.251.30
+# 密码: Lin20050201
 ```
 
 ---
 
-## 2. 上传项目
-
-将 `kiro-stack` 整个目录上传到服务器：
+## 1. 准备服务器
 
 ```bash
-# 方式一：scp
-scp -r ./kiro-stack user@your-server:/opt/kiro-stack
+# 连接服务器
+ssh root@8.148.251.30
 
-# 方式二：git clone（如果有仓库）
-cd /opt && git clone https://github.com/your-username/kiro-stack.git
+# 安装 Docker
+apt update && apt install -y docker.io docker-compose git
+systemctl enable --now docker
+
+# 配置镜像加速（国内必做）
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://mirror.ccs.tencentyun.com",
+    "https://docker.m.daocloud.io"
+  ]
+}
+EOF
+systemctl restart docker
+```
+
+---
+
+## 2. 克隆项目
+
+```bash
+cd /var/www
+git clone https://gitee.com/ji-bo-chang-oli-gave-it-to/kiro-stack.git
+cd kiro-stack
+
+# 配置 Git 记住密码
+git config credential.helper store
 ```
 
 ---
@@ -31,33 +57,33 @@ cd /opt && git clone https://github.com/your-username/kiro-stack.git
 ## 3. 配置环境变量
 
 ```bash
-cd /opt/kiro-stack
+# 复制配置文件
 cp .env.example .env
+
+# 编辑配置
 nano .env
 ```
 
-编辑 `.env`，**必填两项**：
+修改以下内容：
 
 ```env
-# 管理面板登录密码
-ADMIN_PASSWORD=你的密码
+# 管理面板密码（必填）
+ADMIN_PASSWORD=你的强密码
 
-# 内部通信密钥（随便生成一个）
-INTERNAL_API_KEY=随机字符串
-```
+# 内部通信密钥（必填，使用下面命令生成）
+INTERNAL_API_KEY=随机生成的密钥
 
-生成随机密钥：
-```bash
-openssl rand -hex 32
-```
-
-可选配置：
-```env
-# 代理（国内服务器需要）
-VPN_PROXY_URL=http://127.0.0.1:7890
+# 可选：代理配置
+# VPN_PROXY_URL=http://127.0.0.1:7890
 
 # 调试模式
 DEBUG_MODE=off
+```
+
+生成随机密钥：
+
+```bash
+openssl rand -hex 32
 ```
 
 ---
@@ -65,120 +91,243 @@ DEBUG_MODE=off
 ## 4. 启动服务
 
 ```bash
+# 构建并启动
 docker compose up -d --build
-```
 
-首次构建约 2-3 分钟。启动后：
-
-| 地址 | 用途 |
-|------|------|
-| `http://服务器IP:8088/admin` | 管理面板 |
-| `http://服务器IP:8088/v1/chat/completions` | OpenAI 兼容 API |
-| `http://服务器IP:8088/v1/messages` | Claude 兼容 API |
-
----
-
-## 5. 添加账号
-
-### 方式一：管理面板手动添加
-
-1. 打开 `http://服务器IP:8088/admin`
-2. 用 `ADMIN_PASSWORD` 登录
-3. 点击添加账号（支持 Builder ID / IAM SSO / SSO Token）
-
-### 方式二：脚本批量导入（从 kiro-account-manager 数据库）
-
-```bash
-# 本地运行（需要 Python + pymysql + rich）
-python import_accounts.py --replenish --min 5
-
-# 查看当前状态
-python import_accounts.py --status
-
-# 守护进程自动补充（每5分钟检查，保持至少3个可用）
-python import_accounts.py --daemon --min 3 --interval 300
-```
-
----
-
-## 6. 客户端使用
-
-### Claude Code
-```bash
-export ANTHROPIC_BASE_URL=http://服务器IP:8088
-claude
-```
-
-### Cursor / Cline / ChatBox
-- Base URL: `http://服务器IP:8088`
-- Model: `claude-sonnet-4.5`（或其他可用模型）
-
-### curl 测试
-```bash
-curl http://服务器IP:8088/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":"Hello"}]}'
-```
-
----
-
-## 7. 常用运维命令
-
-```bash
 # 查看日志
 docker compose logs -f
-docker compose logs kiro-go -f
-docker compose logs kiro-gateway -f
 
-# 重启
-docker compose restart
-
-# 停止
-docker compose down
-
-# 更新代码后重新构建
-docker compose up -d --build
-
-# 查看容器状态
+# 查看状态
 docker compose ps
 ```
 
----
+首次构建约 2-3 分钟。
 
-## 8. 数据持久化
-
-账号数据保存在 `kiro-go/data/config.json`，通过 volume 挂载到宿主机：
-
-```
-./kiro-go/data:/app/data
-```
-
-备份时只需保存 `kiro-go/data/` 目录和 `.env` 文件。
+**注意：** 项目已配置为只监听 `127.0.0.1`，需要通过 Nginx 反向代理访问。
 
 ---
 
-## 9. 反向代理（可选，HTTPS）
+## 5. 配置 Nginx 反向代理
 
-如果需要域名 + HTTPS，用 Nginx：
+```bash
+# 安装 Nginx
+apt install nginx -y
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name api.example.com;
+# 复制配置文件
+cp nginx.conf /etc/nginx/sites-available/kiro-stack
 
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
+# 修改 server_name（如果有域名）
+nano /etc/nginx/sites-available/kiro-stack
 
-    location / {
-        proxy_pass http://127.0.0.1:8088;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;          # 流式响应必须关闭缓冲
-        proxy_read_timeout 300s;
-    }
+# 创建软链接
+ln -s /etc/nginx/sites-available/kiro-stack /etc/nginx/sites-enabled/
+
+# 测试配置
+nginx -t
+
+# 重启 Nginx
+systemctl restart nginx
+```
+
+---
+
+## 6. 配置防火墙
+
+```bash
+# 开放端口
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+# 查看状态
+ufw status
+```
+
+---
+
+## 7. 配置 API Key 认证
+
+通过 SSH 隧道访问管理面板：
+
+```bash
+# 在本地电脑运行
+ssh -L 8088:127.0.0.1:8088 root@8.148.251.30
+
+# 浏览器访问：http://localhost:8088/admin
+# 用 ADMIN_PASSWORD 登录
+# 在设置页面配置 API Key 并启用
+```
+
+或直接修改配置文件：
+
+```bash
+nano /var/www/kiro-stack/kiro-go/data/config.json
+```
+
+添加：
+
+```json
+{
+  "password": "你的管理密码",
+  "apiKey": "sk-kiro-your-secret-api-key",
+  "requireApiKey": true,
+  ...
 }
+```
+
+重启服务：
+
+```bash
+docker compose restart kiro-go
+```
+
+---
+
+## 8. 添加 Kiro 账号
+
+1. 通过 SSH 隧道访问管理面板：`http://localhost:8088/admin`
+2. 用 `ADMIN_PASSWORD` 登录
+3. 点击添加账号（支持 Builder ID / IAM SSO / SSO Token）
+
+---
+
+## 9. 测试部署
+
+```bash
+# 健康检查（不需要 API Key）
+curl http://8.148.251.30/health
+
+# 测试 API（需要 API Key）
+curl http://8.148.251.30/v1/chat/completions \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+
+# 查看模型列表
+curl http://8.148.251.30/v1/models
+```
+
+---
+
+## 10. 日常更新
+
+### 本地推送代码
+
+```bash
+# 在本地项目目录
+cd D:\E\前端好玩的东西\getcode\kiro-stack
+
+git add .
+git commit -m "更新说明"
+git push gitee main
+```
+
+### 服务器更新
+
+```bash
+ssh root@8.148.251.30
+cd /var/www/kiro-stack
+bash deploy-update.sh
+```
+
+---
+
+## 11. 常用命令
+
+```bash
+# 查看日志
+docker compose logs -f kiro-go
+docker compose logs -f kiro-gateway
+docker compose logs --tail=100
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+
+# 启动服务
+docker compose up -d
+
+# 查看状态
+docker compose ps
+
+# 查看资源占用
+docker stats
+
+# 进入容器
+docker exec -it kiro-go sh
+docker exec -it kiro-gateway sh
+
+# 备份配置
+tar -czf ~/kiro-backup-$(date +%Y%m%d).tar.gz \
+  kiro-go/data/config.json .env
+```
+
+---
+
+## 12. HTTPS 配置（可选）
+
+```bash
+# 安装 Certbot
+apt install certbot python3-certbot-nginx -y
+
+# 申请证书（需要域名）
+certbot --nginx -d your-domain.com
+
+# 自动续期
+crontab -e
+# 添加：0 3 * * * certbot renew --quiet
+```
+
+---
+
+## 13. 故障排查
+
+### 服务无法启动
+
+```bash
+# 查看详细日志
+docker compose logs --tail=200
+
+# 检查端口占用
+ss -tlnp | grep 8088
+ss -tlnp | grep 8001
+
+# 重新构建
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+### 无法访问
+
+```bash
+# 检查 Nginx 状态
+systemctl status nginx
+
+# 检查 Nginx 配置
+nginx -t
+
+# 查看 Nginx 日志
+tail -f /var/log/nginx/kiro-error.log
+
+# 检查防火墙
+ufw status
+```
+
+### 磁盘空间不足
+
+```bash
+# 清理 Docker
+docker system prune -f
+docker builder prune -f
+
+# 查看磁盘使用
+df -h
+du -sh /var/lib/docker
 ```
 
 ---

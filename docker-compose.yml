@@ -10,7 +10,7 @@ services:
       - DEBUG_MODE=${DEBUG_MODE:-off}
       - SKIP_STARTUP_CREDENTIAL_CHECK=true
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
 
   kiro-go:
     build: ./kiro-go
@@ -19,7 +19,7 @@ services:
     depends_on:
       - kiro-gateway
     ports:
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
     volumes:
       - ./kiro-go/data:/app/data
     environment:
