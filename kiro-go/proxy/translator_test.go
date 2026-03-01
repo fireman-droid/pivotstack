@@ -168,6 +168,100 @@ func TestOpenAIConversationIDStableFromAnchor(t *testing.T) {
 	}
 }
 
+func TestMergeConsecutiveMessages(t *testing.T) {
+	// 无连续消息 — 不变
+	msgs := []ClaudeMessage{
+		{Role: "user", Content: "a"},
+		{Role: "assistant", Content: "b"},
+		{Role: "user", Content: "c"},
+	}
+	merged := mergeConsecutiveMessages(msgs)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(merged))
+	}
+
+	// 连续 user 消息 — 合并
+	msgs = []ClaudeMessage{
+		{Role: "user", Content: "a"},
+		{Role: "user", Content: "b"},
+		{Role: "user", Content: "c"},
+	}
+	merged = mergeConsecutiveMessages(msgs)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged message, got %d", len(merged))
+	}
+	if merged[0].Role != "user" {
+		t.Fatalf("expected role user, got %s", merged[0].Role)
+	}
+	blocks, ok := merged[0].Content.([]interface{})
+	if !ok {
+		t.Fatalf("expected merged content to be []interface{}")
+	}
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 content blocks, got %d", len(blocks))
+	}
+
+	// 混合场景：user user assistant user user
+	msgs = []ClaudeMessage{
+		{Role: "user", Content: "a"},
+		{Role: "user", Content: "b"},
+		{Role: "assistant", Content: "c"},
+		{Role: "user", Content: "d"},
+		{Role: "user", Content: "e"},
+	}
+	merged = mergeConsecutiveMessages(msgs)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 messages after merge, got %d", len(merged))
+	}
+	if merged[0].Role != "user" || merged[1].Role != "assistant" || merged[2].Role != "user" {
+		t.Fatalf("unexpected roles: %s %s %s", merged[0].Role, merged[1].Role, merged[2].Role)
+	}
+
+	// content blocks 格式也能正确合并
+	msgs = []ClaudeMessage{
+		{Role: "user", Content: []interface{}{map[string]interface{}{"type": "text", "text": "x"}}},
+		{Role: "user", Content: "y"},
+	}
+	merged = mergeConsecutiveMessages(msgs)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged message, got %d", len(merged))
+	}
+	blocks, ok = merged[0].Content.([]interface{})
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("expected 2 content blocks from mixed formats, got %v", merged[0].Content)
+	}
+}
+
+func TestClaudeToKiroConsecutiveUserMessages(t *testing.T) {
+	// 这是 OpenClaw 触发 400 "Improperly formed request" 的场景：
+	// 连续的 user 消息，没有 assistant 消息交替
+	req := &ClaudeRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: "msg1"},
+			{Role: "user", Content: "msg2"},
+			{Role: "user", Content: "msg3"},
+		},
+	}
+
+	payload := ClaudeToKiro(req, false)
+
+	// history 不应该有连续的 UserInputMessage
+	for i := 1; i < len(payload.ConversationState.History); i++ {
+		prev := payload.ConversationState.History[i-1]
+		cur := payload.ConversationState.History[i]
+		if prev.UserInputMessage != nil && cur.UserInputMessage != nil {
+			t.Fatalf("history[%d] and history[%d] are both user messages — should have been merged", i-1, i)
+		}
+	}
+
+	// currentMessage 应该包含合并后的内容
+	cur := payload.ConversationState.CurrentMessage.UserInputMessage
+	if !strings.Contains(cur.Content, "msg1") || !strings.Contains(cur.Content, "msg2") || !strings.Contains(cur.Content, "msg3") {
+		t.Fatalf("expected all message contents in current message, got %q", cur.Content)
+	}
+}
+
 func TestClaudeConversationIDStableFromAnchor(t *testing.T) {
 	reqA := &ClaudeRequest{
 		Model:  "claude-sonnet-4.5",

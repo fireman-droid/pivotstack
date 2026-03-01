@@ -139,6 +139,58 @@ type ClaudeUsage struct {
 
 // ==================== Claude -> Kiro 转换 ====================
 
+// mergeConsecutiveMessages 合并连续的同角色消息。
+// Kiro/AmazonQ API 要求严格的 user/assistant 交替，不接受连续的同角色消息。
+// Anthropic 原生 API 允许这种格式，所以 OpenClaw/Claude Code 等客户端可能会发出这种请求。
+func mergeConsecutiveMessages(messages []ClaudeMessage) []ClaudeMessage {
+	if len(messages) <= 1 {
+		return messages
+	}
+
+	result := make([]ClaudeMessage, 0, len(messages))
+	i := 0
+	for i < len(messages) {
+		// 如果下一条消息角色不同，或者已经是最后一条，直接保留
+		if i == len(messages)-1 || messages[i].Role != messages[i+1].Role {
+			result = append(result, messages[i])
+			i++
+			continue
+		}
+
+		// 发现连续的同角色消息 — 合并
+		role := messages[i].Role
+		var mergedBlocks []interface{}
+		for i < len(messages) && messages[i].Role == role {
+			mergedBlocks = append(mergedBlocks, contentToBlocks(messages[i].Content)...)
+			i++
+		}
+
+		result = append(result, ClaudeMessage{
+			Role:    role,
+			Content: mergedBlocks,
+		})
+	}
+
+	return result
+}
+
+// contentToBlocks 将消息内容统一转为 []interface{} 的 content blocks 格式。
+func contentToBlocks(content interface{}) []interface{} {
+	if content == nil {
+		return nil
+	}
+	if s, ok := content.(string); ok {
+		return []interface{}{map[string]interface{}{
+			"type": "text",
+			"text": s,
+		}}
+	}
+	if blocks, ok := content.([]interface{}); ok {
+		return blocks
+	}
+	return nil
+}
+
 const maxToolDescLen = 10237
 
 func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
@@ -153,14 +205,17 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
 	}
 
+	// 合并连续的同角色消息（Kiro API 要求严格的 user/assistant 交替）
+	messages := mergeConsecutiveMessages(req.Messages)
+
 	// 构建历史消息
 	history := make([]KiroHistoryMessage, 0)
 	var currentContent string
 	var currentImages []KiroImage
 	var currentToolResults []KiroToolResult
 
-	for i, msg := range req.Messages {
-		isLast := i == len(req.Messages)-1
+	for i, msg := range messages {
+		isLast := i == len(messages)-1
 
 		if msg.Role == "user" {
 			content, images, toolResults := extractClaudeUserContent(msg.Content)
