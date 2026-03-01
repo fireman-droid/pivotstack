@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 )
 
@@ -208,6 +209,13 @@ func GetPassword() string {
 }
 
 func GetPort() int {
+	// 优先使用环境变量
+	if portStr := os.Getenv("PORT"); portStr != "" {
+		if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
+			return port
+		}
+	}
+
 	cfgLock.RLock()
 	defer cfgLock.RUnlock()
 	if cfg.Port == 0 {
@@ -217,6 +225,11 @@ func GetPort() int {
 }
 
 func GetHost() string {
+	// 优先使用环境变量
+	if host := os.Getenv("HOST"); host != "" {
+		return host
+	}
+
 	cfgLock.RLock()
 	defer cfgLock.RUnlock()
 	if cfg.Host == "" {

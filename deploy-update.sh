@@ -32,6 +32,8 @@ docker run -d \
   -e VPN_PROXY_URL=${VPN_PROXY_URL:-} \
   -e DEBUG_MODE=${DEBUG_MODE:-off} \
   -e SKIP_STARTUP_CREDENTIAL_CHECK=true \
+  -e SERVER_PORT=8001 \
+  -e SERVER_HOST=0.0.0.0 \
   kiro-gateway-local:latest
 
 echo "⏳ 等待 kiro-gateway 启动..."
@@ -47,6 +49,8 @@ docker run -d \
   -e ADMIN_PASSWORD=${ADMIN_PASSWORD} \
   -e KIRO_GATEWAY_BASE=http://127.0.0.1:8001 \
   -e KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY} \
+  -e PORT=8088 \
+  -e HOST=0.0.0.0 \
   kiro-go:latest
 
 echo ""
