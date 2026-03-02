@@ -2,17 +2,15 @@
 
 ## 服务器信息
 
-- 服务器 IP: `8.148.251.30`
+- 服务器 IP: `115.191.35.73`
 - SSH 用户: `root`
-- SSH 密码: `Lin20050201`
 - 项目路径: `/var/www/kiro-stack`
 - Gitee 仓库: `https://gitee.com/ji-bo-chang-oli-gave-it-to/kiro-stack.git`
 
 ## 快速连接
 
 ```bash
-ssh root@8.148.251.30
-# 密码: Lin20050201
+ssh root@115.191.35.73
 ```
 
 ---
@@ -21,7 +19,7 @@ ssh root@8.148.251.30
 
 ```bash
 # 连接服务器
-ssh root@8.148.251.30
+ssh root@115.191.35.73
 
 # 安装 Docker
 apt update && apt install -y docker.io docker-compose git
@@ -150,7 +148,7 @@ ufw status
 
 ```bash
 # 在本地电脑运行
-ssh -L 8088:127.0.0.1:8088 root@8.148.251.30
+ssh -L 8088:127.0.0.1:8088 root@115.191.35.73
 
 # 浏览器访问：http://localhost:8088/admin
 # 用 ADMIN_PASSWORD 登录
@@ -194,10 +192,10 @@ docker compose restart kiro-go
 
 ```bash
 # 健康检查（不需要 API Key）
-curl http://8.148.251.30/health
+curl http://115.191.35.73/health
 
 # 测试 API（需要 API Key）
-curl http://8.148.251.30/v1/chat/completions \
+curl http://115.191.35.73/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -206,7 +204,7 @@ curl http://8.148.251.30/v1/chat/completions \
   }'
 
 # 查看模型列表
-curl http://8.148.251.30/v1/models
+curl http://115.191.35.73/v1/models
 ```
 
 ---
@@ -227,7 +225,7 @@ git push gitee main
 ### 服务器更新
 
 ```bash
-ssh root@8.148.251.30
+ssh root@115.191.35.73
 cd /var/www/kiro-stack
 bash deploy-update.sh
 ```

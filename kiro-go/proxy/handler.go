@@ -8,6 +8,7 @@ import (
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,25 @@ type Handler struct {
 	cachedModels    []ModelInfo
 	modelsCacheMu   sync.RWMutex
 	modelsCacheTime int64
+	// 调用日志
+	callLogs   []CallLog
+	callLogsMu sync.RWMutex
 }
+
+// CallLog 单次调用记录
+type CallLog struct {
+	Time          string `json:"time"`
+	APIType       string `json:"api_type"`
+	OriginalModel string `json:"original_model"`
+	ActualModel   string `json:"actual_model"`
+	Account       string `json:"account"`
+	InputTokens   int    `json:"input_tokens"`
+	OutputTokens  int    `json:"output_tokens"`
+	TotalTokens   int    `json:"total_tokens"`
+	Stream        bool   `json:"stream"`
+}
+
+const maxCallLogs = 500
 
 type thinkingStreamSource int
 
@@ -429,6 +448,11 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// 可选的请求体调试日志（通过环境变量 DEBUG_REQUESTS=true 启用）
+	if os.Getenv("DEBUG_REQUESTS") == "true" {
+		fmt.Printf("[DEBUG] Claude API Request Body: %s\n", string(body))
+	}
+
 	var req ClaudeRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		h.sendClaudeError(w, 400, "invalid_request_error", "Invalid JSON: "+err.Error())
@@ -450,23 +474,31 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 	// 解析模型和 thinking 模式
 	thinkingCfg := config.GetThinkingConfig()
+	originalModel := req.Model
+	req.Model = DowngradeForFree(req.Model, account.SubscriptionType)
 	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
 	req.Model = actualModel
 	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
+
+	if originalModel != actualModel {
+		fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v\n", originalModel, actualModel, account.Email, req.Stream)
+	} else {
+		fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v\n", actualModel, account.Email, req.Stream)
+	}
 
 	// 转换请求
 	kiroPayload := ClaudeToKiro(&req, thinking)
 
 	// 流式或非流式
 	if req.Stream {
-		h.handleClaudeStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
 	} else {
-		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
 	}
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -842,6 +874,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
+	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, true)
 
 	// 发送 message_delta
 	stopReason := "end_turn"
@@ -920,13 +953,34 @@ func (h *Handler) recordSuccess(inputTokens, outputTokens int, credits float64) 
 	h.addCredits(credits)
 }
 
+func (h *Handler) addCallLog(apiType, originalModel, actualModel, account string, inputTokens, outputTokens int, stream bool) {
+	cst := time.FixedZone("CST", 8*3600)
+	entry := CallLog{
+		Time:          time.Now().In(cst).Format("01-02 15:04:05"),
+		APIType:       apiType,
+		OriginalModel: originalModel,
+		ActualModel:   actualModel,
+		Account:       account,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		TotalTokens:   inputTokens + outputTokens,
+		Stream:        stream,
+	}
+	h.callLogsMu.Lock()
+	h.callLogs = append(h.callLogs, entry)
+	if len(h.callLogs) > maxCallLogs {
+		h.callLogs = h.callLogs[len(h.callLogs)-maxCallLogs:]
+	}
+	h.callLogsMu.Unlock()
+}
+
 func (h *Handler) recordFailure() {
 	atomic.AddInt64(&h.totalRequests, 1)
 	atomic.AddInt64(&h.failedRequests, 1)
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
 	var content string
 	var thinkingContent string
 	var toolUses []KiroToolUse
@@ -980,6 +1034,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
+	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, false)
 
 	if thinking && thinkingContent != "" {
 		switch thinkingFormat {
@@ -1045,21 +1100,29 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 
 	// 解析模型和 thinking 模式
 	thinkingCfg := config.GetThinkingConfig()
+	originalModel := req.Model
+	req.Model = DowngradeForFree(req.Model, account.SubscriptionType)
 	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
 	req.Model = actualModel
 	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
 
+	if originalModel != actualModel {
+		fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v\n", originalModel, actualModel, account.Email, req.Stream)
+	} else {
+		fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v\n", actualModel, account.Email, req.Stream)
+	}
+
 	kiroPayload := OpenAIToKiro(&req, thinking)
 
 	if req.Stream {
-		h.handleOpenAIStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
 	} else {
-		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
 	}
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1404,6 +1467,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
+	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, true)
 
 	// 发送结束
 	finishReason := "stop"
@@ -1434,7 +1498,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
 	var content string
 	var reasoningContent string
 	var toolUses []KiroToolUse
@@ -1477,6 +1541,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
+	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, false)
 
 	thinkingFormat := config.GetThinkingConfig().OpenAIFormat
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)
@@ -1601,6 +1666,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiImportFromDB(w, r)
 	case path == "/import/db-status" && r.Method == "GET":
 		h.apiGetDBStatus(w, r)
+	case path == "/logs" && r.Method == "GET":
+		h.apiGetLogs(w, r)
+	case path == "/logs" && r.Method == "DELETE":
+		h.apiClearLogs(w, r)
 	default:
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
@@ -2717,4 +2786,23 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(data)
+}
+
+func (h *Handler) apiGetLogs(w http.ResponseWriter, r *http.Request) {
+	h.callLogsMu.RLock()
+	logs := make([]CallLog, len(h.callLogs))
+	copy(logs, h.callLogs)
+	h.callLogsMu.RUnlock()
+	// 返回最新的在前
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"logs": logs})
+}
+
+func (h *Handler) apiClearLogs(w http.ResponseWriter, r *http.Request) {
+	h.callLogsMu.Lock()
+	h.callLogs = nil
+	h.callLogsMu.Unlock()
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

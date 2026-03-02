@@ -915,6 +915,7 @@
             <div class="tab active" data-tab="accounts" data-i18n="tabs.accounts"></div>
             <div class="tab" data-tab="settings" data-i18n="tabs.settings"></div>
             <div class="tab" data-tab="api" data-i18n="tabs.api"></div>
+            <div class="tab" data-tab="logs" data-i18n="tabs.logs"></div>
         </div>
         <div id="tabAccounts" class="tab-content">
             <div class="card">
@@ -1042,6 +1043,18 @@
                 <p style="font-size:12px;color:#64748b;margin-top:4px" data-i18n="api.statsHint"></p>
             </div>
         </div>
+        <div id="tabLogs" class="tab-content hidden">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title" data-i18n="logs.title"></span>
+                    <button class="btn btn-sm btn-secondary" onclick="loadLogs()" style="margin-left:8px" data-i18n="logs.refresh"></button>
+                    <button class="btn btn-sm" onclick="clearLogs()" style="margin-left:8px;background:#fee2e2;color:#dc2626;border-color:#fca5a5" data-i18n="logs.clear"></button>
+                </div>
+                <div id="logsTable" style="overflow-x:auto;margin-top:8px">
+                    <div style="color:#94a3b8;font-size:14px;text-align:center;padding:24px" data-i18n="logs.empty"></div>
+                </div>
+            </div>
+        </div>
     </div>
     <div id="addModal" class="modal">
         <div class="modal-content">
@@ -1088,6 +1101,7 @@
                 'tabs.accounts': '账号',
                 'tabs.settings': '设置',
                 'tabs.api': 'API',
+                'tabs.logs': '调用日志',
                 'accounts.title': '账号列表',
                 'accounts.add': '添加账号',
                 'accounts.empty': '暂无账号',
@@ -1152,6 +1166,19 @@
                 'api.modelList': '模型列表',
                 'api.stats': '统计数据',
                 'api.statsHint': '需要在请求头中携带 API Key 鉴权（Authorization: Bearer sk-xxx），未启用 API Key 验证时无需鉴权',
+                'logs.title': '调用日志（最近500条）',
+                'logs.refresh': '刷新',
+                'logs.clear': '清空',
+                'logs.empty': '暂无调用记录',
+                'logs.time': '时间',
+                'logs.api': 'API',
+                'logs.original': '请求模型',
+                'logs.actual': '实际模型',
+                'logs.account': '账号',
+                'logs.input': '输入',
+                'logs.output': '输出',
+                'logs.total': '总计',
+                'logs.stream': '流式',
                 'detail.title': '账号详情',
                 'detail.basicInfo': '基本信息',
                 'detail.email': '邮箱',
@@ -1300,7 +1327,7 @@
                 'tabs.accounts': 'Accounts',
                 'tabs.settings': 'Settings',
                 'tabs.api': 'API',
-                'accounts.title': 'Account List',
+                'tabs.logs': 'Call Logs',
                 'accounts.add': 'Add Account',
                 'accounts.empty': 'No accounts',
                 'accounts.refresh': 'Refresh',
@@ -1364,6 +1391,19 @@
                 'api.modelList': 'Model List',
                 'api.stats': 'Statistics',
                 'api.statsHint': 'Requires API Key in header (Authorization: Bearer sk-xxx). No auth needed if API Key verification is disabled.',
+                'logs.title': 'Call Logs (last 500)',
+                'logs.refresh': 'Refresh',
+                'logs.clear': 'Clear',
+                'logs.empty': 'No call records yet',
+                'logs.time': 'Time',
+                'logs.api': 'API',
+                'logs.original': 'Requested',
+                'logs.actual': 'Actual',
+                'logs.account': 'Account',
+                'logs.input': 'Input',
+                'logs.output': 'Output',
+                'logs.total': 'Total',
+                'logs.stream': 'Stream',
                 'detail.title': 'Account Details',
                 'detail.basicInfo': 'Basic Info',
                 'detail.email': 'Email',
@@ -2067,6 +2107,58 @@
             document.querySelectorAll('.tab').forEach(tabEl => tabEl.classList.toggle('active', tabEl.dataset.tab === tab));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
             document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
+            if (tab === 'logs') loadLogs();
+        }
+
+        async function loadLogs() {
+            const container = document.getElementById('logsTable');
+            try {
+                const resp = await fetch('/admin/api/logs', { headers: { 'X-Admin-Password': password } });
+                const data = await resp.json();
+                const logs = data.logs || [];
+                if (!logs.length) {
+                    container.innerHTML = `<div style="color:#94a3b8;font-size:14px;text-align:center;padding:24px">${t('logs.empty')}</div>`;
+                    return;
+                }
+                const rows = logs.map(log => {
+                    const downgraded = log.original_model !== log.actual_model;
+                    const modelCell = downgraded
+                        ? `<span style="color:#94a3b8;text-decoration:line-through;font-size:11px">${log.original_model}</span><br><span style="color:#7c3aed;font-weight:500">${log.actual_model}</span>`
+                        : `<span>${log.actual_model}</span>`;
+                    const accountShort = log.account.split('@')[0];
+                    return `<tr>
+                        <td style="white-space:nowrap;color:#64748b;font-size:12px">${log.time}</td>
+                        <td><span style="font-size:11px;padding:2px 6px;border-radius:4px;background:${log.api_type==='Claude'?'#ede9fe':'#dbeafe'};color:${log.api_type==='Claude'?'#7c3aed':'#1d4ed8'}">${log.api_type}</span></td>
+                        <td>${modelCell}</td>
+                        <td style="font-size:12px;color:#475569" title="${log.account}">${accountShort}</td>
+                        <td style="text-align:right;font-size:13px">${log.input_tokens.toLocaleString()}</td>
+                        <td style="text-align:right;font-size:13px">${log.output_tokens.toLocaleString()}</td>
+                        <td style="text-align:right;font-weight:500;font-size:13px">${log.total_tokens.toLocaleString()}</td>
+                        <td style="text-align:center">${log.stream ? '✓' : ''}</td>
+                    </tr>`;
+                }).join('');
+                container.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                    <thead><tr style="border-bottom:2px solid #e2e8f0;text-align:left">
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500">${t('logs.time')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500">${t('logs.api')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500">${t('logs.actual')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500">${t('logs.account')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500;text-align:right">${t('logs.input')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500;text-align:right">${t('logs.output')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500;text-align:right">${t('logs.total')}</th>
+                        <th style="padding:8px 10px;color:#64748b;font-weight:500;text-align:center">${t('logs.stream')}</th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            } catch (e) {
+                container.innerHTML = `<div style="color:#dc2626;font-size:13px;padding:12px">加载失败: ${e.message}</div>`;
+            }
+        }
+
+        async function clearLogs() {
+            if (!confirm('确认清空所有调用日志？')) return;
+            await fetch('/admin/api/logs', { method: 'DELETE', headers: { 'X-Admin-Password': password } });
+            loadLogs();
         }
         async function toggleAccount(id, enabled) {
             await fetch('/admin/api/accounts/' + id, {

@@ -78,6 +78,22 @@ func MapModel(model string) string {
 	return mapped
 }
 
+// DowngradeForFree 对 FREE 账号将不支持的模型降级为 claude-sonnet-4.5
+// FREE 账号只支持：claude-sonnet-4.5、claude-sonnet-4、claude-haiku-4.5
+// 非 FREE 账号（PRO/PRO_PLUS/POWER）直接返回原模型名
+func DowngradeForFree(model, subscriptionType string) string {
+	if subscriptionType != "" && subscriptionType != "FREE" {
+		return model
+	}
+	switch strings.ToLower(model) {
+	case "claude-sonnet-4-6", "claude-sonnet-4.6",
+		"claude-opus-4-6", "claude-opus-4.6",
+		"claude-opus-4-5", "claude-opus-4.5":
+		return "claude-sonnet-4.5"
+	}
+	return model
+}
+
 // ==================== Claude API 类型 ====================
 
 type ClaudeRequest struct {
