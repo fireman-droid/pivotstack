@@ -223,7 +223,8 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			if resp.StatusCode == 401 || resp.StatusCode == 403 {
 				return lastErr
 			}
-			fmt.Printf("[KiroAPI] Endpoint %s error: %v\n", ep.Name, lastErr)
+			fmt.Printf("[KiroAPI] Endpoint %s error %d | payload: %dKB | response: %s\n",
+				ep.Name, resp.StatusCode, len(reqBody)/1024, string(errBody))
 			continue
 		}
 

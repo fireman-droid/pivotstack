@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #6366f1;
+  --color-primary-hover: #4f46e5;
+}
+
+/* 解决 Tailwind v4 dark 模式变体 */
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --bg: #fafafa;
+  --card: #ffffff;
+  --text: #0f172a;
+  --text-secondary: #64748b;
+  --border: #e2e8f0;
+  --sidebar-bg: #f8fafc;
+  --sidebar-text: #475569;
+  --sidebar-active-bg: #ffffff;
+  --sidebar-active-text: #0f172a;
+  --sidebar-border: #f1f5f9;
+}
+
+html.dark {
+  --primary: #818cf8;
+  --primary-hover: #6366f1;
+  --bg: #030712;
+  --card: #0f172a;
+  --text: #f8fafc;
+  --text-secondary: #94a3b8;
+  --border: #1e293b;
+  --sidebar-bg: #030712;
+  --sidebar-text: #94a3b8;
+  --sidebar-active-bg: #1e293b;
+  --sidebar-active-text: #ffffff;
+  --sidebar-border: #111827;
+
+  /* Element Plus Dark Mode Overrides */
+  --el-bg-color: var(--bg);
+  --el-bg-color-page: var(--bg);
+  --el-bg-color-overlay: var(--card);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-secondary);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-fill-color-blank: var(--card);
+  --el-fill-color: var(--bg);
+  --el-fill-color-light: #1e293b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 现代卡片样式 */
+.modern-card {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.modern-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+/* 玻璃质感导航 */
+.glass-header {
+  background-color: rgba(var(--bg), 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* 隐藏滚动条但保留功能 */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* Lucide 图标统一尺寸 */
+.lucide {
+  stroke-width: 2px;
+}
