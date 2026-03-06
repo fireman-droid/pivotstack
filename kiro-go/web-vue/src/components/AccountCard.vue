@@ -65,7 +65,18 @@ async function copyJSON() {
     const res = await api(`/accounts/${props.account.id}/full`)
     const data = await res.json()
     const { clientId, clientSecret, accessToken, refreshToken } = data
-    await navigator.clipboard.writeText(JSON.stringify({ clientId, clientSecret, accessToken, refreshToken }, null, 2))
+    const text = JSON.stringify({ clientId, clientSecret, accessToken, refreshToken }, null, 2)
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.cssText = 'position:fixed;left:-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
     copied.value = true
     success('配置已复制到剪贴板')
     setTimeout(() => copied.value = false, 1500)

@@ -132,7 +132,17 @@ function formatUptime(s) {
 }
 
 function copy(text) {
-  navigator.clipboard.writeText(text)
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text)
+  } else {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;left:-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
   success('已复制到剪贴板')
 }
 
