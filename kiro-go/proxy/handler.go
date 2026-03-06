@@ -99,18 +99,18 @@ func NewHandler() *Handler {
 
 // backgroundRefresh 后台定时刷新账户信息
 func (h *Handler) backgroundRefresh() {
-	ticker := time.NewTicker(30 * time.Minute)
+	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
 
-	time.Sleep(10 * time.Second)
-	h.refreshModelsCache()
+	time.Sleep(5 * time.Second)
 	h.refreshAllAccounts()
+	h.refreshModelsCache()
 
 	for {
 		select {
 		case <-ticker.C:
-			h.refreshModelsCache()
 			h.refreshAllAccounts()
+			h.refreshModelsCache()
 		case <-h.stopRefresh:
 			return
 		}
@@ -126,10 +126,13 @@ func (h *Handler) refreshAllAccounts() {
 			continue
 		}
 
-		if account.ExpiresAt > 0 && time.Now().Unix() > account.ExpiresAt-300 {
+		// 主动刷新 token：过期前 10 分钟或已过期
+		if account.ExpiresAt > 0 && time.Now().Unix() > account.ExpiresAt-600 {
+			fmt.Printf("[BackgroundRefresh] Token expiring soon for %s (expiresAt=%d, now=%d), refreshing...\n",
+				account.Email, account.ExpiresAt, time.Now().Unix())
 			newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(account)
 			if err != nil {
-				fmt.Printf("[BackgroundRefresh] Token refresh failed for %s: %v\n", account.Email, err)
+				fmt.Printf("[BackgroundRefresh] Token refresh FAILED for %s: %v\n", account.Email, err)
 				continue
 			}
 			account.AccessToken = newAccessToken
@@ -139,6 +142,25 @@ func (h *Handler) refreshAllAccounts() {
 			account.ExpiresAt = newExpiresAt
 			config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
 			h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
+			fmt.Printf("[BackgroundRefresh] Token refreshed OK for %s, new expiresAt=%d (in %ds)\n",
+				account.Email, newExpiresAt, newExpiresAt-time.Now().Unix())
+		} else if account.ExpiresAt == 0 {
+			// ExpiresAt 未设置，强制刷新一次
+			fmt.Printf("[BackgroundRefresh] ExpiresAt not set for %s, forcing token refresh...\n", account.Email)
+			newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(account)
+			if err != nil {
+				fmt.Printf("[BackgroundRefresh] Token refresh FAILED for %s: %v\n", account.Email, err)
+			} else {
+				account.AccessToken = newAccessToken
+				if newRefreshToken != "" {
+					account.RefreshToken = newRefreshToken
+				}
+				account.ExpiresAt = newExpiresAt
+				config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
+				h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
+				fmt.Printf("[BackgroundRefresh] Token refreshed OK for %s, expiresAt=%d (in %ds)\n",
+					account.Email, newExpiresAt, newExpiresAt-time.Now().Unix())
+			}
 		}
 
 		info, err := RefreshAccountInfo(account)
@@ -244,14 +266,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ensureValidToken 确保 token 有效
+// ensureValidToken 确保 token 有效，过期前 10 分钟自动刷新
 func (h *Handler) ensureValidToken(account *config.Account) error {
-	if account.ExpiresAt == 0 || time.Now().Unix() < account.ExpiresAt-300 {
+	if account.ExpiresAt == 0 || time.Now().Unix() < account.ExpiresAt-600 {
 		return nil
 	}
 
+	fmt.Printf("[ensureValidToken] Refreshing token for %s (expiresAt=%d, now=%d)\n",
+		account.Email, account.ExpiresAt, time.Now().Unix())
+
 	accessToken, refreshToken, expiresAt, err := auth.RefreshToken(account)
 	if err != nil {
+		fmt.Printf("[ensureValidToken] Token refresh FAILED for %s: %v\n", account.Email, err)
 		return err
 	}
 
@@ -263,6 +289,7 @@ func (h *Handler) ensureValidToken(account *config.Account) error {
 	account.ExpiresAt = expiresAt
 
 	config.UpdateAccountToken(account.ID, accessToken, refreshToken, expiresAt)
+	fmt.Printf("[ensureValidToken] Token refreshed OK for %s, new expiresAt=%d\n", account.Email, expiresAt)
 
 	return nil
 }

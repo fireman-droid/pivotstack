@@ -4,6 +4,8 @@ services:
     image: kiro-gateway-local:latest
     container_name: kiro-gateway
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
     environment:
@@ -20,6 +22,8 @@ services:
     restart: unless-stopped
     depends_on:
       - kiro-gateway
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8088:8088"
     volumes:
@@ -29,5 +33,6 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - KIRO_GATEWAY_BASE=http://kiro-gateway:8001
       - KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY}
+      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
       - PORT=8088
       - HOST=0.0.0.0

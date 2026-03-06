@@ -6,7 +6,12 @@ export function formatNum(n) {
 
 export function formatTokenExpiry(ts) {
   if (!ts) return '-'
-  const diff = ts - Date.now() / 1000
+  // 转换为北京时间（UTC+8）
+  const date = new Date(ts * 1000)
+  const bjTime = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+  const now = new Date(Date.now() + 8 * 60 * 60 * 1000)
+  const diff = (bjTime - now) / 1000
+
   if (diff <= 0) return '已过期'
   if (diff < 3600) return Math.floor(diff / 60) + '分钟'
   if (diff < 86400) return Math.floor(diff / 3600) + '小时'

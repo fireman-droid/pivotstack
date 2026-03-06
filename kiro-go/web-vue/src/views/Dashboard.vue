@@ -27,9 +27,6 @@ import {
   Copy, 
   ShieldCheck, 
   Terminal,
-  Info,
-  ExternalLink,
-  Cpu,
   Globe,
   AlertTriangle
 } from 'lucide-vue-next'
@@ -50,12 +47,13 @@ const stats = ref({ accounts: 0, totalRequests: 0, successRequests: 0, failedReq
 const version = ref('')
 let pollTimer = null
 
-// Mock chart data for real-time traffic
+// 真实请求趋势数据（最近 10 次统计快照）
+const requestHistory = ref([])
 const chartData = ref({
-  labels: Array.from({ length: 10 }, (_, i) => `${i * 2}s`),
+  labels: Array.from({ length: 10 }, (_, i) => `${i * 5}秒前`).reverse(),
   datasets: [
     {
-      label: 'Request Flow',
+      label: '请求流量',
       backgroundColor: 'rgba(99, 102, 241, 0.1)',
       borderColor: '#6366f1',
       pointBackgroundColor: '#6366f1',
@@ -90,15 +88,31 @@ async function loadStats() {
   try {
     const res = await api('/status')
     if (res.ok) {
-      stats.value = await res.json()
-      // Update chart with new data point
-      const newData = [...chartData.value.datasets[0].data]
-      newData.shift()
-      newData.push(stats.value.totalRequests % 100 + Math.random() * 20)
+      const newStats = await res.json()
+
+      // 记录历史数据用于图表
+      requestHistory.value.push(newStats.totalRequests || 0)
+      if (requestHistory.value.length > 10) {
+        requestHistory.value.shift()
+      }
+
+      // 计算增量（每 5 秒的新增请求数）
+      const increments = []
+      for (let i = 1; i < requestHistory.value.length; i++) {
+        increments.push(Math.max(0, requestHistory.value[i] - requestHistory.value[i - 1]))
+      }
+
+      // 填充到 10 个数据点
+      while (increments.length < 10) {
+        increments.unshift(0)
+      }
+
       chartData.value = {
         ...chartData.value,
-        datasets: [{ ...chartData.value.datasets[0], data: newData }]
+        datasets: [{ ...chartData.value.datasets[0], data: increments }]
       }
+
+      stats.value = newStats
     }
   } catch {}
 }
@@ -124,12 +138,6 @@ function copy(text) {
 
 const base = location.origin
 
-const faqs = [
-  { q: 'FREE 账号能用什么模型？', a: '支持 Claude 3.5 Sonnet / Haiku 全系列模型。' },
-  { q: '显示 429 错误如何处理？', a: '系统会自动轮询可用账号，若持续报错请补充账号。' },
-  { q: 'Token 刷新机制是怎样的？', a: '每 30 分钟后台自动校验一次有效性并静默刷新。' },
-]
-
 onMounted(async () => {
   await Promise.all([loadStats(), loadVersion()])
   pollTimer = setInterval(loadStats, 5000)
@@ -150,23 +158,19 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-black tracking-tight flex items-center gap-2">
-          Dashboard <span class="text-[var(--text-secondary)] font-medium text-sm">v{{ version }}</span>
+          控制台 <span class="text-[var(--text-secondary)] font-medium text-sm">v{{ version }}</span>
         </h1>
         <div class="flex items-center gap-3 mt-1 text-sm text-[var(--text-secondary)]">
           <div class="flex items-center gap-1.5 text-emerald-500 font-bold">
             <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-            System Online
+            系统在线
           </div>
           <span class="opacity-30">|</span>
           <div class="flex items-center gap-1.5">
             <Clock class="w-3.5 h-3.5" />
-            Uptime: {{ formatUptime(stats.uptime) }}
+            运行时长: {{ formatUptime(stats.uptime) }}
           </div>
         </div>
-      </div>
-      <div class="flex items-center gap-2 bg-[var(--card)] p-1 rounded-xl border border-[var(--border)]">
-        <button class="px-4 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-sm transition-all">Real-time</button>
-        <button class="px-4 py-1.5 rounded-lg text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text)] transition-colors">History</button>
       </div>
     </div>
 
@@ -186,7 +190,7 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
           <div class="text-3xl font-black tracking-tight">{{ stats.accounts || 0 }}</div>
           <div class="mt-2 flex items-center gap-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
             <ShieldCheck class="w-3 h-3" />
-            100% Available
+            100% 可用
           </div>
         </div>
       </div>
@@ -200,7 +204,7 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
             <Zap class="w-6 h-6" />
           </div>
           <div class="flex flex-col items-end">
-             <span class="text-xs font-bold" :class="isErrorHigh ? 'text-rose-500' : 'text-amber-500'">{{ successRate.toFixed(1) }}% Rate</span>
+             <span class="text-xs font-bold" :class="isErrorHigh ? 'text-rose-500' : 'text-amber-500'">{{ successRate.toFixed(1) }}% 成功率</span>
              <AlertTriangle v-if="isErrorHigh" class="w-4 h-4 text-rose-500 mt-1 animate-bounce" />
           </div>
         </div>
@@ -208,9 +212,9 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
           <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">总计请求数</div>
           <div class="text-3xl font-black tracking-tight">{{ formatNum(stats.totalRequests || 0) }}</div>
           <div class="mt-2 text-[11px] font-bold text-[var(--text-secondary)] flex gap-2">
-            <span class="text-emerald-500">{{ stats.successRequests }} OK</span>
+            <span class="text-emerald-500">{{ stats.successRequests }} 成功</span>
             <span class="opacity-30">/</span>
-            <span class="text-rose-500 font-bold" :class="{ 'scale-110 transition-transform': isErrorHigh }">{{ stats.failedRequests }} ERR</span>
+            <span class="text-rose-500 font-bold" :class="{ 'scale-110 transition-transform': isErrorHigh }">{{ stats.failedRequests }} 失败</span>
           </div>
         </div>
       </div>
@@ -243,7 +247,7 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
         <div>
           <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">估计总成本</div>
           <div class="text-3xl font-black tracking-tight">${{ (stats.totalCredits || 0).toFixed(2) }}</div>
-          <div class="mt-2 text-[11px] font-bold text-primary italic bg-primary/5 px-2 py-0.5 rounded w-fit">Saved 85% with Kiro Pool</div>
+          <div class="mt-2 text-[11px] font-bold text-primary italic bg-primary/5 px-2 py-0.5 rounded w-fit">通过账号池节省 85% 成本</div>
         </div>
       </div>
     </div>
@@ -251,7 +255,7 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
     <!-- Bottom Detailed Grid -->
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- API Endpoints -->
-      <div class="lg:col-span-8 space-y-4 flex flex-col">
+      <div class="lg:col-span-12 space-y-4 flex flex-col">
         <div class="flex items-center gap-2 px-2">
           <Terminal class="w-5 h-5 text-primary" />
           <h2 class="font-bold text-sm uppercase tracking-widest text-[var(--text-secondary)]">API 控制台</h2>
@@ -261,13 +265,13 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
           <div v-for="ep in [
             { label: 'Claude Messages', path: '/v1/messages', color: 'bg-indigo-500' },
             { label: 'OpenAI Chat', path: '/v1/chat/completions', color: 'bg-emerald-500' },
-            { label: 'Model Discovery', path: '/v1/models', color: 'bg-amber-500' },
-            { label: 'Service Status', path: '/health', color: 'bg-rose-500' }
+            { label: '模型发现', path: '/v1/models', color: 'bg-amber-500' },
+            { label: '服务状态', path: '/health', color: 'bg-rose-500' }
           ]" :key="ep.path" class="modern-card p-4 hover:translate-y-[-2px] transition-all">
             <div class="flex justify-between items-center mb-3">
               <span class="text-xs font-bold text-[var(--text-secondary)]">{{ ep.label }}</span>
               <div class="flex gap-1.5">
-                <span class="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 text-[9px] font-bold uppercase">Stable</span>
+                <span class="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 text-[9px] font-bold uppercase">稳定</span>
                 <span class="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[9px] font-bold uppercase tracking-tighter">JSON</span>
               </div>
             </div>
@@ -287,10 +291,10 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
           <div class="flex justify-between items-center mb-6">
             <div class="flex items-center gap-2">
               <Globe class="w-5 h-5 text-primary" />
-              <div class="font-bold text-sm">Real-time Traffic Monitor</div>
+              <div class="font-bold text-sm">实时流量监控</div>
             </div>
             <div class="flex items-center gap-4 text-[10px] font-bold text-[var(--text-secondary)] uppercase">
-              <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary"></span> Requests/s</div>
+              <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary"></span> 请求增量</div>
             </div>
           </div>
           <div class="flex-1 relative">
@@ -299,64 +303,9 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
         </div>
       </div>
 
-      <!-- FAQ & Info Side -->
-      <div class="lg:col-span-4 space-y-4">
-        <div class="flex items-center gap-2 px-2">
-          <Info class="w-5 h-5 text-amber-500" />
-          <h2 class="font-bold text-sm uppercase tracking-widest text-[var(--text-secondary)]">运维指南</h2>
-        </div>
-
-        <div class="modern-card divide-y divide-[var(--border)] overflow-hidden">
-          <div v-for="(faq, i) in faqs" :key="i" class="p-4 hover:bg-[var(--bg)] transition-colors cursor-pointer group">
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-xs font-bold group-hover:text-primary transition-colors">{{ faq.q }}</span>
-              <ChevronRight class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
-            </div>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-relaxed">{{ faq.a }}</p>
-          </div>
-        </div>
-
-        <!-- Quick Links -->
-        <div class="modern-card p-6 space-y-4">
-          <div class="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] mb-2">系统资源</div>
-          
-          <div class="space-y-2">
-            <div class="flex items-center justify-between text-xs">
-              <span class="flex items-center gap-2 text-[var(--text-secondary)] font-medium"><Cpu class="w-3.5 h-3.5" /> CPU Usage</span>
-              <span class="font-mono font-bold text-primary">2.4%</span>
-            </div>
-            <div class="w-full bg-[var(--bg)] h-2 rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
-              <div class="bg-primary h-full rounded-full w-[2.4%] shadow-[0_0_8px_rgba(99,102,241,0.5)]"></div>
-            </div>
-          </div>
-
-          <div class="space-y-2">
-            <div class="flex items-center justify-between text-xs">
-              <span class="flex items-center gap-2 text-[var(--text-secondary)] font-medium"><Zap class="w-3.5 h-3.5" /> Memory</span>
-              <span class="font-mono font-bold text-indigo-500">128MB</span>
-            </div>
-            <div class="w-full bg-[var(--bg)] h-2 rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
-              <div class="bg-indigo-500 h-full rounded-full w-[15%] shadow-[0_0_8px_rgba(99,102,241,0.5)]"></div>
-            </div>
-          </div>
-
-          <div class="pt-4 border-t border-[var(--border)]">
-             <div class="text-[10px] font-bold text-[var(--text-secondary)] flex items-center gap-2">
-                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
-                Storage Engine: PostgreSQL (Local)
-             </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.modern-card {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-</style>
 
 <style scoped>
 .modern-card {

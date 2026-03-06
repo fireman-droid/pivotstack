@@ -1,67 +1,64 @@
 #!/bin/bash
-# Kiro Stack 一键更新部署脚本
-# 服务器: 115.191.35.73
+# Kiro Stack 一键部署/更新脚本
+# 用法:
+#   bash deploy-update.sh          # 首次部署或全量更新
+#   bash deploy-update.sh update   # 拉取最新代码并重建
+#   bash deploy-update.sh restart  # 仅重启容器
+#   bash deploy-update.sh logs     # 查看日志
+#   bash deploy-update.sh status   # 查看运行状态
 
 set -e
-
-PROJECT_DIR="/var/www/kiro-stack"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-# 加载 .env
-if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
-fi
+case "${1:-deploy}" in
 
-echo "📦 拉取最新代码..."
-git pull origin main
+deploy|update)
+  echo "📦 拉取最新代码..."
+  git pull origin main 2>/dev/null || true
 
-echo "🔧 停止服务..."
-docker stop kiro-go kiro-gateway 2>/dev/null || true
-docker rm kiro-go kiro-gateway 2>/dev/null || true
+  if [ ! -f .env ]; then
+    echo "⚠️  未找到 .env 文件，从模板创建..."
+    cp .env.example .env
+    echo "❗ 请编辑 .env 填写实际配置后重新运行此脚本"
+    exit 1
+  fi
 
-echo "🏗️  重新构建镜像..."
-docker build -t kiro-gateway-local:latest ./kiro-gateway
-docker build -t kiro-go:latest ./kiro-go
+  echo "🔨 构建并启动服务..."
+  docker compose up -d --build
 
-echo "🚀 启动 kiro-gateway..."
-docker run -d \
-  --name kiro-gateway \
-  --network host \
-  --restart unless-stopped \
-  -e PROXY_API_KEY=${INTERNAL_API_KEY} \
-  -e VPN_PROXY_URL=${VPN_PROXY_URL:-} \
-  -e DEBUG_MODE=${DEBUG_MODE:-off} \
-  -e SKIP_STARTUP_CREDENTIAL_CHECK=true \
-  -e SERVER_PORT=8001 \
-  -e SERVER_HOST=0.0.0.0 \
-  kiro-gateway-local:latest
+  echo ""
+  echo "✅ 部署完成！"
+  echo "📊 管理面板: http://$(hostname -I | awk '{print $1}'):8088/admin"
+  echo ""
+  docker compose ps
+  ;;
 
-echo "⏳ 等待 kiro-gateway 启动..."
-sleep 3
+restart)
+  echo "🔄 重启服务..."
+  docker compose restart
+  docker compose ps
+  ;;
 
-echo "🚀 启动 kiro-go..."
-docker run -d \
-  --name kiro-go \
-  --network host \
-  --restart unless-stopped \
-  -v "$PROJECT_DIR/kiro-go/data:/app/data" \
-  -e CONFIG_PATH=/app/data/config.json \
-  -e ADMIN_PASSWORD=${ADMIN_PASSWORD} \
-  -e KIRO_GATEWAY_BASE=http://127.0.0.1:8001 \
-  -e KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY} \
-  -e PORT=8088 \
-  -e HOST=0.0.0.0 \
-  kiro-go:latest
+logs)
+  docker compose logs -f --tail=50 ${2:-}
+  ;;
 
-echo ""
-echo "⏳ 等待服务启动..."
-sleep 5
+status)
+  docker compose ps
+  echo ""
+  echo "📊 最近日志:"
+  docker compose logs --tail=10 kiro-go 2>&1 | grep -E "Refresh|Error|Request|Starting" | tail -10
+  ;;
 
-echo ""
-echo "✅ 部署完成！服务状态："
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" | grep kiro
+stop)
+  echo "⏹️  停止服务..."
+  docker compose down
+  ;;
 
-echo ""
-echo "📊 查看日志："
-echo "  docker logs kiro-go -f"
-echo "  docker logs kiro-gateway -f"
+*)
+  echo "用法: bash deploy-update.sh [deploy|update|restart|logs|status|stop]"
+  exit 1
+  ;;
+
+esac

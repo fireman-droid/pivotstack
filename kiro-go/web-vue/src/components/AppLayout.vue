@@ -75,9 +75,9 @@ const ThemeIcon = computed(() => {
       <div class="px-4 py-4 shrink-0">
         <div class="relative group">
           <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-primary transition-colors" />
-          <input 
-            type="text" 
-            placeholder="Search... (Ctrl+K)" 
+          <input
+            type="text"
+            placeholder="搜索... (Ctrl+K)"
             readonly
             class="w-full h-10 pl-9 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs cursor-pointer hover:border-primary/50 transition-all outline-none"
           />
@@ -86,19 +86,17 @@ const ThemeIcon = computed(() => {
 
       <!-- Navigation -->
       <nav class="flex-1 px-3 space-y-1 overflow-y-auto custom-scrollbar">
-        <div class="px-3 mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Main Menu</div>
-        <router-link 
-          v-for="item in navItems" 
-          :key="item.path" 
+        <div class="px-3 mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-50">主菜单</div>
+        <router-link
+          v-for="item in navItems"
+          :key="item.path"
           :to="item.path"
-          class="flex items-center px-4 py-3 rounded-xl text-sm font-bold transition-all group mb-1"
-          :class="route.path === item.path 
-            ? 'bg-primary text-white shadow-xl shadow-primary/20' 
-            : 'text-[var(--text-secondary)] hover:bg-primary/5 hover:text-primary'"
+          class="flex items-center px-4 py-3 rounded-xl text-sm font-bold transition-all group mb-1 text-[var(--text-secondary)] hover:bg-primary/5 hover:text-primary"
+          active-class="!bg-primary !text-white shadow-xl shadow-primary/20"
         >
-          <component :is="item.icon" class="w-4 h-4 mr-3" :class="route.path === item.path ? '' : 'group-hover:scale-110 transition-transform'" />
+          <component :is="item.icon" class="w-4 h-4 mr-3 group-hover:scale-110 transition-transform" />
           {{ item.name }}
-          <ChevronRight v-if="route.path === item.path" class="w-3.5 h-3.5 ml-auto opacity-50" />
+          <ChevronRight class="w-3.5 h-3.5 ml-auto opacity-0 group-[.router-link-active]:opacity-50" />
         </router-link>
       </nav>
 
@@ -107,7 +105,7 @@ const ThemeIcon = computed(() => {
         <div class="flex items-center p-3 rounded-2xl bg-[var(--card)] border border-[var(--border)] shadow-sm">
           <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center text-white font-black text-sm mr-3 shadow-lg shadow-primary/10">AD</div>
           <div class="flex-1 min-w-0">
-            <div class="text-xs font-black truncate">Administrator</div>
+            <div class="text-xs font-black truncate">系统管理员</div>
             <div class="text-[10px] text-[var(--text-secondary)] truncate font-medium">admin@kiro.io</div>
           </div>
           <button @click="handleLogout" class="p-2 hover:bg-rose-500/10 hover:text-rose-500 rounded-lg transition-all" title="退出">
@@ -132,9 +130,9 @@ const ThemeIcon = computed(() => {
       <!-- Glass Header -->
       <header class="hidden lg:flex h-16 items-center justify-between px-8 bg-[var(--card)]/60 backdrop-blur-xl border-b border-[var(--border)] sticky top-0 z-30 shrink-0">
         <div class="flex items-center gap-3 text-xs font-bold">
-          <span class="text-[var(--text-secondary)] opacity-50">CONSOLE</span>
+          <span class="text-[var(--text-secondary)] opacity-50">控制台</span>
           <ChevronRight class="w-3 h-3 text-[var(--text-secondary)] opacity-30" />
-          <span class="text-primary tracking-wide">{{ pageTitle.toUpperCase() }}</span>
+          <span class="text-primary tracking-wide">{{ pageTitle }}</span>
         </div>
 
         <div class="flex items-center gap-2">
@@ -148,10 +146,10 @@ const ThemeIcon = computed(() => {
           <div class="w-px h-4 bg-[var(--border)] mx-2 opacity-50"></div>
           <div class="flex items-center gap-3 px-3 py-1.5 rounded-xl hover:bg-primary/5 transition-all cursor-pointer group">
             <div class="text-right">
-              <div class="text-[11px] font-black leading-none mb-1 group-hover:text-primary transition-colors uppercase">System Admin</div>
+              <div class="text-[11px] font-black leading-none mb-1 group-hover:text-primary transition-colors">系统管理员</div>
               <div class="text-[10px] text-emerald-500 flex items-center justify-end gap-1.5 font-bold">
                 <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                ONLINE
+                在线
               </div>
             </div>
           </div>

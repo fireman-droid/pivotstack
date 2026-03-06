@@ -104,7 +104,7 @@ async function resetStats() {
 </script>
 
 <template>
-  <div class="max-w-[900px] mx-auto space-y-10 pb-20">
+  <div class="max-w-[1600px] mx-auto space-y-10 pb-20">
     <!-- Centered Header -->
     <div class="text-center space-y-2 py-4">
       <h1 class="text-3xl font-black tracking-tighter text-[var(--text)]">系统参数设定</h1>
@@ -128,7 +128,7 @@ async function resetStats() {
 
         <div class="space-y-3">
           <div class="flex justify-between items-end pl-1">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60">System API Key</span>
+            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60">系统 API 密钥</span>
             <button @click="generateApiKey" class="text-[10px] font-black text-primary hover:underline uppercase tracking-tighter">重新生成密钥</button>
           </div>
           <div class="relative group">
@@ -221,7 +221,7 @@ async function resetStats() {
     <section class="p-8 rounded-[32px] border-2 border-dashed border-rose-500/20 bg-rose-500/[0.02] space-y-6">
       <div class="flex items-center gap-3">
         <div class="p-2 rounded-lg bg-rose-500/10 text-rose-500 animate-pulse"><ShieldAlert class="w-5 h-5" /></div>
-        <h2 class="text-sm font-black uppercase tracking-[0.2em] text-rose-500">危险操作中心 / CRITICAL ZONE</h2>
+        <h2 class="text-sm font-black uppercase tracking-[0.2em] text-rose-500">危险操作区</h2>
       </div>
       
       <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
@@ -241,9 +241,9 @@ async function resetStats() {
     <!-- Version Footer -->
     <div class="flex flex-col items-center gap-2 pt-10">
        <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--border)]/30 text-[9px] font-black text-[var(--text-secondary)] uppercase tracking-widest">
-          Engine Version v1.0.3
+          引擎版本 v1.0.3
        </div>
-       <p class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em]">Design System by Kiro-Stack Core</p>
+       <p class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em]">由 Kiro-Stack 核心团队构建</p>
     </div>
   </div>
 </template>

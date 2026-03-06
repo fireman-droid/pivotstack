@@ -78,8 +78,8 @@ function displayEmail() {
 }
 
 function formatAuth(method) {
-  if (!method) return 'Default'
-  const map = { 'idc': 'Enterprise', 'social': 'Social', 'email': 'Direct' }
+  if (!method) return '默认'
+  const map = { 'idc': '企业账号', 'social': '社交账号', 'email': '邮箱直连' }
   return map[method] || method
 }
 
@@ -101,15 +101,15 @@ const getUsageColor = (percent) => {
     <div class="absolute top-0 right-0 p-3">
       <div v-if="isBanned()" class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 text-[10px] font-bold uppercase tracking-wider">
         <ShieldAlert class="w-3 h-3" />
-        {{ account.banStatus === 'BANNED' ? 'Banned' : 'Paused' }}
+        {{ account.banStatus === 'BANNED' ? '已封禁' : '已暂停' }}
       </div>
       <div v-else-if="!account.enabled" class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
         <Power class="w-3 h-3" />
-        Disabled
+        已禁用
       </div>
       <div v-else class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
         <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-        Active
+        运行中
       </div>
     </div>
 
@@ -132,7 +132,7 @@ const getUsageColor = (percent) => {
               'bg-blue-500': sub().color === 'blue',
               'bg-slate-500': sub().color === 'gray',
             }">{{ sub().label }}</span>
-          <span v-if="account.trialStatus === 'ACTIVE'" class="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px] font-bold uppercase">Trial</span>
+          <span v-if="account.trialStatus === 'ACTIVE'" class="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px] font-bold uppercase">试用</span>
           <span class="px-2 py-0.5 rounded bg-[var(--bg)] border border-[var(--border)] text-[var(--text-secondary)] text-[10px] font-medium">
             {{ formatAuth(account.provider || account.authMethod) }}
           </span>
@@ -142,7 +142,27 @@ const getUsageColor = (percent) => {
 
     <!-- Usage Section -->
     <div class="flex-1 mb-5">
-      <div v-if="account.usageLimit > 0">
+      <!-- 优先显示试用配额，如果没有则显示主配额 -->
+      <div v-if="account.trialUsageLimit > 0 && account.trialStatus === 'ACTIVE'">
+        <div class="flex justify-between items-end mb-1.5">
+          <span class="text-xs font-semibold text-[var(--text-secondary)] flex items-center gap-1">
+            <Activity class="w-3 h-3" /> 试用配额
+          </span>
+          <span class="text-xs font-bold" :class="(account.trialUsagePercent||0) > 0.8 ? 'text-rose-500' : 'text-emerald-500'">
+            {{ ((account.trialUsagePercent || 0) * 100).toFixed(1) }}%
+          </span>
+        </div>
+        <div class="h-2 bg-[var(--bg)] rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
+          <div class="h-full rounded-full transition-all duration-500"
+            :style="{ width: (account.trialUsagePercent || 0) * 100 + '%' }"
+            :class="getUsageColor(account.trialUsagePercent||0)" />
+        </div>
+        <div class="mt-1.5 text-[11px] text-[var(--text-secondary)] flex justify-between">
+          <span>已使用 {{ (account.trialUsageCurrent || 0).toFixed(0) }}</span>
+          <span>共 {{ (account.trialUsageLimit || 0).toFixed(0) }}</span>
+        </div>
+      </div>
+      <div v-else-if="account.usageLimit > 0">
         <div class="flex justify-between items-end mb-1.5">
           <span class="text-xs font-semibold text-[var(--text-secondary)] flex items-center gap-1">
             <Activity class="w-3 h-3" /> 主配额
@@ -152,7 +172,7 @@ const getUsageColor = (percent) => {
           </span>
         </div>
         <div class="h-2 bg-[var(--bg)] rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
-          <div class="h-full rounded-full transition-all duration-500" 
+          <div class="h-full rounded-full transition-all duration-500"
             :style="{ width: (account.usagePercent || 0) * 100 + '%' }"
             :class="getUsageColor(account.usagePercent||0)" />
         </div>
@@ -188,10 +208,10 @@ const getUsageColor = (percent) => {
       <div class="space-y-0.5">
         <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">权重</div>
         <div class="flex items-center gap-2">
-          <select :value="account.weight || 0" 
-            @change="e => { api(`/accounts/${account.id}`, { method: 'PUT', body: JSON.stringify({ weight: +e.target.value }) }); store.load() }"
+          <select :value="account.weight || 0"
+            @change="async e => { try { await api(`/accounts/${account.id}`, { method: 'PUT', body: JSON.stringify({ weight: +e.target.value }) }); await store.load(); success('权重已更新') } catch { error('更新失败') } }"
             class="text-xs font-bold py-0.5 px-1 border-none bg-transparent hover:bg-white dark:hover:bg-slate-800 rounded transition-colors cursor-pointer outline-none text-primary">
-            <option v-for="w in [0,1,2,3,4,5]" :key="w" :value="w">Rank {{ w }}</option>
+            <option v-for="w in [0,1,2,3,4,5]" :key="w" :value="w">权重 {{ w }}</option>
           </select>
         </div>
       </div>

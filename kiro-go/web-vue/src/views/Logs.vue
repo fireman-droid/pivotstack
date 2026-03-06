@@ -5,25 +5,22 @@ import { useToast } from '../composables/useToast'
 import { 
   RotateCw, 
   Trash2, 
-  Clock, 
   Zap, 
-  ArrowRight, 
   AlertCircle, 
-  CheckCircle2,
-  Filter,
-  Layers,
   Search,
-  ChevronLeft,
-  ChevronRight,
   Monitor,
   Cpu,
-  History
+  History,
+  ChevronDown,
+  X
 } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
 const logs = ref([])
 const loading = ref(false)
 const searchQuery = ref('')
+const expandedIndex = ref(-1)
+const statusFilter = ref('all')
 
 async function loadLogs() {
   loading.value = true
@@ -44,16 +41,27 @@ async function clearLogs() {
   try {
     await api('/logs', { method: 'DELETE' })
     logs.value = []
+    expandedIndex.value = -1
     success('日志已清空')
   } catch {
     toastError('清空失败')
   }
 }
 
+function toggleExpand(i) {
+  expandedIndex.value = expandedIndex.value === i ? -1 : i
+}
+
 const filteredLogs = computed(() => {
-  if (!searchQuery.value) return logs.value
+  let result = logs.value
+  if (statusFilter.value === 'error') {
+    result = result.filter(l => l.error)
+  } else if (statusFilter.value === 'success') {
+    result = result.filter(l => !l.error)
+  }
+  if (!searchQuery.value) return result
   const q = searchQuery.value.toLowerCase()
-  return logs.value.filter(l => 
+  return result.filter(l => 
     l.actual_model?.toLowerCase().includes(q) || 
     l.original_model?.toLowerCase().includes(q) ||
     l.account?.toLowerCase().includes(q) ||
@@ -61,185 +69,189 @@ const filteredLogs = computed(() => {
   )
 })
 
+const errorCount = computed(() => logs.value.filter(l => l.error).length)
+
 onMounted(loadLogs)
 </script>
 
 <template>
-  <div class="space-y-8 max-w-[1600px] mx-auto pb-20">
+  <div class="space-y-6 max-w-[1600px] mx-auto pb-20">
     <!-- Header -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div class="space-y-1">
-        <h1 class="text-3xl font-black tracking-tighter text-[var(--text)]">审计日志</h1>
+        <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">使用日志</h1>
         <p class="text-sm text-[var(--text-secondary)] font-medium flex items-center gap-2">
-           <History class="w-3.5 h-3.5 text-indigo-500" />
-           追踪全局 API 调用记录、模型转换及实时消耗
+          <History class="w-3.5 h-3.5 text-indigo-500" />
+          API 调用记录 · 共 {{ logs.length }} 条
+          <span v-if="errorCount" class="text-rose-500">· {{ errorCount }} 个错误</span>
         </p>
       </div>
-      <div class="flex items-center gap-3">
-        <button @click="loadLogs" :disabled="loading" class="flex items-center gap-2 px-5 py-2.5 bg-[var(--card)] border border-[var(--border)] rounded-2xl font-bold text-sm hover:bg-[var(--bg)] shadow-sm transition-all active:scale-95">
+      <div class="flex items-center gap-2">
+        <button @click="loadLogs" :disabled="loading" class="flex items-center gap-2 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold hover:bg-[var(--bg)] transition-all active:scale-95">
           <RotateCw class="w-4 h-4 text-primary" :class="{ 'animate-spin': loading }" /> 刷新
         </button>
-        <button @click="clearLogs" class="flex items-center gap-2 px-5 py-2.5 bg-rose-500/10 text-rose-500 rounded-2xl font-black text-sm hover:bg-rose-500 hover:text-white transition-all shadow-lg shadow-rose-500/5">
-          <Trash2 class="w-4 h-4" /> 清空记录
+        <button @click="clearLogs" class="flex items-center gap-2 px-4 py-2 bg-rose-500/10 text-rose-500 rounded-xl text-sm font-bold hover:bg-rose-500 hover:text-white transition-all">
+          <Trash2 class="w-4 h-4" /> 清空
         </button>
       </div>
     </div>
 
-    <!-- Filter Tool Bar -->
-    <div class="bg-[var(--card)]/60 backdrop-blur-2xl border border-[var(--border)] rounded-[24px] p-3 flex flex-col md:flex-row items-center gap-4 shadow-xl shadow-black/5 sticky top-20 z-20">
-      <div class="relative flex-1 w-full group">
+    <!-- Filter Bar -->
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+      <div class="relative flex-1 group">
         <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-primary transition-colors" />
         <input 
           v-model="searchQuery"
           type="text" 
-          placeholder="搜索模型、账号或错误快照..."
-          class="w-full h-12 pl-12 pr-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all font-medium"
+          placeholder="搜索模型、账号或错误信息..."
+          class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
         />
       </div>
-      <div class="flex gap-2 w-full md:w-auto">
-        <button class="flex-1 md:flex-none h-12 px-5 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--card)] transition-colors">
-          <Filter class="w-3.5 h-3.5 opacity-40" /> Status
-        </button>
-        <button class="flex-1 md:flex-none h-12 px-5 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--card)] transition-colors">
-          <Layers class="w-3.5 h-3.5 opacity-40" /> Type
-        </button>
+      <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
+        <button v-for="f in [{v:'all',l:'全部'},{v:'success',l:'成功'},{v:'error',l:'失败'}]" :key="f.v"
+          @click="statusFilter = f.v"
+          class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all"
+          :class="statusFilter === f.v ? 'bg-primary text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text)]'"
+        >{{ f.l }}</button>
       </div>
     </div>
 
-    <!-- Modern Audit Table -->
-    <div class="modern-card overflow-hidden shadow-2xl shadow-black/5 bg-gradient-to-b from-[var(--card)] to-[var(--bg)]">
-      <div class="overflow-x-auto custom-scrollbar">
-        <table class="w-full text-left border-collapse min-w-[1000px]">
+    <!-- Log Table -->
+    <div class="modern-card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse min-w-[900px]">
           <thead>
             <tr class="bg-[var(--bg)]/50 border-b border-[var(--border)]">
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50">Timestamp</th>
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50">Status</th>
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50">Model Pipeline</th>
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50">Account Instance</th>
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50 text-right">Resource Usage</th>
-              <th class="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-50">Payload Meta</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">时间</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">状态</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">模型</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">账号</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">Token</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">耗时</th>
+              <th class="px-6 py-4 w-10"></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-[var(--border)]/50">
-            <tr v-for="log in filteredLogs" :key="log.time" class="hover:bg-primary/[0.02] transition-colors group">
-              <!-- Time Column -->
-              <td class="px-8 py-6 whitespace-nowrap">
-                <div class="flex flex-col">
-                  <span class="text-xs font-black text-[var(--text)]">{{ log.time.split(' ')[1] }}</span>
-                  <span class="text-[9px] font-bold text-[var(--text-secondary)] opacity-50 uppercase">{{ log.time.split(' ')[0] }}</span>
-                </div>
-              </td>
+            <template v-for="(log, i) in filteredLogs" :key="i">
+              <!-- Main Row -->
+              <tr
+                class="transition-colors cursor-pointer"
+                :class="log.error ? 'hover:bg-rose-500/[0.03]' : 'hover:bg-primary/[0.02]'"
+                @click="toggleExpand(i)"
+              >
+                <td class="px-6 py-4 whitespace-nowrap">
+                  <div class="text-xs font-bold">{{ log.time?.split(' ')[1] }}</div>
+                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.time?.split(' ')[0] }}</div>
+                </td>
 
-              <!-- Status Column -->
-              <td class="px-8 py-6">
-                <div v-if="log.error" class="flex items-center gap-2 px-3 py-1 rounded-xl bg-rose-500/10 text-rose-500 text-[10px] font-black uppercase tracking-wider w-fit border border-rose-500/10">
-                  <div class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></div>
-                  Rejected
-                </div>
-                <div v-else class="flex items-center gap-2 px-3 py-1 rounded-xl bg-emerald-500/10 text-emerald-500 text-[10px] font-black uppercase tracking-wider w-fit border border-emerald-500/10">
-                  <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                  Authorized
-                </div>
-              </td>
+                <td class="px-6 py-4">
+                  <span v-if="log.error"
+                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-rose-500/10 text-rose-500 text-[10px] font-bold border border-rose-500/10">
+                    <AlertCircle class="w-3 h-3" /> 失败
+                  </span>
+                  <span v-else
+                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold border border-emerald-500/10">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 成功
+                  </span>
+                </td>
 
-              <!-- Model Pipeline Column -->
-              <td class="px-8 py-6">
-                <div class="flex items-center gap-3">
-                  <div class="flex flex-col min-w-0">
-                    <span class="text-[10px] font-mono text-[var(--text-secondary)] opacity-50 truncate">{{ log.original_model }}</span>
-                    <div class="flex items-center gap-2 mt-0.5">
-                      <div class="w-3 h-[1px] bg-primary/30"></div>
-                      <span class="text-xs font-black text-primary truncate tracking-tight">{{ log.actual_model }}</span>
+                <td class="px-6 py-4">
+                  <div class="text-xs font-bold text-primary">{{ log.actual_model }}</div>
+                  <div v-if="log.original_model !== log.actual_model" class="text-[9px] text-[var(--text-secondary)]">← {{ log.original_model }}</div>
+                </td>
+
+                <td class="px-6 py-4">
+                  <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+                      <Monitor class="w-3 h-3 text-indigo-500" />
+                    </div>
+                    <div>
+                      <div class="text-xs font-bold truncate max-w-[120px]">{{ log.account?.split('@')[0] }}</div>
+                      <div class="text-[9px] text-[var(--text-secondary)]">{{ log.api_type || 'REST' }}</div>
                     </div>
                   </div>
-                </div>
-              </td>
+                </td>
 
-              <!-- Account Column -->
-              <td class="px-8 py-6">
-                <div class="flex items-center gap-3">
-                  <div class="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/10">
-                    <Monitor class="w-4 h-4 text-indigo-500" />
-                  </div>
-                  <div class="flex flex-col">
-                    <span class="text-xs font-black truncate max-w-[120px]">{{ log.account?.split('@')[0] }}</span>
-                    <span class="text-[10px] font-bold text-[var(--text-secondary)] opacity-40 uppercase tracking-tighter">{{ log.api_type || 'REST' }}</span>
-                  </div>
-                </div>
-              </td>
-
-              <!-- Usage Column -->
-              <td class="px-8 py-6 text-right">
-                <div class="flex flex-col items-end gap-0.5">
-                  <div class="flex items-center gap-1.5">
+                <td class="px-6 py-4 text-right">
+                  <div class="flex items-center justify-end gap-1">
                     <Cpu class="w-3 h-3 text-amber-500" />
-                    <span class="text-sm font-black tracking-tight">{{ log.total_tokens?.toLocaleString() }}</span>
+                    <span class="text-xs font-bold">{{ log.total_tokens?.toLocaleString() || '-' }}</span>
                   </div>
-                  <div class="flex items-center gap-1 text-[9px] font-bold text-[var(--text-secondary)] opacity-40 uppercase">
-                    <span>In: {{ log.input_tokens }}</span>
-                    <span>/</span>
-                    <span>Out: {{ log.output_tokens }}</span>
-                  </div>
-                </div>
-              </td>
+                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.input_tokens || 0 }} / {{ log.output_tokens || 0 }}</div>
+                </td>
 
-              <!-- Meta Column -->
-              <td class="px-8 py-6">
-                <div v-if="log.error" class="group/err relative cursor-help">
-                  <div class="text-xs text-rose-500 font-medium max-w-[200px] truncate italic">
-                    {{ log.error }}
-                  </div>
-                  <div class="absolute bottom-full left-0 mb-2 p-3 bg-slate-900 text-white text-[10px] rounded-xl shadow-2xl w-64 opacity-0 group-hover/err:opacity-100 transition-opacity z-50 pointer-events-none border border-white/10">
-                    {{ log.error }}
-                  </div>
-                </div>
-                <div v-else class="flex items-center gap-3">
-                  <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[10px] font-black text-[var(--text-secondary)] uppercase tracking-tighter">
+                <td class="px-6 py-4 text-right">
+                  <div class="flex items-center justify-end gap-1.5">
                     <Zap class="w-3 h-3 text-amber-500" />
-                    {{ log.stream ? 'Stream' : 'Block' }}
+                    <span class="text-xs font-bold">{{ (log.duration || 0).toFixed(0) }}ms</span>
                   </div>
-                  <div class="text-[10px] font-bold text-primary/50 uppercase tracking-widest">
-                    {{ (log.duration || 0).toFixed(0) }}ms
+                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.stream ? 'Stream' : 'Block' }}</div>
+                </td>
+
+                <td class="px-6 py-4">
+                  <ChevronDown
+                    class="w-4 h-4 text-[var(--text-secondary)] transition-transform duration-200"
+                    :class="{ 'rotate-180': expandedIndex === i }"
+                  />
+                </td>
+              </tr>
+
+              <!-- Expanded Detail Row -->
+              <tr v-if="expandedIndex === i">
+                <td colspan="7" class="px-6 py-0">
+                  <div class="py-4 space-y-3">
+                    <!-- Error Detail -->
+                    <div v-if="log.error" class="p-4 bg-rose-500/5 border border-rose-500/10 rounded-xl">
+                      <div class="flex items-center gap-2 mb-2">
+                        <AlertCircle class="w-4 h-4 text-rose-500" />
+                        <span class="text-xs font-bold text-rose-500">错误详情</span>
+                      </div>
+                      <pre class="text-xs text-rose-400 font-mono whitespace-pre-wrap break-all leading-relaxed">{{ log.error }}</pre>
+                    </div>
+
+                    <!-- Request Detail -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求模型</div>
+                        <div class="text-xs font-bold font-mono">{{ log.original_model }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">实际模型</div>
+                        <div class="text-xs font-bold font-mono text-primary">{{ log.actual_model }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">完整账号</div>
+                        <div class="text-xs font-bold font-mono">{{ log.account || '-' }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求时间</div>
+                        <div class="text-xs font-bold font-mono">{{ log.time }}</div>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </td>
-            </tr>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
 
-      <!-- Pagination / Footer Stats -->
-      <div class="px-8 py-6 bg-[var(--bg)]/50 border-t border-[var(--border)] flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div class="flex items-center gap-4 text-[10px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)] opacity-60">
-           <span>Total Logs: {{ filteredLogs.length }}</span>
-           <span class="w-1 h-1 rounded-full bg-[var(--border)]"></span>
-           <span>Filtered View</span>
-        </div>
-        
-        <div class="flex items-center gap-3">
-          <button class="w-10 h-10 rounded-xl bg-[var(--card)] border border-[var(--border)] flex items-center justify-center hover:bg-primary hover:text-white hover:border-primary transition-all shadow-sm">
-            <ChevronLeft class="w-4 h-4" />
-          </button>
-          <div class="px-4 py-2 bg-primary/10 text-primary rounded-xl text-xs font-black border border-primary/10">1 / 1</div>
-          <button class="w-10 h-10 rounded-xl bg-[var(--card)] border border-[var(--border)] flex items-center justify-center hover:bg-primary hover:text-white hover:border-primary transition-all shadow-sm">
-            <ChevronRight class="w-4 h-4" />
-          </button>
-        </div>
+      <!-- Empty State -->
+      <div v-if="!filteredLogs.length" class="px-6 py-16 text-center">
+        <History class="w-10 h-10 text-[var(--text-secondary)] opacity-20 mx-auto mb-3" />
+        <div class="text-sm font-bold text-[var(--text-secondary)]">{{ searchQuery || statusFilter !== 'all' ? '没有匹配的日志' : '暂无调用记录' }}</div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-6 py-4 bg-[var(--bg)]/50 border-t border-[var(--border)] flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
+        <span>显示 {{ filteredLogs.length }} / {{ logs.length }} 条记录</span>
+        <span>点击任意行查看详情</span>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.custom-scrollbar::-webkit-scrollbar { height: 6px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
-</style>
-
-<style scoped>
-/* 滚动条美化 */
-.overflow-x-auto::-webkit-scrollbar {
-  height: 4px;
-}
+.overflow-x-auto::-webkit-scrollbar { height: 4px; }
+.overflow-x-auto::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
 </style>

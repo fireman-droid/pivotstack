@@ -266,6 +266,20 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.pool.Reload()
+	// Async: populate real quota data immediately after adding
+	credAccountID := account.ID
+	go func() {
+		accounts := config.GetAccounts()
+		for i := range accounts {
+			if accounts[i].ID == credAccountID {
+				info, err := RefreshAccountInfo(&accounts[i])
+				if err == nil {
+					config.UpdateAccountInfo(credAccountID, *info)
+				}
+				return
+			}
+		}
+	}()
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true, "account": map[string]interface{}{"id": account.ID, "email": account.Email},
 	})

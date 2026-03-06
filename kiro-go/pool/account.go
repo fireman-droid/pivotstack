@@ -82,14 +82,10 @@ func (p *AccountPool) GetNext() *config.Account {
 			continue
 		}
 
-		// 跳过即将过期的 Token
-		if acc.ExpiresAt > 0 && time.Now().Unix() > acc.ExpiresAt-300 {
-			seen[acc.ID] = true
-			continue
-		}
-
-		// 跳过额度已用尽的账号（适用于所有订阅类型）
-		if acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit {
+		// 跳过额度已用尽的账号（检查主配额和试用配额）
+		mainQuotaExhausted := acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit
+		trialQuotaExhausted := acc.TrialUsageLimit > 0 && acc.TrialUsageCurrent >= acc.TrialUsageLimit
+		if mainQuotaExhausted && trialQuotaExhausted {
 			seen[acc.ID] = true
 			continue
 		}

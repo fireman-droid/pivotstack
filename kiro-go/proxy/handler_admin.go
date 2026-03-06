@@ -140,12 +140,39 @@ func (h *Handler) apiAddAccount(w http.ResponseWriter, r *http.Request) {
 	if account.Region == "" {
 		account.Region = "us-east-1"
 	}
+	if account.MachineId == "" {
+		account.MachineId = config.GenerateMachineId()
+	}
+	if account.Enabled == false && account.AccessToken == "" && account.RefreshToken == "" {
+		account.Enabled = true
+	}
+	// Normalize authMethod casing
+	switch strings.ToLower(account.AuthMethod) {
+	case "idc", "builderid", "enterprise":
+		account.AuthMethod = "idc"
+	case "social", "google", "github":
+		account.AuthMethod = "social"
+	}
 	if err := config.AddAccount(account); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	h.pool.Reload()
+	// Async: populate real quota data immediately after adding
+	accountID := account.ID
+	go func() {
+		accounts := config.GetAccounts()
+		for i := range accounts {
+			if accounts[i].ID == accountID {
+				info, err := RefreshAccountInfo(&accounts[i])
+				if err == nil {
+					config.UpdateAccountInfo(accountID, *info)
+				}
+				return
+			}
+		}
+	}()
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "id": account.ID})
 }
 

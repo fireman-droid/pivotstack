@@ -6,6 +6,8 @@ import (
 	"io"
 	"kiro-api-proxy/config"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -14,6 +16,21 @@ const (
 	kiroRestAPIBase = "https://codewhisperer.us-east-1.amazonaws.com"
 	kiroVersion     = "1.26.2"
 )
+
+// kiroApiClient 是 kiro_api.go 使用的代理感知 HTTP 客户端
+var kiroApiClient = func() *http.Client {
+	transport := &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+		}
+	}
+	return &http.Client{Timeout: 30 * time.Second, Transport: transport}
+}()
 
 // GetUsageLimits 获取账户使用量和订阅信息
 func GetUsageLimits(account *config.Account) (*UsageLimitsResponse, error) {
@@ -26,8 +43,7 @@ func GetUsageLimits(account *config.Account) (*UsageLimitsResponse, error) {
 
 	setKiroHeaders(req, account)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := kiroApiClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -47,10 +63,10 @@ func GetUsageLimits(account *config.Account) (*UsageLimitsResponse, error) {
 
 // GetUserInfo 获取用户信息
 func GetUserInfo(account *config.Account) (*UserInfoResponse, error) {
-	url := fmt.Sprintf("%s/GetUserInfo", kiroRestAPIBase)
+	url2 := fmt.Sprintf("%s/GetUserInfo", kiroRestAPIBase)
 
 	payload := `{"origin":"KIRO_IDE"}`
-	req, err := http.NewRequest("POST", url, strings.NewReader(payload))
+	req, err := http.NewRequest("POST", url2, strings.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +74,7 @@ func GetUserInfo(account *config.Account) (*UserInfoResponse, error) {
 	setKiroHeaders(req, account)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := kiroApiClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -79,17 +94,16 @@ func GetUserInfo(account *config.Account) (*UserInfoResponse, error) {
 
 // ListAvailableModels 获取可用模型列表
 func ListAvailableModels(account *config.Account) ([]ModelInfo, error) {
-	url := fmt.Sprintf("%s/ListAvailableModels?origin=AI_EDITOR&maxResults=50", kiroRestAPIBase)
+	url3 := fmt.Sprintf("%s/ListAvailableModels?origin=AI_EDITOR&maxResults=50", kiroRestAPIBase)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url3, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	setKiroHeaders(req, account)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := kiroApiClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -18,7 +18,19 @@ export const useAccountsStore = defineStore('accounts', () => {
       if (filterStatus.value === 'banned' && (!a.banStatus || a.banStatus === 'ACTIVE')) return false
       if (filterKeyword.value) {
         const kw = filterKeyword.value.toLowerCase()
-        if (!(a.email || '').toLowerCase().includes(kw)) return false
+        // 支持条件表达式：usage > 80, usage < 50
+        const match = kw.match(/usage\s*([><=]+)\s*(\d+)/)
+        if (match) {
+          const [_, op, val] = match
+          const actual = (a.usagePercent || 0) * 100
+          if (op === '>' && actual <= val) return false
+          if (op === '<' && actual >= val) return false
+          if (op === '>=' && actual < val) return false
+          if (op === '<=' && actual > val) return false
+          if (op === '=' && actual !== parseFloat(val)) return false
+        } else if (!(a.email || '').toLowerCase().includes(kw)) {
+          return false
+        }
       }
       return true
     })
@@ -34,9 +46,14 @@ export const useAccountsStore = defineStore('accounts', () => {
 
   async function load() {
     loading.value = true
-    const res = await api('/accounts')
-    if (res.ok) accounts.value = await res.json()
-    loading.value = false
+    try {
+      const res = await api('/accounts')
+      if (res.ok) accounts.value = await res.json()
+    } catch (e) {
+      console.error('加载账号失败:', e)
+    } finally {
+      loading.value = false
+    }
   }
 
   function toggleSelect(id) {
@@ -56,14 +73,19 @@ export const useAccountsStore = defineStore('accounts', () => {
   async function batchAction(action, extra = {}) {
     const ids = Array.from(selectedIds.value)
     if (!ids.length) return null
-    const res = await api('/accounts/batch', {
-      method: 'POST',
-      body: JSON.stringify({ ids, action, ...extra }),
-    })
-    const data = await res.json()
-    clearSelection()
-    await load()
-    return data
+    try {
+      const res = await api('/accounts/batch', {
+        method: 'POST',
+        body: JSON.stringify({ ids, action, ...extra }),
+      })
+      const data = await res.json()
+      clearSelection()
+      await load()
+      return data
+    } catch (e) {
+      clearSelection()
+      throw e
+    }
   }
 
   return {
