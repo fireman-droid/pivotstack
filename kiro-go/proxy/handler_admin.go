@@ -5,6 +5,7 @@ import (
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -454,10 +455,43 @@ func (h *Handler) apiGetLogs(w http.ResponseWriter, r *http.Request) {
 	logs := make([]CallLog, len(h.callLogs))
 	copy(logs, h.callLogs)
 	h.callLogsMu.RUnlock()
+
+	// reverse so newest first
 	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
 		logs[i], logs[j] = logs[j], logs[i]
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"logs": logs})
+
+	total := len(logs)
+
+	// pagination: ?page=1&limit=50
+	page := 1
+	limit := 50
+	if p := r.URL.Query().Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+
+	start := (page - 1) * limit
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"logs":  logs[start:end],
+		"total": total,
+		"page":  page,
+		"limit": limit,
+	})
 }
 
 func (h *Handler) apiClearLogs(w http.ResponseWriter, r *http.Request) {

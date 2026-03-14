@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import * as echarts from 'echarts'
-import abyssTheme from '@/lib/echarts-abyss-theme.json'
+let echarts = null
 import { api } from '../api/admin'
 import { formatNum } from '../utils/format'
 import { useWorldTheme } from '../stores/worldTheme'
@@ -12,9 +11,6 @@ import {
   Users, Zap, Activity, CreditCard, Clock, 
   Copy, Terminal, Globe, AlertTriangle, Crown
 } from 'lucide-vue-next'
-
-// 注册 ECharts abyss 主题
-echarts.registerTheme('abyss', abyssTheme)
 
 const { success } = useToast()
 const stats = ref({ accounts: 0, totalRequests: 0, successRequests: 0, failedRequests: 0, totalTokens: 0, totalCredits: 0, uptime: 0, freePool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 }, proPool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 } })
@@ -29,15 +25,26 @@ let chart = null
 const requestHistory = ref([])
 const chartIncrements = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
-function initChart() {
+async function loadEcharts() {
+  if (echarts) return
+  const [echartsModule, abyssTheme] = await Promise.all([
+    import('echarts'),
+    import('@/lib/echarts-abyss-theme.json')
+  ])
+  echarts = echartsModule
+  echarts.registerTheme('abyss', abyssTheme.default || abyssTheme)
+}
+
+async function initChart() {
   if (!chartRef.value) return
+  await loadEcharts()
   chart = echarts.init(chartRef.value, theme.currentWorld === 'daogui' ? 'abyss' : null)
   updateChart()
   window.addEventListener('resize', () => chart?.resize())
 }
 
-watch(() => theme.currentWorld, (newVal) => {
-  if (chart) {
+watch(() => theme.currentWorld, async (newVal) => {
+  if (chart && echarts) {
     chart.dispose()
     chart = echarts.init(chartRef.value, newVal === 'daogui' ? 'abyss' : null)
     updateChart()

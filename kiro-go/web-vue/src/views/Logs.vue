@@ -26,6 +26,9 @@ const statusFilter = ref('all')
 const keyFilter = ref('all')
 const apiKeys = ref([])
 const sseConnected = ref(false)
+const currentPage = ref(1)
+const totalLogs = ref(0)
+const pageSize = ref(50)
 let eventSource = null
 
 // 通过 SSE 实时接收日志
@@ -38,14 +41,15 @@ function connectSSE() {
   eventSource.addEventListener('log', (e) => {
     try {
       const entry = JSON.parse(e.data)
-      // 去重：检查是否已存在相同记录
+      totalLogs.value++
+      if (currentPage.value !== 1) return
       const exists = logs.value.some(l => 
         l.time === entry.time && l.actual_model === entry.actual_model && l.account === entry.account
       )
       if (!exists) {
         logs.value.unshift(entry)
-        if (logs.value.length > 500) {
-          logs.value = logs.value.slice(0, 500)
+        if (logs.value.length > pageSize.value) {
+          logs.value = logs.value.slice(0, pageSize.value)
         }
       }
     } catch {}
@@ -75,19 +79,29 @@ async function loadApiKeys() {
   } catch {}
 }
 
-// 传统 HTTP 加载（作为 fallback 和初始加载）
-async function loadLogs() {
+// 分页加载日志
+async function loadLogs(page = 1) {
   loading.value = true
   try {
-    const res = await api('/logs')
+    const res = await api(`/logs?page=${page}&limit=${pageSize.value}`)
     if (res.ok) {
       const d = await res.json()
       logs.value = d.logs || []
+      totalLogs.value = d.total || 0
+      currentPage.value = d.page || 1
     }
   } catch {
     toastError('无法加载日志')
   }
   loading.value = false
+}
+
+const totalPages = computed(() => Math.max(1, Math.ceil(totalLogs.value / pageSize.value)))
+
+function goToPage(page) {
+  if (page < 1 || page > totalPages.value) return
+  expandedIndex.value = -1
+  loadLogs(page)
 }
 
 async function clearLogs() {
@@ -170,7 +184,7 @@ onUnmounted(() => {
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <button @click="loadLogs" :disabled="loading" class="flex items-center gap-2 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold hover:bg-[var(--bg)] transition-all active:scale-95">
+        <button @click="loadLogs(currentPage)" :disabled="loading" class="flex items-center gap-2 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold hover:bg-[var(--bg)] transition-all active:scale-95">
           <RotateCw class="w-4 h-4 text-[var(--primary)]" :class="{ 'animate-spin': loading }" /> 刷新
         </button>
         <button @click="clearLogs" class="flex items-center gap-2 px-4 py-2 bg-rose-500/10 text-rose-500 rounded-xl text-sm font-bold hover:bg-rose-500 hover:text-white transition-all">
@@ -378,9 +392,47 @@ onUnmounted(() => {
         <div class="text-sm font-bold text-[var(--text-secondary)]">{{ searchQuery || statusFilter !== 'all' ? '没有匹配的日志' : '暂无调用记录' }}</div>
       </div>
 
+      <!-- Pagination -->
+      <div v-if="totalPages > 1" class="px-6 py-4 bg-[var(--bg)]/50 border-t border-[var(--border)] flex items-center justify-between">
+        <span class="text-[10px] font-bold text-[var(--text-secondary)]">
+          共 {{ totalLogs }} 条 · 第 {{ currentPage }}/{{ totalPages }} 页
+        </span>
+        <div class="flex items-center gap-1">
+          <button @click="goToPage(1)" :disabled="currentPage <= 1"
+            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
+            :class="currentPage <= 1 ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
+            首页
+          </button>
+          <button @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1"
+            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
+            :class="currentPage <= 1 ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
+            ‹ 上一页
+          </button>
+          <template v-for="p in totalPages" :key="p">
+            <button v-if="p === 1 || p === totalPages || (p >= currentPage - 2 && p <= currentPage + 2)"
+              @click="goToPage(p)"
+              class="w-7 h-7 rounded-lg text-[10px] font-bold transition-all"
+              :class="p === currentPage ? 'bg-[var(--primary)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--card)]'">
+              {{ p }}
+            </button>
+            <span v-else-if="p === currentPage - 3 || p === currentPage + 3" class="text-[var(--text-secondary)]/30 text-xs px-1">…</span>
+          </template>
+          <button @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages"
+            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
+            :class="currentPage >= totalPages ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
+            下一页 ›
+          </button>
+          <button @click="goToPage(totalPages)" :disabled="currentPage >= totalPages"
+            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
+            :class="currentPage >= totalPages ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
+            末页
+          </button>
+        </div>
+      </div>
+
       <!-- Footer -->
-      <div class="px-6 py-4 bg-[var(--bg)]/50 border-t border-[var(--border)] flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
-        <span>显示 {{ filteredLogs.length }} / {{ logs.length }} 条记录</span>
+      <div class="px-6 py-3 bg-[var(--bg)]/50 border-t border-[var(--border)] flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
+        <span>显示 {{ filteredLogs.length }} / {{ totalLogs }} 条记录</span>
         <span>点击任意行查看详情</span>
       </div>
     </div>
