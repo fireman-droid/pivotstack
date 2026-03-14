@@ -34,38 +34,65 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account := h.pool.GetNext()
-	if account == nil {
-		h.sendOpenAIError(w, 503, "server_error", "No available accounts")
-		return
+	// 请求内故障转移：最多尝试 3 个账号
+	maxRetries := 3
+	var lastErr error
+
+	// 先根据模型确定号池
+	tier := DeterminePoolTier(req.Model)
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		account := h.pool.GetNextByTier(tier)
+		if account == nil {
+			// 该号池无可用账号
+			h.sendOpenAIError(w, 503, "server_error", fmt.Sprintf("No available accounts in %s pool", tier))
+			return
+		}
+
+		if err := h.ensureValidToken(account); err != nil {
+			h.pool.RecordError(account.ID, false)
+			h.pool.ReleaseAccount(account.ID)
+			lastErr = fmt.Errorf("token refresh failed: %v", err)
+			continue
+		}
+
+		// 模型验证：在选择账号后根据订阅类型验证
+		thinkingCfg := config.GetThinkingConfig()
+		originalModel := req.Model
+		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
+		if validateErr != nil {
+			h.pool.ReleaseAccount(account.ID)
+			h.sendOpenAIError(w, 400, "invalid_request_error", validateErr.Error())
+			return
+		}
+		req.Model = mappedModel
+		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
+		req.Model = actualModel
+		estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
+
+		if originalModel != actualModel {
+			fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v | attempt: %d\n", originalModel, actualModel, account.Email, req.Stream, attempt+1)
+		} else {
+			fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v | attempt: %d\n", actualModel, account.Email, req.Stream, attempt+1)
+		}
+
+		kiroPayload := OpenAIToKiro(&req, thinking)
+
+		if req.Stream {
+			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+		} else {
+			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+		}
+		return // 成功或已处理错误，退出循环
 	}
 
-	if err := h.ensureValidToken(account); err != nil {
-		h.sendOpenAIError(w, 503, "server_error", "Token refresh failed")
-		return
+	// 所有重试都失败
+	h.recordFailure()
+	errMsg := "All accounts failed"
+	if lastErr != nil {
+		errMsg = lastErr.Error()
 	}
-
-	// 解析模型和 thinking 模式
-	thinkingCfg := config.GetThinkingConfig()
-	originalModel := req.Model
-	req.Model = DowngradeForFree(req.Model, account.SubscriptionType)
-	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	req.Model = actualModel
-	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
-
-	if originalModel != actualModel {
-		fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v\n", originalModel, actualModel, account.Email, req.Stream)
-	} else {
-		fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v\n", actualModel, account.Email, req.Stream)
-	}
-
-	kiroPayload := OpenAIToKiro(&req, thinking)
-
-	if req.Stream {
-		h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
-	} else {
-		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
-	}
+	h.sendOpenAIError(w, 503, "server_error", errMsg)
 }
 
 // handleOpenAIStream OpenAI 流式响应
@@ -382,7 +409,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		},
 	}
 
-	err := CallKiroAPI(account, payload, callback)
+	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
 		h.recordFailure()
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
@@ -396,6 +423,9 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 				originalModel, model, account.Email, err.Error())
 		}
 		h.addCallLogError("OpenAI", originalModel, model, account.Email, true, err.Error(), payloadKB)
+		if upstreamErr != nil {
+			WriteOpenAIStreamError(w, upstreamErr.ToAppError(""))
+		}
 		return
 	}
 
@@ -424,7 +454,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, true)
+	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送结束
 	finishReason := "stop"
@@ -476,7 +506,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		OnCredits:  func(c float64) { credits = c },
 	}
 
-	err := CallKiroAPI(account, payload, callback)
+	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
 		h.recordFailure()
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
@@ -490,7 +520,12 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 				originalModel, model, account.Email, err.Error())
 		}
 		h.addCallLogError("OpenAI", originalModel, model, account.Email, false, err.Error(), payloadKB)
-		h.sendOpenAIError(w, 500, "server_error", err.Error())
+		if upstreamErr != nil {
+			appErr := upstreamErr.ToAppError("")
+			WriteOpenAIError(w, appErr, upstreamErr.StatusCode)
+		} else {
+			h.sendOpenAIError(w, 500, "server_error", err.Error())
+		}
 		return
 	}
 
@@ -508,7 +543,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, false)
+	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, false, credits, "", "")
 
 	thinkingFormat := config.GetThinkingConfig().OpenAIFormat
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)

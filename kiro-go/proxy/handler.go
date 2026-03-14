@@ -7,6 +7,8 @@ import (
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -32,21 +34,33 @@ type Handler struct {
 	// 调用日志
 	callLogs   []CallLog
 	callLogsMu sync.RWMutex
+	// SSE 实时日志订阅
+	logSubscribers   map[chan CallLog]bool
+	logSubscribersMu sync.RWMutex
+	// Credit 消耗预测
+	creditPredictor *CreditPredictor
 }
 
-// CallLog 单次调用记录
+// CallLog 单次调用记录（结构化日志）
 type CallLog struct {
-	Time          string `json:"time"`
-	APIType       string `json:"api_type"`
-	OriginalModel string `json:"original_model"`
-	ActualModel   string `json:"actual_model"`
-	Account       string `json:"account"`
-	InputTokens   int    `json:"input_tokens"`
-	OutputTokens  int    `json:"output_tokens"`
-	TotalTokens   int    `json:"total_tokens"`
-	Stream        bool   `json:"stream"`
-	Error         string `json:"error,omitempty"`
-	PayloadKB     int    `json:"payload_kb,omitempty"`
+	Time            string  `json:"time"`
+	Timestamp       int64   `json:"timestamp"`
+	APIType         string  `json:"api_type"`
+	OriginalModel   string  `json:"original_model"`
+	ActualModel     string  `json:"actual_model"`
+	Account         string  `json:"account"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	TotalTokens     int     `json:"total_tokens"`
+	Credits         float64 `json:"credits,omitempty"`
+	Stream          bool    `json:"stream"`
+	Error           string  `json:"error,omitempty"`
+	PayloadKB       int     `json:"payload_kb,omitempty"`
+	Status          string  `json:"status"`
+	Attempt         int     `json:"attempt,omitempty"`
+	Subscription    string  `json:"subscription,omitempty"`
+	RequestSummary  string  `json:"request_summary,omitempty"`
+	ResponseSummary string  `json:"response_summary,omitempty"`
 }
 
 const maxCallLogs = 500
@@ -89,17 +103,21 @@ func NewHandler() *Handler {
 		startTime:       time.Now().Unix(),
 		stopRefresh:     make(chan struct{}),
 		stopStatsSaver:  make(chan struct{}),
+		logSubscribers:  make(map[chan CallLog]bool),
+		creditPredictor: newCreditPredictor(200, 0.3),
 	}
+	// 从磁盘恢复历史日志和 CreditPredictor
+	h.loadLogsFromDisk()
 	// 启动后台刷新
 	go h.backgroundRefresh()
-	// 启动后台统计保存 (每30秒保存一次)
+	// 启动后台统计保存 (每5分钟批量写入)
 	go h.backgroundStatsSaver()
 	return h
 }
 
 // backgroundRefresh 后台定时刷新账户信息
 func (h *Handler) backgroundRefresh() {
-	ticker := time.NewTicker(15 * time.Minute)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
 	time.Sleep(5 * time.Second)
@@ -120,37 +138,41 @@ func (h *Handler) backgroundRefresh() {
 // refreshAllAccounts 刷新所有账户信息
 func (h *Handler) refreshAllAccounts() {
 	accounts := config.GetAccounts()
+	refreshed := 0
+	failed := 0
+	skipped := 0
+
 	for i := range accounts {
 		account := &accounts[i]
-		if !account.Enabled || account.AccessToken == "" {
+		if !account.Enabled || (account.AccessToken == "" && account.RefreshToken == "") {
+			fmt.Printf("[BackgroundRefresh] SKIP %s: enabled=%v, atLen=%d, rtLen=%d\n",
+				account.Email, account.Enabled, len(account.AccessToken), len(account.RefreshToken))
+			skipped++
 			continue
 		}
 
-		// 主动刷新 token：过期前 10 分钟或已过期
-		if account.ExpiresAt > 0 && time.Now().Unix() > account.ExpiresAt-600 {
-			fmt.Printf("[BackgroundRefresh] Token expiring soon for %s (expiresAt=%d, now=%d), refreshing...\n",
+		// 主动刷新 token：过期前 30 分钟或已过期
+		needsRefresh := false
+		if account.ExpiresAt == 0 {
+			needsRefresh = true // ExpiresAt 未设置，强制刷新
+		} else if time.Now().Unix() > account.ExpiresAt-1800 {
+			needsRefresh = true // 30 分钟内过期或已过期
+		}
+
+		if needsRefresh {
+			fmt.Printf("[BackgroundRefresh] Refreshing token for %s (expiresAt=%d, now=%d)...\n",
 				account.Email, account.ExpiresAt, time.Now().Unix())
-			newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(account)
-			if err != nil {
-				fmt.Printf("[BackgroundRefresh] Token refresh FAILED for %s: %v\n", account.Email, err)
-				continue
-			}
-			account.AccessToken = newAccessToken
-			if newRefreshToken != "" {
-				account.RefreshToken = newRefreshToken
-			}
-			account.ExpiresAt = newExpiresAt
-			config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
-			h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
-			fmt.Printf("[BackgroundRefresh] Token refreshed OK for %s, new expiresAt=%d (in %ds)\n",
-				account.Email, newExpiresAt, newExpiresAt-time.Now().Unix())
-		} else if account.ExpiresAt == 0 {
-			// ExpiresAt 未设置，强制刷新一次
-			fmt.Printf("[BackgroundRefresh] ExpiresAt not set for %s, forcing token refresh...\n", account.Email)
-			newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(account)
-			if err != nil {
-				fmt.Printf("[BackgroundRefresh] Token refresh FAILED for %s: %v\n", account.Email, err)
-			} else {
+
+			// 最多重试 2 次
+			var lastErr error
+			for retry := 0; retry < 2; retry++ {
+				newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(account)
+				if err != nil {
+					lastErr = err
+					fmt.Printf("[BackgroundRefresh] Retry %d failed for %s: %v\n", retry+1, account.Email, err)
+					time.Sleep(3 * time.Second)
+					continue
+				}
 				account.AccessToken = newAccessToken
 				if newRefreshToken != "" {
 					account.RefreshToken = newRefreshToken
@@ -158,21 +180,30 @@ func (h *Handler) refreshAllAccounts() {
 				account.ExpiresAt = newExpiresAt
 				config.UpdateAccountToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
 				h.pool.UpdateToken(account.ID, newAccessToken, newRefreshToken, newExpiresAt)
-				fmt.Printf("[BackgroundRefresh] Token refreshed OK for %s, expiresAt=%d (in %ds)\n",
-					account.Email, newExpiresAt, newExpiresAt-time.Now().Unix())
+				fmt.Printf("[BackgroundRefresh] Token refreshed OK for %s, new expiresAt=%d (in %dm)\n",
+					account.Email, newExpiresAt, (newExpiresAt-time.Now().Unix())/60)
+				lastErr = nil
+				refreshed++
+				break
+			}
+			if lastErr != nil {
+				fmt.Printf("[BackgroundRefresh] Token refresh FAILED for %s after retries: %v\n", account.Email, lastErr)
+				failed++
+				continue
 			}
 		}
 
 		info, err := RefreshAccountInfo(account)
 		if err != nil {
-			fmt.Printf("[BackgroundRefresh] Failed to refresh %s: %v\n", account.Email, err)
+			fmt.Printf("[BackgroundRefresh] Failed to refresh info for %s: %v\n", account.Email, err)
 			continue
 		}
 
 		config.UpdateAccountInfo(account.ID, *info)
-		fmt.Printf("[BackgroundRefresh] Refreshed %s: %s %.1f/%.1f\n", account.Email, info.SubscriptionType, info.UsageCurrent, info.UsageLimit)
 	}
 	h.pool.Reload()
+	fmt.Printf("[BackgroundRefresh] Done: %d refreshed, %d failed, %d skipped, %d total\n",
+		refreshed, failed, skipped, len(accounts))
 }
 
 // validateApiKey 验证 API Key
@@ -202,6 +233,11 @@ func (h *Handler) validateApiKey(r *http.Request) bool {
 // ServeHTTP 路由分发
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
+
+	// 生成 request_id
+	requestID := generateRequestID()
+	r.Header.Set("X-Request-ID", requestID)
+	w.Header().Set("X-Request-ID", requestID)
 
 	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -239,15 +275,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Write([]byte(`{"status":"ok"}`))
 
-	case strings.HasPrefix(path, "/assets/"):
-		// Vue build 静态资源
-		h.serveDistFile(w, r)
-	case path == "/admin" || path == "/admin/":
-		h.serveAdminPage(w, r)
+	case strings.HasPrefix(path, "/admin/api/sse/"):
+		h.handleAdminAPI(w, r) // SSE endpoints handled inside admin API router
+
 	case strings.HasPrefix(path, "/admin/api/"):
 		h.handleAdminAPI(w, r)
-	case strings.HasPrefix(path, "/admin/"):
-		h.serveStaticFile(w, r)
+
+	case path == "/admin" || path == "/admin/" || strings.HasPrefix(path, "/admin/"):
+		// Serve Vue frontend (SPA fallback)
+		distDir := "web-vue/dist"
+		if _, err := os.Stat(distDir); os.IsNotExist(err) {
+			distDir = "/app/web-vue/dist"
+		}
+		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+
+	case strings.HasPrefix(path, "/assets/"):
+		// Serve Vue static assets (JS, CSS)
+		distDir := "web-vue/dist"
+		if _, err := os.Stat(distDir); os.IsNotExist(err) {
+			distDir = "/app/web-vue/dist"
+		}
+		http.StripPrefix("/", http.FileServer(http.Dir(distDir))).ServeHTTP(w, r)
 
 	case path == "/health" || path == "/":
 		h.handleHealth(w, r)

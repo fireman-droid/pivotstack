@@ -72,42 +72,68 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 获取账号
-	account := h.pool.GetNext()
-	if account == nil {
-		h.sendClaudeError(w, 503, "api_error", "No available accounts")
-		return
+	// 请求内故障转移：最多尝试 3 个账号
+	maxRetries := 3
+	var lastErr error
+
+	// 先根据模型确定号池
+	tier := DeterminePoolTier(req.Model)
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// 从对应号池获取账号
+		account := h.pool.GetNextByTier(tier)
+		if account == nil {
+			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))
+			return
+		}
+
+		// 检查并刷新 token
+		if err := h.ensureValidToken(account); err != nil {
+			h.pool.RecordError(account.ID, false)
+			h.pool.ReleaseAccount(account.ID)
+			lastErr = fmt.Errorf("token refresh failed: %v", err)
+			continue
+		}
+
+		// 模型验证：根据订阅类型严格校验
+		thinkingCfg := config.GetThinkingConfig()
+		originalModel := req.Model
+		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
+		if validateErr != nil {
+			h.pool.ReleaseAccount(account.ID)
+			h.sendClaudeError(w, 400, "invalid_request_error", validateErr.Error())
+			return
+		}
+		req.Model = mappedModel
+		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
+		req.Model = actualModel
+		estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
+
+		if originalModel != actualModel {
+			fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v | attempt: %d\n", originalModel, actualModel, account.Email, req.Stream, attempt+1)
+		} else {
+			fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v | attempt: %d\n", actualModel, account.Email, req.Stream, attempt+1)
+		}
+
+		// 转换请求
+		kiroPayload := ClaudeToKiro(&req, thinking)
+
+		// 流式或非流式
+		if req.Stream {
+			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+		} else {
+			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+		}
+		return // 成功或已处理错误，退出循环
 	}
 
-	// 检查并刷新 token
-	if err := h.ensureValidToken(account); err != nil {
-		h.sendClaudeError(w, 503, "api_error", "Token refresh failed: "+err.Error())
-		return
+	// 所有重试都失败
+	h.recordFailure()
+	errMsg := "All accounts failed"
+	if lastErr != nil {
+		errMsg = lastErr.Error()
 	}
-
-	// 解析模型和 thinking 模式
-	thinkingCfg := config.GetThinkingConfig()
-	originalModel := req.Model
-	req.Model = DowngradeForFree(req.Model, account.SubscriptionType)
-	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	req.Model = actualModel
-	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
-
-	if originalModel != actualModel {
-		fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v\n", originalModel, actualModel, account.Email, req.Stream)
-	} else {
-		fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v\n", actualModel, account.Email, req.Stream)
-	}
-
-	// 转换请求
-	kiroPayload := ClaudeToKiro(&req, thinking)
-
-	// 流式或非流式
-	if req.Stream {
-		h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
-	} else {
-		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
-	}
+	h.sendClaudeError(w, 503, "api_error", errMsg)
 }
 
 // handleClaudeStream Claude 流式响应
@@ -454,7 +480,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		},
 	}
 
-	err := CallKiroAPI(account, payload, callback)
+	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
 		h.recordFailure()
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota"))
@@ -468,10 +494,14 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 				originalModel, model, account.Email, err.Error())
 		}
 		h.addCallLogError("Claude", originalModel, model, account.Email, true, err.Error(), payloadKB)
-		h.sendSSE(w, flusher, "error", map[string]interface{}{
-			"type":  "error",
-			"error": map[string]string{"type": "api_error", "message": err.Error()},
-		})
+		if upstreamErr != nil {
+			WriteClaudeStreamError(w, upstreamErr.ToAppError(""))
+		} else {
+			h.sendSSE(w, flusher, "error", map[string]interface{}{
+				"type":  "error",
+				"error": map[string]string{"type": "api_error", "message": err.Error()},
+			})
+		}
 		return
 	}
 	processClaudeText("", false, true)
@@ -495,7 +525,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, true)
+	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送 message_delta
 	stopReason := "end_turn"
@@ -550,7 +580,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		},
 	}
 
-	err := CallKiroAPI(account, payload, callback)
+	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
 		h.recordFailure()
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
@@ -564,7 +594,12 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 				originalModel, model, account.Email, err.Error())
 		}
 		h.addCallLogError("Claude", originalModel, model, account.Email, false, err.Error(), payloadKB)
-		h.sendClaudeError(w, 500, "api_error", err.Error())
+		if upstreamErr != nil {
+			appErr := upstreamErr.ToAppError("")
+			WriteClaudeError(w, appErr, upstreamErr.StatusCode)
+		} else {
+			h.sendClaudeError(w, 500, "api_error", err.Error())
+		}
 		return
 	}
 
@@ -584,7 +619,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, false)
+	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, false, credits, "", "")
 
 	if thinking && thinkingContent != "" {
 		switch thinkingFormat {

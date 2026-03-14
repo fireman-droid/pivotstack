@@ -5,7 +5,6 @@ import (
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -59,7 +58,7 @@ func (h *Handler) apiCompleteIamSso(w http.ResponseWriter, r *http.Request) {
 		ClientID: clientID, ClientSecret: clientSecret,
 		AuthMethod: "idc", Region: region,
 		ExpiresAt: time.Now().Unix() + int64(expiresIn),
-		Enabled: true, MachineId: config.GenerateMachineId(),
+		Enabled:   true, MachineId: config.GenerateMachineId(),
 	}
 	if err := config.AddAccount(account); err != nil {
 		w.WriteHeader(500)
@@ -121,7 +120,7 @@ func (h *Handler) apiPollBuilderIdAuth(w http.ResponseWriter, r *http.Request) {
 		ClientID: clientID, ClientSecret: clientSecret,
 		AuthMethod: "idc", Provider: "BuilderId", Region: region,
 		ExpiresAt: time.Now().Unix() + int64(expiresIn),
-		Enabled: true, MachineId: config.GenerateMachineId(),
+		Enabled:   true, MachineId: config.GenerateMachineId(),
 	}
 	if err := config.AddAccount(account); err != nil {
 		w.WriteHeader(500)
@@ -170,7 +169,7 @@ func (h *Handler) apiImportSsoToken(w http.ResponseWriter, r *http.Request) {
 			ClientID: clientID, ClientSecret: clientSecret,
 			AuthMethod: "idc", Region: req.Region,
 			ExpiresAt: time.Now().Unix() + int64(expiresIn),
-			Enabled: true, MachineId: config.GenerateMachineId(),
+			Enabled:   true, MachineId: config.GenerateMachineId(),
 		}
 		if err := config.AddAccount(account); err != nil {
 			errors = append(errors, err.Error())
@@ -196,15 +195,21 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 		AuthMethod   string `json:"authMethod"`
 		Provider     string `json:"provider"`
 		Region       string `json:"region"`
+		// 额外字段：从 kiro-account-manager 导入
+		Email      string                 `json:"email"`
+		UserId     string                 `json:"userId"`
+		ProfileArn string                 `json:"profileArn"`
+		MachineId  string                 `json:"machineId"`
+		UsageData  map[string]interface{} `json:"usageData"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
-	if req.RefreshToken == "" {
+	if req.RefreshToken == "" && req.AccessToken == "" {
 		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "refreshToken is required"})
+		json.NewEncoder(w).Encode(map[string]string{"error": "refreshToken or accessToken is required"})
 		return
 	}
 	if req.Region == "" {
@@ -229,60 +234,163 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 			req.AuthMethod = "social"
 		}
 	}
+
 	var accessToken string
 	var expiresAt int64
-	tempAccount := &config.Account{
-		RefreshToken: req.RefreshToken, ClientID: req.ClientID,
-		ClientSecret: req.ClientSecret, AuthMethod: req.AuthMethod, Region: req.Region,
-	}
-	newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(tempAccount)
-	if err != nil {
-		if req.AccessToken != "" {
-			accessToken = req.AccessToken
-			expiresAt = time.Now().Unix() + 300
+	refreshFailed := false
+
+	if req.RefreshToken != "" {
+		tempAccount := &config.Account{
+			RefreshToken: req.RefreshToken, ClientID: req.ClientID,
+			ClientSecret: req.ClientSecret, AuthMethod: req.AuthMethod, Region: req.Region,
+		}
+		newAccessToken, newRefreshToken, newExpiresAt, err := auth.RefreshToken(tempAccount)
+		if err != nil {
+			refreshFailed = true
+			if req.AccessToken != "" {
+				accessToken = req.AccessToken
+				expiresAt = time.Now().Unix() + 3600 // 1小时有效期
+			} else {
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Token refresh failed: " + err.Error()})
+				return
+			}
 		} else {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Token refresh failed: " + err.Error()})
-			return
+			accessToken = newAccessToken
+			if newRefreshToken != "" {
+				req.RefreshToken = newRefreshToken
+			}
+			expiresAt = newExpiresAt
 		}
 	} else {
-		accessToken = newAccessToken
-		if newRefreshToken != "" {
-			req.RefreshToken = newRefreshToken
-		}
-		expiresAt = newExpiresAt
+		accessToken = req.AccessToken
+		expiresAt = time.Now().Unix() + 3600
+		refreshFailed = true
 	}
-	email, _, _ := auth.GetUserInfo(accessToken)
+
+	// 获取 email：优先使用请求中自带的
+	email := req.Email
+	if email == "" {
+		email, _, _ = auth.GetUserInfo(accessToken)
+	}
+
+	// 使用请求中的 machineId 或生成新的
+	machineId := req.MachineId
+	if machineId == "" {
+		machineId = config.GenerateMachineId()
+	}
+
 	account := config.Account{
 		ID: auth.GenerateAccountID(), Email: email,
+		UserId:      req.UserId,
 		AccessToken: accessToken, RefreshToken: req.RefreshToken,
 		ClientID: req.ClientID, ClientSecret: req.ClientSecret,
 		AuthMethod: req.AuthMethod, Provider: req.Provider, Region: req.Region,
-		ExpiresAt: expiresAt, Enabled: true, MachineId: config.GenerateMachineId(),
+		ExpiresAt: expiresAt, Enabled: true, MachineId: machineId,
+		Weight: 1, // 默认权重 1
 	}
+
+	// 从 usageData 中解析配额信息（kiro-account-manager 导出格式）
+	if req.UsageData != nil {
+		parseUsageData(&account, req.UsageData)
+		account.LastRefresh = time.Now().Unix()
+	}
+
 	if err := config.AddAccount(account); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	h.pool.Reload()
-	// Async: populate real quota data immediately after adding
-	credAccountID := account.ID
-	go func() {
-		accounts := config.GetAccounts()
-		for i := range accounts {
-			if accounts[i].ID == credAccountID {
-				info, err := RefreshAccountInfo(&accounts[i])
-				if err == nil {
-					config.UpdateAccountInfo(credAccountID, *info)
+
+	// 异步刷新配额（仅在没有 usageData 且刷新成功时）
+	if req.UsageData == nil && !refreshFailed {
+		credAccountID := account.ID
+		go func() {
+			accounts := config.GetAccounts()
+			for i := range accounts {
+				if accounts[i].ID == credAccountID {
+					info, err := RefreshAccountInfo(&accounts[i])
+					if err == nil {
+						config.UpdateAccountInfo(credAccountID, *info)
+					}
+					return
 				}
-				return
 			}
-		}
-	}()
+		}()
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true, "account": map[string]interface{}{"id": account.ID, "email": account.Email},
 	})
+}
+
+// parseUsageData 解析 kiro-account-manager 导出的 usageData 字段
+func parseUsageData(account *config.Account, data map[string]interface{}) {
+	// 解析 subscriptionInfo
+	if subInfo, ok := data["subscriptionInfo"].(map[string]interface{}); ok {
+		if t, ok := subInfo["type"].(string); ok {
+			// Q_DEVELOPER_STANDALONE_FREE -> FREE, Q_DEVELOPER_STANDALONE_PRO -> PRO
+			switch {
+			case strings.Contains(t, "FREE"):
+				account.SubscriptionType = "FREE"
+			case strings.Contains(t, "PRO_PLUS"):
+				account.SubscriptionType = "PRO_PLUS"
+			case strings.Contains(t, "PRO"):
+				account.SubscriptionType = "PRO"
+			default:
+				account.SubscriptionType = t
+			}
+		}
+		if title, ok := subInfo["subscriptionTitle"].(string); ok {
+			account.SubscriptionTitle = title
+		}
+	}
+
+	// 解析 daysUntilReset
+	if days, ok := data["daysUntilReset"].(float64); ok {
+		account.DaysRemaining = int(days)
+	}
+
+	// 解析 nextDateReset
+	if resetTs, ok := data["nextDateReset"].(float64); ok {
+		t := time.Unix(int64(resetTs), 0)
+		account.NextResetDate = t.Format("2006-01-02")
+	}
+
+	// 解析 usageBreakdownList
+	if breakdowns, ok := data["usageBreakdownList"].([]interface{}); ok && len(breakdowns) > 0 {
+		if bd, ok := breakdowns[0].(map[string]interface{}); ok {
+			// 主额度
+			if usage, ok := bd["currentUsage"].(float64); ok {
+				account.UsageCurrent = usage
+			}
+			if limit, ok := bd["usageLimit"].(float64); ok {
+				account.UsageLimit = limit
+				if limit > 0 {
+					account.UsagePercent = account.UsageCurrent / limit
+				}
+			}
+
+			// 试用额度
+			if trial, ok := bd["freeTrialInfo"].(map[string]interface{}); ok {
+				if usage, ok := trial["currentUsage"].(float64); ok {
+					account.TrialUsageCurrent = usage
+				}
+				if limit, ok := trial["usageLimit"].(float64); ok {
+					account.TrialUsageLimit = limit
+					if limit > 0 {
+						account.TrialUsagePercent = account.TrialUsageCurrent / limit
+					}
+				}
+				if status, ok := trial["freeTrialStatus"].(string); ok {
+					account.TrialStatus = status
+				}
+				if expiry, ok := trial["freeTrialExpiry"].(float64); ok {
+					account.TrialExpiresAt = int64(expiry)
+				}
+			}
+		}
+	}
 }
 
 // apiRefreshAccount 刷新账户信息
@@ -419,46 +527,4 @@ func (h *Handler) apiGetAccountModels(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "models": models})
-}
-
-// ==================== 静态文件服务 ====================
-
-func (h *Handler) serveAdminPage(w http.ResponseWriter, r *http.Request) {
-	// 优先从 web/dist/ (Vue build) 提供，否则回退到 web/index.html (原始单文件)
-	if fileExists("web/dist/index.html") {
-		http.ServeFile(w, r, "web/dist/index.html")
-	} else {
-		http.ServeFile(w, r, "web/index.html")
-	}
-}
-
-func (h *Handler) serveStaticFile(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/admin/")
-	// 优先从 dist 目录提供
-	distPath := "web/dist/" + path
-	if fileExists(distPath) {
-		http.ServeFile(w, r, distPath)
-		return
-	}
-	// 对于 Vue SPA，所有非静态资源路由回 index.html
-	if fileExists("web/dist/index.html") && !strings.Contains(path, ".") {
-		http.ServeFile(w, r, "web/dist/index.html")
-		return
-	}
-	http.ServeFile(w, r, "web/"+path)
-}
-
-// serveDistFile 从 web/dist/ 目录提供 Vue 构建的静态资源
-func (h *Handler) serveDistFile(w http.ResponseWriter, r *http.Request) {
-	filePath := "web/dist" + r.URL.Path
-	if fileExists(filePath) {
-		http.ServeFile(w, r, filePath)
-	} else {
-		http.NotFound(w, r)
-	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

@@ -1,87 +1,106 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import * as echarts from 'echarts'
+import abyssTheme from '@/lib/echarts-abyss-theme.json'
 import { api } from '../api/admin'
 import { formatNum } from '../utils/format'
+import { useWorldTheme } from '../stores/worldTheme'
 import { useToast } from '../composables/useToast'
+import CopperCoinLoader from '../components/ui/CopperCoinLoader.vue'
+import BloodSplashButton from '../components/ui/BloodSplashButton.vue'
 import { 
-  Line
-} from 'vue-chartjs'
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-} from 'chart.js'
-import { 
-  Users, 
-  Zap, 
-  Activity, 
-  CreditCard, 
-  Clock, 
-  ChevronRight, 
-  Copy, 
-  ShieldCheck, 
-  Terminal,
-  Globe,
-  AlertTriangle
+  Users, Zap, Activity, CreditCard, Clock, 
+  Copy, Terminal, Globe, AlertTriangle, Crown
 } from 'lucide-vue-next'
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-)
+// 注册 ECharts abyss 主题
+echarts.registerTheme('abyss', abyssTheme)
 
 const { success } = useToast()
-const stats = ref({ accounts: 0, totalRequests: 0, successRequests: 0, failedRequests: 0, totalTokens: 0, totalCredits: 0, uptime: 0 })
+const stats = ref({ accounts: 0, totalRequests: 0, successRequests: 0, failedRequests: 0, totalTokens: 0, totalCredits: 0, uptime: 0, freePool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 }, proPool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 } })
 const version = ref('')
-let pollTimer = null
+const loading = ref(true)
 
-// 真实请求趋势数据（最近 10 次统计快照）
+const theme = useWorldTheme()
+
+// ECharts 实例
+const chartRef = ref(null)
+let chart = null
 const requestHistory = ref([])
-const chartData = ref({
-  labels: Array.from({ length: 10 }, (_, i) => `${i * 5}秒前`).reverse(),
-  datasets: [
-    {
-      label: '请求流量',
-      backgroundColor: 'rgba(99, 102, 241, 0.1)',
-      borderColor: '#6366f1',
-      pointBackgroundColor: '#6366f1',
-      borderWidth: 2,
-      fill: true,
-      tension: 0.4,
-      data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    }
-  ]
+const chartIncrements = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
+function initChart() {
+  if (!chartRef.value) return
+  chart = echarts.init(chartRef.value, theme.currentWorld === 'daogui' ? 'abyss' : null)
+  updateChart()
+  window.addEventListener('resize', () => chart?.resize())
+}
+
+watch(() => theme.currentWorld, (newVal) => {
+  if (chart) {
+    chart.dispose()
+    chart = echarts.init(chartRef.value, newVal === 'daogui' ? 'abyss' : null)
+    updateChart()
+  }
 })
 
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { display: false },
+function updateChart() {
+  if (!chart) return
+  const isDaogui = theme.currentWorld === 'daogui'
+  const accentColor = isDaogui ? 'rgba(196, 30, 58, 1)' : 'rgba(2, 132, 199, 1)'
+  const shadowColor = isDaogui ? 'rgba(196, 30, 58, 0.5)' : 'rgba(2, 132, 199, 0.5)'
+  const areaStart = isDaogui ? 'rgba(196, 30, 58, 0.3)' : 'rgba(2, 132, 199, 0.3)'
+  const areaEnd = isDaogui ? 'rgba(196, 30, 58, 0)' : 'rgba(2, 132, 199, 0)'
+  const textColor = isDaogui ? '#9ca3af' : '#475569'
+  const tooltipBg = isDaogui ? 'rgba(10, 10, 10, 0.9)' : 'rgba(255, 255, 255, 0.9)'
+  const tooltipText = isDaogui ? '#e5e5e5' : '#0f172a'
+  const tooltipBorder = isDaogui ? '#b8860b' : '#e2e8f0'
+  const splitLineColor = isDaogui ? 'rgba(74, 26, 74, 0.3)' : 'rgba(226, 232, 240, 1)'
+
+  chart.setOption({
+    grid: { top: 10, right: 10, bottom: 25, left: 40 },
+    xAxis: {
+      type: 'category',
+      data: Array.from({ length: 10 }, (_, i) => `${(9 - i) * 5}s`),
+      axisLabel: { color: textColor, fontSize: 10 }
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: textColor, fontSize: 10 },
+      splitLine: { lineStyle: { type: 'dashed', color: splitLineColor } }
+    },
+    series: [{
+      type: 'line',
+      data: chartIncrements.value,
+      smooth: true,
+      showSymbol: false,
+      itemStyle: { color: accentColor },
+      lineStyle: {
+        width: 3,
+        color: accentColor,
+        shadowBlur: 10,
+        shadowColor: shadowColor,
+        shadowOffsetX: 2,
+        shadowOffsetY: 2
+      },
+      areaStyle: {
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: areaStart },
+            { offset: 1, color: areaEnd }
+          ]
+        }
+      }
+    }],
     tooltip: {
-      mode: 'index',
-      intersect: false,
-      backgroundColor: '#0f172a',
-      titleFont: { size: 10 },
-      bodyFont: { size: 12 }
+      trigger: 'axis',
+      backgroundColor: tooltipBg,
+      borderColor: tooltipBorder,
+      textStyle: { color: tooltipText, fontSize: 12 }
     }
-  },
-  scales: {
-    y: { display: false, beginAtZero: true },
-    x: { display: false }
-  }
+  })
 }
 
 async function loadStats() {
@@ -89,32 +108,63 @@ async function loadStats() {
     const res = await api('/status')
     if (res.ok) {
       const newStats = await res.json()
-
-      // 记录历史数据用于图表
-      requestHistory.value.push(newStats.totalRequests || 0)
-      if (requestHistory.value.length > 10) {
-        requestHistory.value.shift()
-      }
-
-      // 计算增量（每 5 秒的新增请求数）
-      const increments = []
-      for (let i = 1; i < requestHistory.value.length; i++) {
-        increments.push(Math.max(0, requestHistory.value[i] - requestHistory.value[i - 1]))
-      }
-
-      // 填充到 10 个数据点
-      while (increments.length < 10) {
-        increments.unshift(0)
-      }
-
-      chartData.value = {
-        ...chartData.value,
-        datasets: [{ ...chartData.value.datasets[0], data: increments }]
-      }
-
-      stats.value = newStats
+      processStats(newStats)
     }
   } catch {}
+}
+
+function processStats(newStats) {
+  requestHistory.value.push(newStats.totalRequests || 0)
+  if (requestHistory.value.length > 10) requestHistory.value.shift()
+
+  const increments = []
+  for (let i = 1; i < requestHistory.value.length; i++) {
+    increments.push(Math.max(0, requestHistory.value[i] - requestHistory.value[i - 1]))
+  }
+  while (increments.length < 10) increments.unshift(0)
+  chartIncrements.value = increments
+
+  stats.value = newStats
+  loading.value = false
+  nextTick(() => {
+    if (!chart) initChart()
+    else updateChart()
+  })
+}
+
+let sseSource = null
+let pollTimer = null
+
+function connectStatsSSE() {
+  const password = document.cookie.match(/admin_password=([^;]+)/)?.[1] || ''
+  const url = `${location.origin}/admin/api/sse/stats?password=${encodeURIComponent(password)}`
+  sseSource = new EventSource(url)
+  
+  sseSource.addEventListener('stats', (e) => {
+    try {
+      const newStats = JSON.parse(e.data)
+      processStats(newStats)
+    } catch {}
+  })
+  
+  sseSource.onerror = () => {
+    // SSE 断开，回退到 HTTP 轮询
+    sseSource.close()
+    sseSource = null
+    if (!pollTimer) {
+      pollTimer = setInterval(loadStats, 5000)
+    }
+    // 5 秒后尝试重连 SSE
+    setTimeout(() => {
+      if (!sseSource) {
+        if (pollTimer) {
+          clearInterval(pollTimer)
+          pollTimer = null
+        }
+        connectStatsSSE()
+      }
+    }, 5000)
+  }
 }
 
 async function loadVersion() {
@@ -136,12 +186,9 @@ function copy(text) {
     navigator.clipboard.writeText(text)
   } else {
     const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.cssText = 'position:fixed;left:-9999px'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
+    ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px'
+    document.body.appendChild(ta); ta.select()
+    document.execCommand('copy'); document.body.removeChild(ta)
   }
   success('已复制到剪贴板')
 }
@@ -149,176 +196,205 @@ function copy(text) {
 const base = location.origin
 
 onMounted(async () => {
-  await Promise.all([loadStats(), loadVersion()])
-  pollTimer = setInterval(loadStats, 5000)
+  await loadVersion()
+  connectStatsSSE()
 })
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
+
+onUnmounted(() => {
+  if (sseSource) { sseSource.close(); sseSource = null }
+  if (pollTimer) clearInterval(pollTimer)
+  chart?.dispose()
+  window.removeEventListener('resize', () => chart?.resize())
+})
 
 const successRate = computed(() => {
   if (!stats.value.totalRequests) return 100
   return (stats.value.successRequests / stats.value.totalRequests) * 100
 })
-
 const isErrorHigh = computed(() => (100 - successRate.value) > 5)
 </script>
 
 <template>
   <div class="space-y-6 max-w-[1600px] mx-auto pb-10">
-    <!-- Top Welcome Area -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div>
-        <h1 class="text-2xl font-black tracking-tight flex items-center gap-2">
-          控制台 <span class="text-[var(--text-secondary)] font-medium text-sm">v{{ version }}</span>
-        </h1>
-        <div class="flex items-center gap-3 mt-1 text-sm text-[var(--text-secondary)]">
-          <div class="flex items-center gap-1.5 text-emerald-500 font-bold">
-            <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-            系统在线
-          </div>
-          <span class="opacity-30">|</span>
-          <div class="flex items-center gap-1.5">
-            <Clock class="w-3.5 h-3.5" />
-            运行时长: {{ formatUptime(stats.uptime) }}
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Loading -->
+    <CopperCoinLoader v-if="loading" />
 
-    <!-- Main Stats Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- Accounts Card -->
-      <div class="modern-card p-6 flex flex-col justify-between group overflow-hidden relative">
-        <div class="absolute -right-4 -top-4 w-24 h-24 bg-primary/5 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
-        <div class="flex justify-between items-start mb-4 relative">
-          <div class="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 text-primary">
-            <Users class="w-6 h-6" />
-          </div>
-          <ChevronRight class="w-4 h-4 text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
+    <template v-else>
+      <!-- Top -->
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">账号资源池</div>
-          <div class="text-3xl font-black tracking-tight">{{ stats.accounts || 0 }}</div>
-          <div class="mt-2 flex items-center gap-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
-            <ShieldCheck class="w-3 h-3" />
-            100% 可用
+          <h1 class="text-2xl font-black tracking-tight flex items-center gap-2 text-[var(--text)]">
+            控制台 <span class="text-[var(--text)]-secondary font-medium text-sm">v{{ version }}</span>
+          </h1>
+          <div class="flex items-center gap-3 mt-1 text-sm text-[var(--text)]-secondary">
+            <div class="flex items-center gap-1.5 text-[var(--world-accent-alt)] font-bold">
+              <span class="w-2 h-2 bg-[var(--world-accent-alt)] rounded-full animate-pulse shadow-md"></span>
+              系统在线
+            </div>
+            <span class="opacity-20 text-[var(--text)]-secondary">|</span>
+            <div class="flex items-center gap-1.5">
+              <Clock class="w-3.5 h-3.5" />
+              运行时长: {{ formatUptime(stats.uptime) }}
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Requests Card -->
-      <div class="modern-card p-6 flex flex-col justify-between group overflow-hidden relative border-l-4"
-        :class="isErrorHigh ? 'border-l-rose-500 bg-rose-500/[0.02]' : 'border-l-transparent'">
-        <div class="absolute -right-4 -top-4 w-24 h-24 bg-amber-500/5 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
-        <div class="flex justify-between items-start mb-4 relative">
-          <div class="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-500" :class="isErrorHigh ? 'text-rose-500 bg-rose-50 dark:bg-rose-900/20' : ''">
-            <Zap class="w-6 h-6" />
+      <!-- Stats Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- FREE 号池 -->
+        <div class="modern-card p-6 flex flex-col justify-between group blood-glow-hover">
+          <div class="flex justify-between items-start mb-4">
+            <div class="p-2.5 rounded-xl bg-[var(--world-accent-alt)]/10 text-[var(--world-accent-alt)]">
+              <Users class="w-6 h-6" />
+            </div>
+            <span class="text-[9px] font-bold tracking-[0.15em] text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full uppercase">FREE</span>
           </div>
-          <div class="flex flex-col items-end">
-             <span class="text-xs font-bold" :class="isErrorHigh ? 'text-rose-500' : 'text-amber-500'">{{ successRate.toFixed(1) }}% 成功率</span>
-             <AlertTriangle v-if="isErrorHigh" class="w-4 h-4 text-rose-500 mt-1 animate-bounce" />
-          </div>
-        </div>
-        <div>
-          <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">总计请求数</div>
-          <div class="text-3xl font-black tracking-tight">{{ formatNum(stats.totalRequests || 0) }}</div>
-          <div class="mt-2 text-[11px] font-bold text-[var(--text-secondary)] flex gap-2">
-            <span class="text-emerald-500">{{ stats.successRequests }} 成功</span>
-            <span class="opacity-30">/</span>
-            <span class="text-rose-500 font-bold" :class="{ 'scale-110 transition-transform': isErrorHigh }">{{ stats.failedRequests }} 失败</span>
+          <div>
+            <div class="text-[10px] font-bold text-[var(--world-accent-alt)] uppercase tracking-[0.2em] mb-1">普通号池</div>
+            <div class="text-3xl font-black tracking-tight text-[var(--text)]">{{ stats.freePool?.total || 0 }}</div>
+            <div class="mt-2 text-[11px] font-bold flex gap-2">
+              <span class="text-[var(--world-accent-alt)]">{{ stats.freePool?.available || 0 }} 可用</span>
+              <span class="opacity-20 text-[var(--text)]-secondary">|</span>
+              <span class="text-[var(--primary)]">{{ (stats.freePool?.usageCurrent || 0) + (stats.freePool?.trialCurrent || 0) }}/{{ (stats.freePool?.usageLimit || 0) + (stats.freePool?.trialLimit || 0) }}</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- Tokens Card -->
-      <div class="modern-card p-6 flex flex-col justify-between group overflow-hidden relative">
-        <div class="absolute -right-4 -top-4 w-24 h-24 bg-emerald-500/5 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
-        <div class="flex justify-between items-start mb-4 relative">
-          <div class="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-500">
-            <Activity class="w-6 h-6" />
+        <!-- PRO 号池 -->
+        <div class="modern-card p-6 flex flex-col justify-between group blood-glow-hover">
+          <div class="flex justify-between items-start mb-4">
+            <div class="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
+              <Crown class="w-6 h-6" />
+            </div>
+            <span class="text-[9px] font-bold tracking-[0.15em] text-purple-500 bg-purple-500/10 px-2 py-0.5 rounded-full uppercase">PRO</span>
           </div>
-        </div>
-        <div>
-          <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">TOKEN 消耗量</div>
-          <div class="text-3xl font-black tracking-tight">{{ formatNum(stats.totalTokens || 0) }}</div>
-          <div class="mt-2 h-1.5 bg-[var(--bg)] rounded-full overflow-hidden border border-[var(--border)]">
-            <div class="h-full bg-emerald-500 w-2/3 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Credits Card -->
-      <div class="modern-card p-6 flex flex-col justify-between group overflow-hidden relative">
-        <div class="absolute -right-4 -top-4 w-24 h-24 bg-indigo-500/5 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
-        <div class="flex justify-between items-start mb-4 relative">
-          <div class="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500">
-            <CreditCard class="w-6 h-6" />
-          </div>
-        </div>
-        <div>
-          <div class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-1">估计总成本</div>
-          <div class="text-3xl font-black tracking-tight">${{ (stats.totalCredits || 0).toFixed(2) }}</div>
-          <div class="mt-2 text-[11px] font-bold text-primary italic bg-primary/5 px-2 py-0.5 rounded w-fit">通过账号池节省 85% 成本</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom Detailed Grid -->
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <!-- API Endpoints -->
-      <div class="lg:col-span-12 space-y-4 flex flex-col">
-        <div class="flex items-center gap-2 px-2">
-          <Terminal class="w-5 h-5 text-primary" />
-          <h2 class="font-bold text-sm uppercase tracking-widest text-[var(--text-secondary)]">API 控制台</h2>
-        </div>
-        
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div v-for="ep in [
-            { label: 'Claude Messages', path: '/v1/messages', color: 'bg-indigo-500' },
-            { label: 'OpenAI Chat', path: '/v1/chat/completions', color: 'bg-emerald-500' },
-            { label: '模型发现', path: '/v1/models', color: 'bg-amber-500' },
-            { label: '服务状态', path: '/health', color: 'bg-rose-500' }
-          ]" :key="ep.path" class="modern-card p-4 hover:translate-y-[-2px] transition-all">
-            <div class="flex justify-between items-center mb-3">
-              <span class="text-xs font-bold text-[var(--text-secondary)]">{{ ep.label }}</span>
-              <div class="flex gap-1.5">
-                <span class="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 text-[9px] font-bold uppercase">稳定</span>
-                <span class="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[9px] font-bold uppercase tracking-tighter">JSON</span>
+          <div>
+            <div class="text-[10px] font-bold text-purple-400 uppercase tracking-[0.2em] mb-1">PRO 号池</div>
+            <!-- 试用配额（如果有） -->
+            <div v-if="stats.proPool?.trialLimit > 0" class="mb-2">
+              <div class="flex justify-between text-[10px] mb-0.5">
+                <span class="font-bold text-amber-400">✨ 试用配额</span>
+                <span class="text-[var(--text)]/50">{{ (stats.proPool?.trialCurrent || 0).toFixed(0) }} / {{ (stats.proPool?.trialLimit || 0).toFixed(0) }}</span>
+              </div>
+              <div class="w-full h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-amber-400 to-orange-400 rounded-full transition-all"
+                     :style="{ width: stats.proPool?.trialLimit ? `${Math.min((stats.proPool.trialCurrent / stats.proPool.trialLimit) * 100, 100)}%` : '0%' }"></div>
               </div>
             </div>
-            <div class="flex items-center gap-2 p-2.5 bg-[var(--bg)] rounded-xl border border-[var(--border)] group relative cursor-pointer hover:border-primary transition-colors" @click="copy(base + ep.path)">
-              <div :class="ep.color" class="w-1.5 h-1.5 rounded-full shrink-0 shadow-lg"></div>
-              <code class="text-[10px] font-mono truncate flex-1 flex items-center">
-                <span class="opacity-30 mr-1">{{ base.replace(/https?:\/\//, '') }}</span>
-                <span class="text-primary font-bold">{{ ep.path }}</span>
-              </code>
-              <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity" />
+            <!-- 主配额 -->
+            <div v-if="stats.proPool?.usageLimit > 0" class="mb-2">
+              <div class="flex justify-between text-[10px] mb-0.5">
+                <span class="font-bold text-purple-400">主配额</span>
+                <span class="text-[var(--text)]/50">{{ (stats.proPool?.usageCurrent || 0).toFixed(0) }} / {{ (stats.proPool?.usageLimit || 0).toFixed(0) }}</span>
+              </div>
+              <div class="w-full h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full transition-all"
+                     :style="{ width: stats.proPool?.usageLimit ? `${Math.min((stats.proPool.usageCurrent / stats.proPool.usageLimit) * 100, 100)}%` : '0%' }"></div>
+              </div>
+            </div>
+            <div class="text-[11px] font-bold flex gap-2">
+              <span class="text-purple-400">{{ stats.proPool?.available || 0 }} 可用</span>
+              <span class="opacity-20 text-[var(--text)]-secondary">|</span>
+              <span class="text-purple-400">{{ stats.proPool?.total || 0 }} 总号</span>
+            </div>
+            <div v-if="stats.prediction?.sufficient" class="mt-2 text-[10px] font-bold flex items-center gap-1.5 text-purple-300/80">
+              <span>⏱</span>
+              <span v-if="stats.prediction.remainingDays >= 1">预计可用 {{ Math.floor(stats.prediction.remainingDays) }}天</span>
+              <span v-else-if="stats.prediction.remainingHours >= 1">活跃可用 {{ Math.floor(stats.prediction.remainingHours) }}h{{ Math.floor((stats.prediction.remainingHours % 1) * 60) }}m</span>
+              <span v-else>额度即将用尽!</span>
+              <span class="opacity-40 ml-1">({{ stats.prediction.avgPerRequest?.toFixed(2) }} cr/次)</span>
+            </div>
+            <div v-else class="mt-2 text-[10px] opacity-40">⏱ 需要更多请求数据用于预测</div>
+          </div>
+        </div>
+
+        <!-- 请求统计 -->
+        <div class="modern-card p-6 flex flex-col justify-between group"
+          :class="isErrorHigh ? 'border-l-2 border-l-[var(--primary)]' : ''">
+          <div class="flex justify-between items-start mb-4">
+            <div class="p-2.5 rounded-xl" :class="isErrorHigh ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'bg-[var(--world-accent-alt)]/10 text-[var(--world-accent-alt)]'">
+              <Zap class="w-6 h-6" />
+            </div>
+            <div class="flex flex-col items-end">
+              <span class="text-xs font-bold" :class="isErrorHigh ? 'text-[var(--primary)]' : 'text-[var(--world-accent-alt)]'">{{ successRate.toFixed(1) }}% 成功率</span>
+              <AlertTriangle v-if="isErrorHigh" class="w-4 h-4 text-[var(--primary)] mt-1 animate-bounce" />
+            </div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold text-[var(--world-accent-alt)] uppercase tracking-[0.2em] mb-1">总计请求数</div>
+            <div class="text-3xl font-black tracking-tight text-[var(--text)]">{{ formatNum(stats.totalRequests || 0) }}</div>
+            <div class="mt-2 text-[11px] font-bold flex gap-2">
+              <span class="text-[var(--world-accent-alt)]">{{ stats.successRequests }} 成功</span>
+              <span class="opacity-20 text-[var(--text)]-secondary">/</span>
+              <span class="text-[var(--primary)] font-bold">{{ stats.failedRequests }} 失败</span>
             </div>
           </div>
         </div>
 
-        <!-- Real Chart! -->
-        <div class="modern-card p-6 flex-1 min-h-[350px] flex flex-col bg-gradient-to-b from-[var(--card)] to-[var(--bg)]">
-          <div class="flex justify-between items-center mb-6">
-            <div class="flex items-center gap-2">
-              <Globe class="w-5 h-5 text-primary" />
-              <div class="font-bold text-sm">实时流量监控</div>
-            </div>
-            <div class="flex items-center gap-4 text-[10px] font-bold text-[var(--text-secondary)] uppercase">
-              <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary"></span> 请求增量</div>
+        <!-- 总成本概览 -->
+        <div class="modern-card p-6 flex flex-col justify-between group">
+          <div class="flex justify-between items-start mb-4">
+            <div class="p-2.5 rounded-xl bg-text-secondary/20 text-[var(--primary)]">
+              <CreditCard class="w-6 h-6" />
             </div>
           </div>
-          <div class="flex-1 relative">
-            <Line :data="chartData" :options="chartOptions" />
+          <div>
+            <div class="text-[10px] font-bold text-[var(--world-accent-alt)] uppercase tracking-[0.2em] mb-1">总 Credits 概览</div>
+            <div class="text-3xl font-black tracking-tight text-[var(--text)]">{{ (stats.freePool?.usageCurrent || 0) + (stats.freePool?.trialCurrent || 0) + (stats.proPool?.usageCurrent || 0) + (stats.proPool?.trialCurrent || 0) }} / {{ (stats.freePool?.usageLimit || 0) + (stats.freePool?.trialLimit || 0) + (stats.proPool?.usageLimit || 0) + (stats.proPool?.trialLimit || 0) }}</div>
+            <div class="mt-2 text-[10px] font-bold flex gap-3">
+              <span class="text-green-400">FREE {{ (stats.freePool?.usageCurrent || 0) + (stats.freePool?.trialCurrent || 0) }}/{{ (stats.freePool?.usageLimit || 0) + (stats.freePool?.trialLimit || 0) }}</span>
+              <span class="text-purple-400">PRO {{ (stats.proPool?.usageCurrent || 0) + (stats.proPool?.trialCurrent || 0) }}/{{ (stats.proPool?.usageLimit || 0) + (stats.proPool?.trialLimit || 0) }}</span>
+            </div>
           </div>
         </div>
       </div>
 
-    </div>
+      <!-- Bottom -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-12 space-y-4 flex flex-col">
+          <div class="flex items-center gap-2 px-2">
+            <Terminal class="w-5 h-5 text-[var(--primary)]" />
+            <h2 class="font-bold text-[10px] uppercase tracking-[0.2em] text-[var(--world-accent-alt)]">API 控 制 台</h2>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div v-for="ep in [
+              { label: 'Claude Messages', path: '/v1/messages', color: 'bg-[var(--primary)]' },
+              { label: 'OpenAI Chat', path: '/v1/chat/completions', color: 'bg-[var(--world-accent-alt)]' },
+              { label: '模型发现', path: '/v1/models', color: 'bg-text-secondary' },
+              { label: '服务状态', path: '/health', color: 'bg-[var(--primary)]' }
+            ]" :key="ep.path" class="modern-card p-4 hover:translate-y-[-2px] transition-all">
+              <div class="flex justify-between items-center mb-3">
+                <span class="text-xs font-bold text-[var(--text)]-secondary">{{ ep.label }}</span>
+                <span class="px-1.5 py-0.5 rounded-md bg-[var(--world-accent-alt)]/10 text-[var(--world-accent-alt)] text-[9px] font-bold uppercase">稳</span>
+              </div>
+              <div class="flex items-center gap-2 p-2.5 bg-[var(--bg)]/60 rounded-xl border border-[var(--border)] group relative cursor-pointer hover:border-[var(--primary)]/30 transition-colors" @click="copy(base + ep.path)">
+                <div :class="ep.color" class="w-1.5 h-1.5 rounded-full shrink-0 shadow-lg"></div>
+                <code class="text-[10px] font-mono truncate flex-1 flex items-center text-[var(--text)]-secondary">
+                  <span class="opacity-30 mr-1">{{ base.replace(/https?:\/\//, '') }}</span>
+                  <span class="text-[var(--primary)] font-bold">{{ ep.path }}</span>
+                </code>
+                <Copy class="w-3.5 h-3.5 text-[var(--text)]-secondary opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+            </div>
+          </div>
+
+          <!-- ECharts 实时流量监控 -->
+          <div class="modern-card p-6 flex-1 min-h-[350px] flex flex-col">
+            <div class="flex justify-between items-center mb-6">
+              <div class="flex items-center gap-2">
+                <Globe class="w-5 h-5 text-[var(--primary)]" />
+                <div class="font-bold text-sm text-[var(--text)]">实时流量监控</div>
+              </div>
+              <div class="flex items-center gap-4 text-[10px] font-bold text-[var(--text)]-secondary uppercase">
+                <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[var(--primary)]"></span> 请求增量</div>
+              </div>
+            </div>
+            <div ref="chartRef" class="flex-1 min-h-[280px]"></div>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
-
-<style scoped>
-.modern-card {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-</style>

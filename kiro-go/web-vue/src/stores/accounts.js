@@ -7,6 +7,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   const selectedIds = ref(new Set())
   const filterKeyword = ref('')
   const filterStatus = ref('all')
+  const filterTier = ref('all')
   const sortField = ref('')
   const sortAsc = ref(true)
   const loading = ref(false)
@@ -16,6 +17,9 @@ export const useAccountsStore = defineStore('accounts', () => {
       if (filterStatus.value === 'enabled' && !a.enabled) return false
       if (filterStatus.value === 'disabled' && (a.enabled || (a.banStatus && a.banStatus !== 'ACTIVE'))) return false
       if (filterStatus.value === 'banned' && (!a.banStatus || a.banStatus === 'ACTIVE')) return false
+      // 号池筛选
+      if (filterTier.value === 'free' && a.subscriptionType && a.subscriptionType !== 'FREE') return false
+      if (filterTier.value === 'pro' && a.subscriptionType !== 'PRO' && a.subscriptionType !== 'PRO_PLUS' && a.subscriptionType !== 'POWER') return false
       if (filterKeyword.value) {
         const kw = filterKeyword.value.toLowerCase()
         // 支持条件表达式：usage > 80, usage < 50
@@ -89,7 +93,7 @@ export const useAccountsStore = defineStore('accounts', () => {
   }
 
   return {
-    accounts, selectedIds, filterKeyword, filterStatus, sortField, sortAsc, loading,
+    accounts, selectedIds, filterKeyword, filterStatus, filterTier, sortField, sortAsc, loading,
     filtered, load, toggleSelect, selectAll, clearSelection, batchAction,
   }
 })

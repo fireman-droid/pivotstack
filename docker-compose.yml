@@ -1,4 +1,17 @@
 services:
+  clash-meta:
+    image: metacubex/mihomo:latest
+    container_name: clash-meta
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./clash/config.yaml:/root/.config/mihomo/config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--timeout=3", "--proxy=on", "http://www.gstatic.com/generate_204"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   kiro-gateway:
     build: ./kiro-gateway
     image: kiro-gateway-local:latest
@@ -10,7 +23,7 @@ services:
       - "8001:8001"
     environment:
       - PROXY_API_KEY=${INTERNAL_API_KEY}
-      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
+      - VPN_PROXY_URL=http://host.docker.internal:7890
       - DEBUG_MODE=${DEBUG_MODE:-off}
       - SKIP_STARTUP_CREDENTIAL_CHECK=true
       - SERVER_PORT=8001
@@ -33,6 +46,6 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - KIRO_GATEWAY_BASE=http://kiro-gateway:8001
       - KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY}
-      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
+      - VPN_PROXY_URL=http://host.docker.internal:7890
       - PORT=8088
       - HOST=0.0.0.0

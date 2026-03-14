@@ -156,36 +156,18 @@ func RefreshAccountInfo(account *config.Account) (*config.AccountInfo, error) {
 			// 账户被暂时封禁，自动禁用并标记封禁状态
 			fmt.Printf("[RefreshAccountInfo] Account %s is temporarily suspended: %v\n", account.Email, err)
 
-			// 更新账户封禁状态并自动禁用
-			updatedAccount := *account
-			updatedAccount.Enabled = false
-			updatedAccount.BanStatus = "BANNED"
-			updatedAccount.BanReason = "AWS temporarily suspended - unusual user activity detected"
-			updatedAccount.BanTime = time.Now().Unix()
-
-			// 保存更新后的账户状态
-			if updateErr := config.UpdateAccount(account.ID, updatedAccount); updateErr != nil {
+			// 只更新封禁字段，不覆盖整个账户（避免覆盖刚刷新的 token）
+			if updateErr := config.UpdateAccountBanStatus(account.ID, false, "BANNED",
+				"AWS temporarily suspended - unusual user activity detected", time.Now().Unix()); updateErr != nil {
 				fmt.Printf("[RefreshAccountInfo] Failed to update account ban status: %v\n", updateErr)
 			}
 
 			return nil, fmt.Errorf("Account suspended: %w", err)
-		} else if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "401") ||
-				  strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "expired") {
-			// Token 相关错误，可能需要重新认证
-			fmt.Printf("[RefreshAccountInfo] Authentication error for %s: %v\n", account.Email, err)
-
-			// 更新账户封禁状态为认证失败并自动禁用
-			updatedAccount := *account
-			updatedAccount.Enabled = false
-			updatedAccount.BanStatus = "BANNED"
-			updatedAccount.BanReason = "Authentication failed - token invalid or expired"
-			updatedAccount.BanTime = time.Now().Unix()
-
-			// 保存更新后的账户状态
-			if updateErr := config.UpdateAccount(account.ID, updatedAccount); updateErr != nil {
-				fmt.Printf("[RefreshAccountInfo] Failed to update account ban status: %v\n", updateErr)
-			}
 		}
+
+		// 其他错误（403/401/网络错误等）只记录日志，不自动禁用
+		// 避免因后台刷新的网络问题导致刚导入的账号被误禁
+		fmt.Printf("[RefreshAccountInfo] Warning: failed to get usage for %s (account NOT disabled): %v\n", account.Email, err)
 
 		return nil, fmt.Errorf("GetUsageLimits: %w", err)
 	}
@@ -194,13 +176,8 @@ func RefreshAccountInfo(account *config.Account) (*config.AccountInfo, error) {
 	if account.BanStatus != "" && account.BanStatus != "ACTIVE" {
 		fmt.Printf("[RefreshAccountInfo] Account %s is now active, clearing ban status\n", account.Email)
 
-		updatedAccount := *account
-		updatedAccount.BanStatus = "ACTIVE"
-		updatedAccount.BanReason = ""
-		updatedAccount.BanTime = 0
-
-		// 保存更新后的账户状态
-		if updateErr := config.UpdateAccount(account.ID, updatedAccount); updateErr != nil {
+		// 只更新封禁字段，不覆盖整个账户（避免覆盖刚刷新的 token）
+		if updateErr := config.UpdateAccountBanStatus(account.ID, true, "ACTIVE", "", 0); updateErr != nil {
 			fmt.Printf("[RefreshAccountInfo] Failed to clear account ban status: %v\n", updateErr)
 		}
 	}
@@ -300,14 +277,14 @@ type UsageLimitsResponse struct {
 }
 
 type UsageBreakdown struct {
-	ResourceType   string  `json:"resourceType"`
-	CurrentUsage   float64 `json:"currentUsage"`
-	UsageLimit     float64 `json:"usageLimit"`
-	Currency       string  `json:"currency"`
-	Unit           string  `json:"unit"`
-	OverageRate    float64 `json:"overageRate"`
-	FreeTrialInfo  *FreeTrialInfo `json:"freeTrialInfo"`
-	Bonuses        []BonusInfo    `json:"bonuses"`
+	ResourceType  string         `json:"resourceType"`
+	CurrentUsage  float64        `json:"currentUsage"`
+	UsageLimit    float64        `json:"usageLimit"`
+	Currency      string         `json:"currency"`
+	Unit          string         `json:"unit"`
+	OverageRate   float64        `json:"overageRate"`
+	FreeTrialInfo *FreeTrialInfo `json:"freeTrialInfo"`
+	Bonuses       []BonusInfo    `json:"bonuses"`
 }
 
 type FreeTrialInfo struct {

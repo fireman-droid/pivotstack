@@ -1,0 +1,33 @@
+{
+  "color": ["#c41e3a", "#b8860b", "#4a1a4a", "#9ca3af"],
+  "backgroundColor": "transparent",
+  "textStyle": { "color": "#e5e5e5", "fontFamily": "monospace" },
+  "line": {
+    "itemStyle": { "borderWidth": 2 },
+    "lineStyle": {
+      "width": 3,
+      "shadowBlur": 10,
+      "shadowColor": "rgba(196, 30, 58, 0.5)",
+      "shadowOffsetX": 2,
+      "shadowOffsetY": 2
+    },
+    "symbolSize": 0,
+    "smooth": true
+  },
+  "categoryAxis": {
+    "axisLine": { "lineStyle": { "color": "#4a1a4a" } },
+    "splitLine": { "show": false }
+  },
+  "valueAxis": {
+    "axisLine": { "show": false },
+    "splitLine": { "lineStyle": { "type": "dashed", "color": "rgba(74, 26, 74, 0.3)" } }
+  },
+  "visualMap": {
+    "color": ["#c41e3a", "#1a1a1a"]
+  },
+  "tooltip": {
+    "backgroundColor": "rgba(10, 10, 10, 0.9)",
+    "borderColor": "#b8860b",
+    "textStyle": { "color": "#e5e5e5" }
+  }
+}

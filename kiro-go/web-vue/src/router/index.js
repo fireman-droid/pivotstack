@@ -8,6 +8,7 @@ const routes = [
   { path: '/settings', name: 'Settings', component: () => import('../views/Settings.vue'), meta: { auth: true } },
   { path: '/api', name: 'ApiInfo', component: () => import('../views/ApiInfo.vue'), meta: { auth: true } },
   { path: '/logs', name: 'Logs', component: () => import('../views/Logs.vue'), meta: { auth: true } },
+  { path: '/pricing', name: 'Pricing', component: () => import('../views/PricingAnalysis.vue'), meta: { auth: true } },
 ]
 
 const router = createRouter({

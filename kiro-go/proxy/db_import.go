@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -59,7 +60,16 @@ type dbAccount struct {
 	Provider     string
 }
 
-// apiImportFromDB 从远程数据库导入未激活普通账号
+// importResult 单个账号导入结果
+type importResult struct {
+	Success  bool
+	Account  config.Account
+	DbID     string // 远端数据库 ID，用于标记已激活
+	Email    string
+	Error    string
+}
+
+// apiImportFromDB 从远程数据库导入未激活普通账号（并发版本）
 func (h *Handler) apiImportFromDB(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.WriteHeader(405)
@@ -69,9 +79,10 @@ func (h *Handler) apiImportFromDB(w http.ResponseWriter, r *http.Request) {
 
 	// 解析请求参数
 	var req struct {
-		Min   int  `json:"min"`   // 最少保持多少个可用账号
-		Limit int  `json:"limit"` // 最多导入多少个
-		Force bool `json:"force"` // 强制导入（不检查当前数量）
+		Min         int  `json:"min"`         // 最少保持多少个可用账号
+		Limit       int  `json:"limit"`       // 最多导入多少个
+		Force       bool `json:"force"`       // 强制导入（不检查当前数量）
+		Concurrency int  `json:"concurrency"` // 并发数，默认 10
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		// 允许空 body
@@ -83,6 +94,12 @@ func (h *Handler) apiImportFromDB(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Limit <= 0 {
 		req.Limit = 10
+	}
+	if req.Concurrency <= 0 {
+		req.Concurrency = 10
+	}
+	if req.Concurrency > 50 {
+		req.Concurrency = 50
 	}
 
 	// 检查当前可用账号数
@@ -181,93 +198,140 @@ func (h *Handler) apiImportFromDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 逐个导入
+	startTime := time.Now()
+	log.Printf("[DB Import] 开始并发导入 %d 个账号，并发数: %d", len(accounts), req.Concurrency)
+
+	// ========== 并发刷新 Token + 获取用户信息 ==========
+	results := make([]importResult, len(accounts))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, req.Concurrency) // 并发信号量
+
+	for i, a := range accounts {
+		wg.Add(1)
+		go func(idx int, acc dbAccount) {
+			defer wg.Done()
+			sem <- struct{}{}        // 获取信号量
+			defer func() { <-sem }() // 释放信号量
+
+			result := &results[idx]
+			result.DbID = acc.ID
+			result.Email = acc.Email
+
+			// 确定 authMethod
+			authMethod := "idc"
+			if acc.ClientID == "" {
+				authMethod = "social"
+			}
+
+			// 尝试刷新 token
+			tempAccount := &config.Account{
+				RefreshToken: acc.RefreshToken,
+				ClientID:     acc.ClientID,
+				ClientSecret: acc.ClientSecret,
+				AuthMethod:   authMethod,
+				Region:       acc.Region,
+			}
+
+			newAccessToken, newRefreshToken, expiresAt, err := auth.RefreshToken(tempAccount)
+			if err != nil {
+				result.Error = "Token 刷新失败: " + err.Error()
+				return
+			}
+
+			refreshToken := acc.RefreshToken
+			if newRefreshToken != "" {
+				refreshToken = newRefreshToken
+			}
+
+			// 获取用户邮箱
+			email, _, _ := auth.GetUserInfo(newAccessToken)
+			if email == "" {
+				email = acc.Email
+			}
+			result.Email = email
+
+			// 构建账号对象（暂不写入，等批量写入）
+			result.Success = true
+			result.Account = config.Account{
+				ID:           auth.GenerateAccountID(),
+				Email:        email,
+				AccessToken:  newAccessToken,
+				RefreshToken: refreshToken,
+				ClientID:     acc.ClientID,
+				ClientSecret: acc.ClientSecret,
+				AuthMethod:   authMethod,
+				Provider:     acc.Provider,
+				Region:       acc.Region,
+				ExpiresAt:    expiresAt,
+				Enabled:      true,
+				MachineId:    config.GenerateMachineId(),
+			}
+		}(i, a)
+	}
+
+	wg.Wait() // 等待所有并发刷新完成
+
+	// ========== 批量写入配置（一次性写 JSON） ==========
+	var successAccounts []config.Account
 	var imported []map[string]string
 	var failed []map[string]string
+	var successDbIDs []string
 
-	for _, a := range accounts {
-		// 确定 authMethod
-		authMethod := "idc"
-		if a.ClientID == "" {
-			authMethod = "social"
+	for _, r := range results {
+		if r.Success {
+			successAccounts = append(successAccounts, r.Account)
+			imported = append(imported, map[string]string{
+				"email": r.Email,
+				"id":    r.Account.ID,
+			})
+			successDbIDs = append(successDbIDs, r.DbID)
+		} else {
+			failed = append(failed, map[string]string{
+				"email": r.Email,
+				"error": r.Error,
+			})
 		}
+	}
 
-		// 尝试刷新 token
-		tempAccount := &config.Account{
-			RefreshToken: a.RefreshToken,
-			ClientID:     a.ClientID,
-			ClientSecret: a.ClientSecret,
-			AuthMethod:   authMethod,
-			Region:       a.Region,
-		}
-
-		newAccessToken, newRefreshToken, expiresAt, err := auth.RefreshToken(tempAccount)
+	// 批量导入（只写一次 JSON 文件）
+	if len(successAccounts) > 0 {
+		importedCount, skippedCount, err := config.ImportAccounts(successAccounts)
 		if err != nil {
-			failed = append(failed, map[string]string{
-				"email": a.Email,
-				"error": "Token 刷新失败: " + err.Error(),
-			})
-			continue
+			log.Printf("[DB Import] 批量写入失败: %v", err)
+		} else {
+			log.Printf("[DB Import] 批量写入完成: %d 导入, %d 跳过", importedCount, skippedCount)
 		}
+	}
 
-		refreshToken := a.RefreshToken
-		if newRefreshToken != "" {
-			refreshToken = newRefreshToken
+	// 批量标记数据库已激活
+	if len(successDbIDs) > 0 {
+		placeholders := make([]string, len(successDbIDs))
+		args := make([]interface{}, len(successDbIDs))
+		for i, id := range successDbIDs {
+			placeholders[i] = "?"
+			args[i] = id
 		}
-
-		// 获取用户邮箱
-		email, _, _ := auth.GetUserInfo(newAccessToken)
-		if email == "" {
-			email = a.Email
+		query := fmt.Sprintf("UPDATE kiro_accounts SET card_status = 'activated' WHERE id IN (%s)", strings.Join(placeholders, ","))
+		if _, markErr := db.Exec(query, args...); markErr != nil {
+			log.Printf("[DB Import] 批量标记已激活失败: %v", markErr)
 		}
-
-		// 创建账号
-		account := config.Account{
-			ID:           auth.GenerateAccountID(),
-			Email:        email,
-			AccessToken:  newAccessToken,
-			RefreshToken: refreshToken,
-			ClientID:     a.ClientID,
-			ClientSecret: a.ClientSecret,
-			AuthMethod:   authMethod,
-			Provider:     a.Provider,
-			Region:       a.Region,
-			ExpiresAt:    expiresAt,
-			Enabled:      true,
-			MachineId:    config.GenerateMachineId(),
-		}
-
-		if err := config.AddAccount(account); err != nil {
-			failed = append(failed, map[string]string{
-				"email": a.Email,
-				"error": err.Error(),
-			})
-			continue
-		}
-
-		// 标记为已激活
-		_, markErr := db.Exec("UPDATE kiro_accounts SET card_status = 'activated' WHERE id = ?", a.ID)
-		if markErr != nil {
-			log.Printf("[DB Import] 标记已激活失败 %s: %v", a.Email, markErr)
-		}
-
-		imported = append(imported, map[string]string{
-			"email": email,
-			"id":    account.ID,
-		})
 	}
 
 	// 重载账号池
 	h.pool.Reload()
 
+	elapsed := time.Since(startTime)
+	log.Printf("[DB Import] 导入完成: %d 成功, %d 失败, 耗时 %.1f 秒", len(imported), len(failed), elapsed.Seconds())
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"message":   fmt.Sprintf("导入完成: %d 成功, %d 失败", len(imported), len(failed)),
-		"current":   currentAvailable + len(imported),
-		"total":     currentTotal + len(imported),
-		"imported":  len(imported),
-		"failed":    len(failed),
-		"available": len(accounts),
+		"success":     true,
+		"message":     fmt.Sprintf("导入完成: %d 成功, %d 失败, 耗时 %.1f 秒", len(imported), len(failed), elapsed.Seconds()),
+		"current":     currentAvailable + len(imported),
+		"total":       currentTotal + len(imported),
+		"imported":    len(imported),
+		"failed":      len(failed),
+		"available":   len(accounts),
+		"elapsed_sec": elapsed.Seconds(),
 		"details": map[string]interface{}{
 			"imported": imported,
 			"failed":   failed,

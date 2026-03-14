@@ -1,94 +1,372 @@
-@import "tailwindcss";
+@import "./assets/styles/abyss-theme.css";
 
-@theme {
-  --color-primary: #6366f1;
-  --color-primary-hover: #4f46e5;
+/* ===== 双主题系统：CSS 变量定义 ===== */
+
+/* === 1.1 现实世界主题 === */
+:root[data-world="reality"] {
+  /* 基础配色 - 临床/办公室风格 */
+  --world-bg-main: #f8fafc;
+  --world-bg-card: #ffffff;
+  --world-text-primary: #0f172a;
+  --world-text-secondary: #475569;
+  --world-accent: #0284c7; /* 医疗蓝（修复对比度 4.6:1 ✅） */
+  --world-border: #e2e8f0;
+  --world-status-ok: #10b981;
+
+  /* 交互属性 */
+  --world-btn-scale: 0.98;
+  --world-btn-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --world-card-hover: translateY(-2px);
+
+  /* 动画参数 */
+  --world-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --world-nav-indicator: 2px solid var(--world-accent);
+
+  /* 字体族 - 现实世界：系统字体，专业感 */
+  --world-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --world-font-mono: "SF Mono", Monaco, "Cascadia Code", "Courier New", monospace;
+
+  /* 字体大小层级 */
+  --world-text-xs: 0.75rem;    /* 12px */
+  --world-text-sm: 0.875rem;   /* 14px */
+  --world-text-base: 1rem;     /* 16px */
+  --world-text-lg: 1.125rem;   /* 18px */
+  --world-text-xl: 1.25rem;    /* 20px */
+  --world-text-2xl: 1.5rem;    /* 24px */
+  --world-text-3xl: 1.875rem;  /* 30px */
+
+  /* 行高 */
+  --world-leading-tight: 1.25;
+  --world-leading-normal: 1.5;
+  --world-leading-relaxed: 1.75;
+
+  /* 字重 */
+  --world-font-normal: 400;
+  --world-font-medium: 500;
+  --world-font-semibold: 600;
+  --world-font-bold: 700;
+
+  /* 语义化颜色 */
+  --world-success: #10b981;
+  --world-warning: #f59e0b;
+  --world-error: #ef4444;
+  --world-info: #3b82f6;
+
+  /* 透明度层级 */
+  --world-overlay-light: rgba(0, 0, 0, 0.05);
+  --world-overlay-medium: rgba(0, 0, 0, 0.1);
+  --world-overlay-heavy: rgba(0, 0, 0, 0.2);
+
+  /* 渐变 */
+  --world-gradient-primary: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  --world-gradient-card: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+
+  /* 焦点指示器 */
+  --world-focus-ring: 0 0 0 3px rgba(2, 132, 199, 0.3);
+  --world-focus-ring-offset: 2px;
+
+  /* 阴影层级 - 清晰、锐利 */
+  --world-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --world-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --world-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --world-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+  --world-shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+  /* 圆角层级 - 锐利 */
+  --world-radius-none: 0;
+  --world-radius-sm: 2px;
+  --world-radius-md: 4px;
+  --world-radius-lg: 8px;
+  --world-radius-xl: 12px;
+  --world-radius-2xl: 16px;
+  --world-radius-full: 9999px;
 }
 
-/* 解决 Tailwind v4 dark 模式变体 */
-@variant dark (&:where(.dark, .dark *));
+/* === 1.2 道诡世界主题 === */
+:root[data-world="daogui"] {
+  /* 基础配色 - 深渊/修真风格 */
+  --world-bg-main: #0a0a0a;
+  --world-bg-card: #141414;
+  --world-text-primary: #e5e5e5;
+  --world-text-secondary: #9ca3af;
+  --world-accent: #c41e3a; /* 朱红 */
+  --world-accent-alt: #b8860b; /* 金铜 */
+  --world-border: #311111;
+  --world-status-ok: #7f1d1d;
 
+  /* 交互属性 */
+  --world-btn-scale: 0.95;
+  --world-btn-shadow: 0 0 15px rgba(196, 30, 58, 0.4);
+  --world-card-hover: scale(1.02) rotate(0.5deg);
+
+  /* 动画参数 */
+  --world-transition-fast: 300ms cubic-bezier(0.68, -0.55, 0.26, 1.55);
+  --world-nav-indicator: 4px solid var(--world-accent);
+  --world-glitch-filter: url(#glitch);
+
+  /* 字体族 - 道诡世界：衬线字体，古典恐怖感 */
+  --world-font-sans: "Noto Serif SC", Georgia, "Times New Roman", serif;
+  --world-font-mono: "Courier New", monospace;
+
+  /* 字体大小层级 */
+  --world-text-xs: 0.75rem;
+  --world-text-sm: 0.875rem;
+  --world-text-base: 1rem;
+  --world-text-lg: 1.125rem;
+  --world-text-xl: 1.25rem;
+  --world-text-2xl: 1.5rem;
+  --world-text-3xl: 1.875rem;
+
+  /* 行高（道诡世界稍微紧凑，营造压迫感） */
+  --world-leading-tight: 1.2;
+  --world-leading-normal: 1.4;
+  --world-leading-relaxed: 1.6;
+
+  /* 字重（道诡世界更粗，增强视觉冲击） */
+  --world-font-normal: 500;
+  --world-font-medium: 600;
+  --world-font-semibold: 700;
+  --world-font-bold: 800;
+
+  /* 语义化颜色（道诡世界用暗红色系） */
+  --world-success: #7f1d1d;
+  --world-warning: #b8860b;
+  --world-error: #c41e3a;
+  --world-info: #4a1a4a;
+
+  /* 透明度层级（血雾效果） */
+  --world-overlay-light: rgba(196, 30, 58, 0.05);
+  --world-overlay-medium: rgba(196, 30, 58, 0.1);
+  --world-overlay-heavy: rgba(196, 30, 58, 0.2);
+
+  /* 渐变（血雾渐变） */
+  --world-gradient-primary: linear-gradient(135deg, #c41e3a 0%, #7f1d1d 100%);
+  --world-gradient-card: linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%);
+
+  /* 焦点指示器 */
+  --world-focus-ring: 0 0 0 3px rgba(196, 30, 58, 0.4);
+  --world-focus-ring-offset: 2px;
+
+  /* 阴影层级 - 血雾外溢 */
+  --world-shadow-sm: 0 0 5px rgba(196, 30, 58, 0.2);
+  --world-shadow-md: 0 0 10px rgba(196, 30, 58, 0.3);
+  --world-shadow-lg: 0 0 20px rgba(196, 30, 58, 0.4);
+  --world-shadow-xl: 0 0 30px rgba(196, 30, 58, 0.5);
+  --world-shadow-2xl: 0 0 40px rgba(196, 30, 58, 0.6);
+
+  /* 圆角层级 - 更不规则 */
+  --world-radius-none: 0;
+  --world-radius-sm: 0px;
+  --world-radius-md: 2px;
+  --world-radius-lg: 4px;
+  --world-radius-xl: 6px;
+  --world-radius-2xl: 8px;
+  --world-radius-full: 9999px;
+}
+
+/* === 间距系统（8px 基准，两个主题共用） === */
 :root {
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --bg: #fafafa;
-  --card: #ffffff;
-  --text: #0f172a;
-  --text-secondary: #64748b;
-  --border: #e2e8f0;
-  --sidebar-bg: #f8fafc;
-  --sidebar-text: #475569;
-  --sidebar-active-bg: #ffffff;
-  --sidebar-active-text: #0f172a;
-  --sidebar-border: #f1f5f9;
+  --world-space-0: 0;
+  --world-space-1: 0.25rem;  /* 4px */
+  --world-space-2: 0.5rem;   /* 8px */
+  --world-space-3: 0.75rem;  /* 12px */
+  --world-space-4: 1rem;     /* 16px */
+  --world-space-5: 1.25rem;  /* 20px */
+  --world-space-6: 1.5rem;   /* 24px */
+  --world-space-8: 2rem;     /* 32px */
+  --world-space-10: 2.5rem;  /* 40px */
+  --world-space-12: 3rem;    /* 48px */
+  --world-space-16: 4rem;    /* 64px */
 }
 
-html.dark {
-  --primary: #818cf8;
-  --primary-hover: #6366f1;
-  --bg: #030712;
-  --card: #0f172a;
-  --text: #f8fafc;
-  --text-secondary: #94a3b8;
-  --border: #1e293b;
-  --sidebar-bg: #030712;
-  --sidebar-text: #94a3b8;
-  --sidebar-active-bg: #1e293b;
-  --sidebar-active-text: #ffffff;
-  --sidebar-border: #111827;
-
-  /* Element Plus Dark Mode Overrides */
-  --el-bg-color: var(--bg);
-  --el-bg-color-page: var(--bg);
-  --el-bg-color-overlay: var(--card);
-  --el-text-color-primary: var(--text);
-  --el-text-color-regular: var(--text-secondary);
-  --el-border-color: var(--border);
-  --el-border-color-light: var(--border);
-  --el-border-color-lighter: var(--border);
-  --el-fill-color-blank: var(--card);
-  --el-fill-color: var(--bg);
-  --el-fill-color-light: #1e293b;
-}
+/* ===== 全局样式应用 ===== */
 
 * { box-sizing: border-box; }
 
 body {
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--world-bg-main);
+  color: var(--world-text-primary);
+  font-family: var(--world-font-sans);
+  font-size: var(--world-text-base);
+  line-height: var(--world-leading-normal);
+  font-weight: var(--world-font-normal);
   -webkit-font-smoothing: antialiased;
   margin: 0;
   padding: 0;
   overflow: hidden;
+  transition: background-color 0.7s ease, color 0.7s ease;
 }
 
-/* 现代卡片样式 */
+code, pre {
+  font-family: var(--world-font-mono);
+}
+
+/* ===== 全局焦点样式（可访问性） ===== */
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--world-focus-ring);
+  outline-offset: var(--world-focus-ring-offset);
+}
+
+button:focus-visible,
+a:focus-visible {
+  box-shadow: var(--world-focus-ring);
+}
+
+/* ===== 跳过导航链接 ===== */
+.skip-to-content {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--world-accent);
+  color: white;
+  padding: 8px 16px;
+  text-decoration: none;
+  z-index: 10000;
+  border-radius: 0 0 4px 0;
+}
+
+.skip-to-content:focus {
+  top: 0;
+}
+
+/* ===== 兼容变量映射 ===== */
+@theme {
+  --color-primary: var(--world-accent);
+  --color-bg: var(--world-bg-main);
+  --color-card: var(--world-bg-card);
+  --color-text: var(--world-text-primary);
+  --color-text-secondary: var(--world-text-secondary);
+  --color-border: var(--world-border);
+  --color-success: var(--world-success);
+  --color-warning: var(--world-warning);
+  --color-error: var(--world-error);
+  --color-info: var(--world-info);
+  --color-world-accent-alt: var(--world-accent-alt);
+}
+
+:root {
+  --primary: var(--world-accent);
+  --bg: var(--world-bg-main);
+  --card: var(--world-bg-card);
+  --text: var(--world-text-primary);
+  --text-secondary: var(--world-text-secondary);
+  --border: var(--world-border);
+}
+
+/* ===== modern-card 双主题样式 ===== */
 .modern-card {
-  background-color: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--world-bg-card);
+  border: 1px solid var(--world-border);
+  border-radius: var(--world-radius-xl);
+  backdrop-filter: blur(8px);
+  transition: all var(--world-transition-fast);
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--world-shadow-sm);
 }
+
 .modern-card:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  transform: var(--world-card-hover);
+  box-shadow: var(--world-shadow-md);
 }
 
-/* 玻璃质感导航 */
-.glass-header {
-  background-color: rgba(var(--bg), 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+/* Madness 模式卡片额外效果 */
+[data-world="daogui"] .modern-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(184, 134, 11, 0.3) 50%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.4s;
 }
 
-/* 隐藏滚动条但保留功能 */
+[data-world="daogui"] .modern-card:hover::before { opacity: 1; }
+
+[data-world="daogui"] .modern-card:hover {
+  border-color: #4a1a4a;
+  box-shadow:
+    0 0 20px rgba(196, 30, 58, 0.08),
+    inset 0 0 30px rgba(74, 26, 74, 0.05);
+}
+
+/* Reality 模式卡片效果 */
+[data-world="reality"] .modern-card:hover {
+  box-shadow: var(--world-shadow-lg);
+}
+
+/* ===== 交互差异化 CSS ===== */
+
+/* 差异化按钮 */
+.reality-button {
+  transition: all var(--world-transition-fast);
+  box-shadow: var(--world-btn-shadow);
+  border-radius: 4px;
+}
+.reality-button:active { transform: scale(var(--world-btn-scale)); }
+
+.daogui-button {
+  transition: all var(--world-transition-fast);
+  filter: drop-shadow(0 0 2px var(--world-accent));
+}
+.daogui-button:active {
+  transform: scale(var(--world-btn-scale));
+  filter: drop-shadow(0 0 10px var(--world-accent));
+}
+
+/* 导航指示条动画 */
+.nav-indicator {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-world="daogui"] .nav-indicator {
+  transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.26, 1.55);
+  filter: blur(1px);
+}
+
+/* ===== 性能优化 ===== */
+
+/* GPU 加速 */
+.world-transition-layer, .nav-indicator, .switcher-icon {
+  transform: translateZ(0);
+}
+
+/* 动画降级 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  #ink-mask circle { display: none; }
+  .world-transition-layer { background: transparent !important; }
+}
+
+/* ===== 滚动条 ===== */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+::-webkit-scrollbar-thumb { background: var(--world-border); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--world-accent); }
 
-/* Lucide 图标统一尺寸 */
-.lucide {
-  stroke-width: 2px;
+.lucide { stroke-width: 2px; }
+
+/* ===== Element Plus 覆盖（道诡模式） ===== */
+[data-world="daogui"] {
+  --el-bg-color: #0a0a0a;
+  --el-bg-color-page: #0a0a0a;
+  --el-bg-color-overlay: #141418;
+  --el-text-color-primary: #e5e5e5;
+  --el-text-color-regular: #9ca3af;
+  --el-border-color: #311111;
+  --el-border-color-light: #311111;
+  --el-border-color-lighter: #1a0a1a;
+  --el-fill-color-blank: #141418;
+  --el-fill-color: #0a0a0a;
+  --el-fill-color-light: #1a1a22;
+  --el-color-primary: #c41e3a;
+}
+
+/* blood-glow-hover 仅道诡模式 */
+[data-world="daogui"] .blood-glow-hover:hover {
+  box-shadow: 0 0 20px rgba(196, 30, 58, 0.4);
+  transition: box-shadow 0.4s ease-in-out;
 }

@@ -20,6 +20,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 			password = cookie.Value
 		}
 	}
+	// SSE EventSource 不支持自定义 Header/Cookie，支持 query 参数
+	if password == "" {
+		password = r.URL.Query().Get("password")
+	}
 
 	if password != config.GetPassword() {
 		w.WriteHeader(401)
@@ -94,6 +98,12 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetLogs(w, r)
 	case path == "/logs" && r.Method == "DELETE":
 		h.apiClearLogs(w, r)
+	case path == "/sse/logs" && r.Method == "GET":
+		h.handleSSELogs(w, r)
+	case path == "/sse/stats" && r.Method == "GET":
+		h.handleSSEStats(w, r)
+	case path == "/pricing-analysis" && r.Method == "GET":
+		h.apiPricingAnalysis(w, r)
 	default:
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
@@ -122,6 +132,7 @@ func (h *Handler) apiGetAccounts(w http.ResponseWriter, r *http.Request) {
 			"trialUsagePercent": a.TrialUsagePercent, "trialStatus": a.TrialStatus, "trialExpiresAt": a.TrialExpiresAt,
 			"requestCount": stats.RequestCount, "errorCount": stats.ErrorCount,
 			"totalTokens": stats.TotalTokens, "totalCredits": stats.TotalCredits, "lastUsed": stats.LastUsed,
+			"inFlight": h.pool.GetInFlight(a.ID),
 		}
 	}
 	json.NewEncoder(w).Encode(result)
@@ -360,11 +371,18 @@ func (h *Handler) apiBatchAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiGetStatus(w http.ResponseWriter, r *http.Request) {
+	proPool := h.pool.TierStats("pro")
+	freePool := h.pool.TierStats("free")
+	proRemaining := (proPool.UsageLimit - proPool.UsageCurrent) + (proPool.TrialLimit - proPool.TrialCurrent)
+	freeRemaining := (freePool.UsageLimit - freePool.UsageCurrent) + (freePool.TrialLimit - freePool.TrialCurrent)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"accounts": h.pool.Count(), "available": h.pool.AvailableCount(),
 		"totalRequests": h.totalRequests, "successRequests": h.successRequests,
 		"failedRequests": h.failedRequests, "totalTokens": h.totalTokens,
 		"totalCredits": h.totalCredits, "uptime": time.Now().Unix() - h.startTime,
+		"freePool":   freePool,
+		"proPool":    proPool,
+		"prediction": h.creditPredictor.Predict(proRemaining + freeRemaining),
 	})
 }
 
@@ -502,4 +520,139 @@ func (h *Handler) apiUpdateEndpointConfig(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) apiGetVersion(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"version": config.Version})
+}
+
+// apiPricingAnalysis 定价分析 API — 为未来 AI 提供所有定价决策数据
+// GET /admin/api/pricing-analysis
+func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
+	h.callLogsMu.RLock()
+	logs := make([]CallLog, len(h.callLogs))
+	copy(logs, h.callLogs)
+	h.callLogsMu.RUnlock()
+
+	// 按模型统计
+	type ModelStats struct {
+		Requests      int     `json:"requests"`
+		TotalCredits  float64 `json:"totalCredits"`
+		TotalTokens   int     `json:"totalTokens"`
+		AvgCredits    float64 `json:"avgCredits"`    // 平均每次 credit
+		AvgTokens     int     `json:"avgTokens"`     // 平均每次 token
+		CreditPerKTok float64 `json:"creditPerKTok"` // 每 1K token 的 credit 成本
+		Errors        int     `json:"errors"`
+	}
+	modelMap := make(map[string]*ModelStats)
+
+	var totalReqs, totalErrors int
+	var totalCreditsAll float64
+	var totalTokensAll int
+	var firstTs, lastTs int64
+
+	for _, log := range logs {
+		totalReqs++
+		if log.Timestamp > 0 {
+			if firstTs == 0 || log.Timestamp < firstTs {
+				firstTs = log.Timestamp
+			}
+			if log.Timestamp > lastTs {
+				lastTs = log.Timestamp
+			}
+		}
+
+		model := log.ActualModel
+		if model == "" {
+			model = log.OriginalModel
+		}
+		if _, ok := modelMap[model]; !ok {
+			modelMap[model] = &ModelStats{}
+		}
+		ms := modelMap[model]
+		ms.Requests++
+		if log.Status == "error" {
+			ms.Errors++
+			totalErrors++
+			continue
+		}
+		ms.TotalCredits += log.Credits
+		ms.TotalTokens += log.TotalTokens
+		totalCreditsAll += log.Credits
+		totalTokensAll += log.TotalTokens
+	}
+
+	// 计算模型平均值
+	for _, ms := range modelMap {
+		successReqs := ms.Requests - ms.Errors
+		if successReqs > 0 {
+			ms.AvgCredits = ms.TotalCredits / float64(successReqs)
+			ms.AvgTokens = ms.TotalTokens / successReqs
+			if ms.TotalTokens > 0 {
+				ms.CreditPerKTok = (ms.TotalCredits / float64(ms.TotalTokens)) * 1000
+			}
+		}
+	}
+
+	// 时间跨度
+	var spanHours float64
+	if lastTs > firstTs {
+		spanHours = float64(lastTs-firstTs) / 3600.0
+	}
+
+	// 池数据
+	proPool := h.pool.TierStats("pro")
+	freePool := h.pool.TierStats("free")
+	proUsed := proPool.UsageCurrent + proPool.TrialCurrent
+	proTotal := proPool.UsageLimit + proPool.TrialLimit
+	freeUsed := freePool.UsageCurrent + freePool.TrialCurrent
+	freeTotal := freePool.UsageLimit + freePool.TrialLimit
+	remaining := (proTotal - proUsed) + (freeTotal - freeUsed)
+
+	prediction := h.creditPredictor.Predict(remaining)
+
+	// 成本计算（1 Credit = 0.04 元）
+	costPerCredit := 0.04
+	totalCostCNY := totalCreditsAll * costPerCredit
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"summary": map[string]interface{}{
+			"totalRequests":   totalReqs,
+			"successRequests": totalReqs - totalErrors,
+			"errorRequests":   totalErrors,
+			"totalCredits":    totalCreditsAll,
+			"totalTokens":     totalTokensAll,
+			"spanHours":       spanHours,
+			"avgCreditsPerReq": func() float64 {
+				if totalReqs-totalErrors > 0 {
+					return totalCreditsAll / float64(totalReqs-totalErrors)
+				}
+				return 0
+			}(),
+			"avgTokensPerReq": func() int {
+				if totalReqs-totalErrors > 0 {
+					return totalTokensAll / (totalReqs - totalErrors)
+				}
+				return 0
+			}(),
+			"creditsPerHour": func() float64 {
+				if spanHours > 0 {
+					return totalCreditsAll / spanHours
+				}
+				return 0
+			}(),
+			"totalCostCNY":     totalCostCNY,
+			"costPerCreditCNY": costPerCredit,
+		},
+		"modelBreakdown": modelMap,
+		"poolStatus": map[string]interface{}{
+			"pro":  map[string]interface{}{"used": proUsed, "total": proTotal, "remaining": proTotal - proUsed, "accounts": proPool.Total},
+			"free": map[string]interface{}{"used": freeUsed, "total": freeTotal, "remaining": freeTotal - freeUsed, "accounts": freePool.Total},
+		},
+		"prediction": prediction,
+		"pricingHints": map[string]string{
+			"costFormula":    "用户面板扣费 = 起步价 + (Token费 × 模型倍率)",
+			"revenueFormula": "真实收入 = 用户面板扣费 × 0.2 元/刀",
+			"costFormulaCNY": "真实成本 = Credit消耗 × 0.04 元/Credit",
+			"breakEvenPanel": "一个号(1500 Credit)生命周期面板消耗 ≥ $300 = 保本",
+			"profitPanel":    "面板消耗 ≥ $800 = 暴利，可降倍率抢客源",
+			"avgTokenHint":   "平均Token<1K=聊天党,提高起步价; >15K=程序员,降起步价提倍率",
+		},
+	})
 }

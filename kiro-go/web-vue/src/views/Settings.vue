@@ -108,7 +108,7 @@ async function resetStats() {
     <!-- Centered Header -->
     <div class="text-center space-y-2 py-4">
       <h1 class="text-3xl font-black tracking-tighter text-[var(--text)]">系统参数设定</h1>
-      <p class="text-sm text-[var(--text-secondary)] font-medium">配置网关核心行为、安全性及模型输出协议</p>
+      <p class="text-sm text-[var(--text)]-secondary font-medium">配置网关核心行为、安全性及模型输出协议</p>
     </div>
 
     <!-- API Security Card -->
@@ -120,24 +120,24 @@ async function resetStats() {
       <div class="p-8 space-y-8">
         <label class="flex items-center gap-3 cursor-pointer group w-fit">
           <div class="relative flex items-center">
-            <input type="checkbox" v-model="requireApiKey" class="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-[var(--border)] bg-[var(--bg)] checked:bg-primary transition-all" />
+            <input type="checkbox" v-model="requireApiKey" class="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-[var(--border)] bg-[var(--bg)] checked:bg-[var(--primary)] transition-all" />
             <svg class="absolute h-3.5 w-3.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white left-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
           </div>
-          <span class="text-sm font-bold text-[var(--text-secondary)] group-hover:text-[var(--text)] transition-colors">启用全局 API Key 强制验证</span>
+          <span class="text-sm font-bold text-[var(--text)]-secondary group-hover:text-[var(--text)] transition-colors">启用全局 API Key 强制验证</span>
         </label>
 
         <div class="space-y-3">
           <div class="flex justify-between items-end pl-1">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60">系统 API 密钥</span>
-            <button @click="generateApiKey" class="text-[10px] font-black text-primary hover:underline uppercase tracking-tighter">重新生成密钥</button>
+            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">系统 API 密钥</span>
+            <button @click="generateApiKey" class="text-[10px] font-black text-[var(--primary)] hover:underline uppercase tracking-tighter">重新生成密钥</button>
           </div>
           <div class="relative group">
-            <Fingerprint class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors" />
-            <input v-model="apiKey" placeholder="留空则允许匿名访问" class="w-full h-14 pl-12 pr-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-mono outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/5 transition-all" />
+            <Fingerprint class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-[var(--primary)] transition-colors" />
+            <input v-model="apiKey" placeholder="留空则允许匿名访问" class="w-full h-14 pl-12 pr-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-mono outline-none focus:border-[var(--primary)]/50 focus:ring-4 focus:ring-primary/5 transition-all" />
           </div>
         </div>
 
-        <button @click="saveApiSettings" :disabled="loading.api" class="flex items-center gap-2 px-6 py-3 bg-primary text-white rounded-xl font-black text-xs shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
+        <button @click="saveApiSettings" :disabled="loading.api" class="flex items-center gap-2 px-6 py-3 bg-[var(--primary)] text-white rounded-xl font-black text-xs shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">
           <Save class="w-4 h-4" /> 保存鉴权配置
         </button>
       </div>
@@ -151,14 +151,14 @@ async function resetStats() {
       </div>
       <div class="p-8 space-y-8">
         <div class="space-y-3">
-          <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60 pl-1">触发后缀 / Trigger Suffix</span>
+          <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">触发后缀 / Trigger Suffix</span>
           <input v-model="thinkingSuffix" placeholder="-thinking" class="w-full h-14 px-5 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-bold outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all" />
-          <p class="text-[10px] text-[var(--text-secondary)] font-medium italic opacity-60 ml-1">在请求模型名后添加此后缀将强制激活思考路径映射。</p>
+          <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">在请求模型名后添加此后缀将强制激活思考路径映射。</p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="space-y-3">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60 pl-1">OpenAI 协议响应格式</span>
+            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">OpenAI 协议响应格式</span>
             <select v-model="openaiFormat" class="w-full h-14 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-xs font-bold outline-none cursor-pointer hover:border-emerald-500 transition-colors">
               <option value="reasoning_content">reasoning_content (标准)</option>
               <option value="thinking">&lt;thinking&gt; 标签 (Claude 风格)</option>
@@ -166,7 +166,7 @@ async function resetStats() {
             </select>
           </div>
           <div class="space-y-3">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60 pl-1">Claude 协议响应格式</span>
+            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">Claude 协议响应格式</span>
             <select v-model="claudeFormat" class="w-full h-14 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-xs font-bold outline-none cursor-pointer hover:border-emerald-500 transition-colors">
               <option value="thinking">&lt;thinking&gt; 标签 (Claude 风格)</option>
               <option value="think">&lt;think&gt; 标签 (OpenAI 风格)</option>
@@ -190,7 +190,7 @@ async function resetStats() {
         </div>
         <div class="p-6 space-y-6">
           <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60">首选连接节点</span>
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">首选连接节点</span>
             <select v-model="preferredEndpoint" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none">
               <option value="auto">自动智能负载 (推荐)</option>
               <option value="codewhisperer">Amazon CodeWhisperer Node</option>
@@ -204,15 +204,15 @@ async function resetStats() {
       <!-- Password Card -->
       <section class="modern-card overflow-hidden shadow-sm">
         <div class="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-          <Lock class="w-4 h-4 text-primary" />
+          <Lock class="w-4 h-4 text-[var(--primary)]" />
           <h2 class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]">安全凭证管理</h2>
         </div>
         <div class="p-6 space-y-6">
           <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] opacity-60">修改管理令牌</span>
-            <input v-model="newPassword" type="password" placeholder="输入新访问密码" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-black outline-none focus:border-primary" />
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">修改管理令牌</span>
+            <input v-model="newPassword" type="password" placeholder="输入新访问密码" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-black outline-none focus:border-[var(--primary)]" />
           </div>
-          <button @click="changePassword" :disabled="loading.pwd" class="w-full py-3 bg-slate-900 dark:bg-primary text-white rounded-xl font-black text-xs hover:opacity-90 transition-all">确认重置密码</button>
+          <button @click="changePassword" :disabled="loading.pwd" class="w-full py-3 bg-slate-900 dark:bg-[var(--primary)] text-white rounded-xl font-black text-xs hover:opacity-90 transition-all">确认重置密码</button>
         </div>
       </section>
     </div>
@@ -229,7 +229,7 @@ async function resetStats() {
           <div class="p-3 rounded-full bg-rose-50 dark:bg-rose-900/20 text-rose-500"><Cpu class="w-5 h-5" /></div>
           <div>
             <h4 class="text-sm font-black text-[var(--text)]">重置全局统计流水</h4>
-            <p class="text-[11px] text-[var(--text-secondary)] mt-1 font-medium">警告：这将清空所有历史请求数、Token 消耗及成本统计。此操作不可逆。</p>
+            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">警告：这将清空所有历史请求数、Token 消耗及成本统计。此操作不可逆。</p>
           </div>
         </div>
         <button @click="resetStats" class="px-6 py-3 bg-rose-500 text-white rounded-xl font-black text-xs hover:bg-rose-600 transition-all shadow-xl shadow-rose-500/20 active:scale-95 whitespace-nowrap">
@@ -240,7 +240,7 @@ async function resetStats() {
 
     <!-- Version Footer -->
     <div class="flex flex-col items-center gap-2 pt-10">
-       <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--border)]/30 text-[9px] font-black text-[var(--text-secondary)] uppercase tracking-widest">
+       <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-border/30 text-[9px] font-black text-[var(--text)]-secondary uppercase tracking-widest">
           引擎版本 v1.0.3
        </div>
        <p class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em]">由 Kiro-Stack 核心团队构建</p>

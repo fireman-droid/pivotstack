@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import { 
@@ -12,7 +12,8 @@ import {
   Cpu,
   History,
   ChevronDown,
-  X
+  X,
+  Radio
 } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
@@ -21,7 +22,49 @@ const loading = ref(false)
 const searchQuery = ref('')
 const expandedIndex = ref(-1)
 const statusFilter = ref('all')
+const sseConnected = ref(false)
+let eventSource = null
 
+// 通过 SSE 实时接收日志
+function connectSSE() {
+  const password = document.cookie.match(/admin_password=([^;]+)/)?.[1] || ''
+  const url = `${location.origin}/admin/api/sse/logs?password=${encodeURIComponent(password)}`
+  
+  eventSource = new EventSource(url)
+  
+  eventSource.addEventListener('log', (e) => {
+    try {
+      const entry = JSON.parse(e.data)
+      // 去重：检查是否已存在相同记录
+      const exists = logs.value.some(l => 
+        l.time === entry.time && l.actual_model === entry.actual_model && l.account === entry.account
+      )
+      if (!exists) {
+        logs.value.unshift(entry)
+        if (logs.value.length > 500) {
+          logs.value = logs.value.slice(0, 500)
+        }
+      }
+    } catch {}
+  })
+  
+  eventSource.onopen = () => {
+    sseConnected.value = true
+  }
+  
+  eventSource.onerror = () => {
+    sseConnected.value = false
+    // 3 秒后重连
+    setTimeout(() => {
+      if (eventSource) {
+        eventSource.close()
+        connectSSE()
+      }
+    }, 3000)
+  }
+}
+
+// 传统 HTTP 加载（作为 fallback 和初始加载）
 async function loadLogs() {
   loading.value = true
   try {
@@ -55,9 +98,9 @@ function toggleExpand(i) {
 const filteredLogs = computed(() => {
   let result = logs.value
   if (statusFilter.value === 'error') {
-    result = result.filter(l => l.error)
+    result = result.filter(l => l.error || l.status === 'error')
   } else if (statusFilter.value === 'success') {
-    result = result.filter(l => !l.error)
+    result = result.filter(l => !l.error && l.status !== 'error')
   }
   if (!searchQuery.value) return result
   const q = searchQuery.value.toLowerCase()
@@ -69,9 +112,19 @@ const filteredLogs = computed(() => {
   )
 })
 
-const errorCount = computed(() => logs.value.filter(l => l.error).length)
+const errorCount = computed(() => logs.value.filter(l => l.error || l.status === 'error').length)
 
-onMounted(loadLogs)
+onMounted(async () => {
+  await loadLogs()  // 先加载历史日志
+  connectSSE()      // 再连接 SSE 接收实时日志
+})
+
+onUnmounted(() => {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+})
 </script>
 
 <template>
@@ -79,7 +132,15 @@ onMounted(loadLogs)
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div class="space-y-1">
-        <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">使用日志</h1>
+        <h1 class="text-2xl font-black tracking-tight text-[var(--text)] flex items-center gap-3">
+          使用日志
+          <span v-if="sseConnected" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> 实时
+          </span>
+          <span v-else class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-500 text-[10px] font-bold">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> 离线
+          </span>
+        </h1>
         <p class="text-sm text-[var(--text-secondary)] font-medium flex items-center gap-2">
           <History class="w-3.5 h-3.5 text-indigo-500" />
           API 调用记录 · 共 {{ logs.length }} 条
@@ -88,7 +149,7 @@ onMounted(loadLogs)
       </div>
       <div class="flex items-center gap-2">
         <button @click="loadLogs" :disabled="loading" class="flex items-center gap-2 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold hover:bg-[var(--bg)] transition-all active:scale-95">
-          <RotateCw class="w-4 h-4 text-primary" :class="{ 'animate-spin': loading }" /> 刷新
+          <RotateCw class="w-4 h-4 text-[var(--primary)]" :class="{ 'animate-spin': loading }" /> 刷新
         </button>
         <button @click="clearLogs" class="flex items-center gap-2 px-4 py-2 bg-rose-500/10 text-rose-500 rounded-xl text-sm font-bold hover:bg-rose-500 hover:text-white transition-all">
           <Trash2 class="w-4 h-4" /> 清空
@@ -99,19 +160,19 @@ onMounted(loadLogs)
     <!-- Filter Bar -->
     <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
       <div class="relative flex-1 group">
-        <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-primary transition-colors" />
+        <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-[var(--primary)] transition-colors" />
         <input 
           v-model="searchQuery"
           type="text" 
           placeholder="搜索模型、账号或错误信息..."
-          class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+          class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all"
         />
       </div>
       <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
         <button v-for="f in [{v:'all',l:'全部'},{v:'success',l:'成功'},{v:'error',l:'失败'}]" :key="f.v"
           @click="statusFilter = f.v"
           class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all"
-          :class="statusFilter === f.v ? 'bg-primary text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text)]'"
+          :class="statusFilter === f.v ? 'bg-[var(--primary)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text)]'"
         >{{ f.l }}</button>
       </div>
     </div>
@@ -136,7 +197,7 @@ onMounted(loadLogs)
               <!-- Main Row -->
               <tr
                 class="transition-colors cursor-pointer"
-                :class="log.error ? 'hover:bg-rose-500/[0.03]' : 'hover:bg-primary/[0.02]'"
+                :class="log.error ? 'hover:bg-rose-500/[0.03]' : 'hover:bg-[var(--primary)]/[0.02]'"
                 @click="toggleExpand(i)"
               >
                 <td class="px-6 py-4 whitespace-nowrap">
@@ -156,7 +217,7 @@ onMounted(loadLogs)
                 </td>
 
                 <td class="px-6 py-4">
-                  <div class="text-xs font-bold text-primary">{{ log.actual_model }}</div>
+                  <div class="text-xs font-bold text-[var(--primary)]">{{ log.actual_model }}</div>
                   <div v-if="log.original_model !== log.actual_model" class="text-[9px] text-[var(--text-secondary)]">← {{ log.original_model }}</div>
                 </td>
 
@@ -217,7 +278,7 @@ onMounted(loadLogs)
                       </div>
                       <div class="p-3 bg-[var(--bg)] rounded-xl">
                         <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">实际模型</div>
-                        <div class="text-xs font-bold font-mono text-primary">{{ log.actual_model }}</div>
+                        <div class="text-xs font-bold font-mono text-[var(--primary)]">{{ log.actual_model }}</div>
                       </div>
                       <div class="p-3 bg-[var(--bg)] rounded-xl">
                         <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">完整账号</div>

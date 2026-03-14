@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -78,20 +79,61 @@ func MapModel(model string) string {
 	return mapped
 }
 
-// DowngradeForFree 对 FREE 账号将不支持的模型降级为 claude-sonnet-4.5
-// FREE 账号只支持：claude-sonnet-4.5、claude-sonnet-4、claude-haiku-4.5
-// 非 FREE 账号（PRO/PRO_PLUS/POWER）直接返回原模型名
+// DeterminePoolTier 根据请求模型判断应使用的号池
+// 4.6 系列 → "pro"，其他所有 → "free"
+func DeterminePoolTier(model string) string {
+	// 移除 thinking 后缀做判断
+	base := strings.TrimSuffix(strings.TrimSuffix(model, "-thinking"), "-think")
+	baseLower := strings.ToLower(base)
+
+	proModels := []string{
+		"claude-sonnet-4.6", "claude-sonnet-4-6",
+		"claude-opus-4.6", "claude-opus-4-6",
+	}
+	for _, pm := range proModels {
+		if strings.Contains(baseLower, pm) {
+			return "pro"
+		}
+	}
+	return "free"
+}
+
+// ValidateAndMapModel 根据号池类型映射模型
+// FREE 池：所有模型映射到 claude-sonnet-4.5
+// PRO 池：只允许 4.6 系列
+func ValidateAndMapModel(model, subscriptionType string) (string, error) {
+	// 移除 thinking 后缀做基础判断
+	baseModel := strings.TrimSuffix(strings.TrimSuffix(model, "-thinking"), "-think")
+	baseLower := strings.ToLower(baseModel)
+
+	if subscriptionType == "" || subscriptionType == "FREE" {
+		// FREE 账号：所有模型映射到 claude-sonnet-4.5
+		return "claude-sonnet-4.5", nil
+	}
+
+	// PRO/PRO_PLUS/POWER 账号：只允许特定模型
+	allowedModels := map[string]bool{
+		"claude-sonnet-4.6": true,
+		"claude-sonnet-4-6": true,
+		"claude-opus-4.6":   true,
+		"claude-opus-4-6":   true,
+	}
+
+	if allowedModels[baseLower] {
+		return baseModel, nil
+	}
+
+	// 拒绝其他模型
+	return "", fmt.Errorf("model %s is not allowed for subscription type %s. Allowed models: claude-sonnet-4.6, claude-opus-4.6", model, subscriptionType)
+}
+
+// DowngradeForFree 向后兼容包装器（已弃用，使用 ValidateAndMapModel）
 func DowngradeForFree(model, subscriptionType string) string {
-	if subscriptionType != "" && subscriptionType != "FREE" {
-		return model
+	mapped, err := ValidateAndMapModel(model, subscriptionType)
+	if err != nil {
+		return model // 错误情况下保持原模型，由调用方处理
 	}
-	switch strings.ToLower(model) {
-	case "claude-sonnet-4-6", "claude-sonnet-4.6",
-		"claude-opus-4-6", "claude-opus-4.6",
-		"claude-opus-4-5", "claude-opus-4.5":
-		return "claude-sonnet-4.5"
-	}
-	return model
+	return mapped
 }
 
 // ==================== Claude API 类型 ====================

@@ -9,25 +9,45 @@ import (
 	"time"
 )
 
-// handleModels 模型列表
+// handleModels 模型列表（根据账号类型返回对应模型）
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
-	// 尝试用缓存的真实模型列表
-	h.modelsCacheMu.RLock()
-	cached := h.cachedModels
-	h.modelsCacheMu.RUnlock()
-
 	thinkingSuffix := config.GetThinkingConfig().Suffix
 
-	var models []map[string]interface{}
-	if len(cached) > 0 {
-		for _, m := range cached {
-			supportsImage := modelSupportsImage(m.InputTypes)
-			models = append(models, buildModelInfo(m.ModelId, "anthropic", supportsImage))
-			// 自动生成 thinking 变体
-			models = append(models, buildModelInfo(m.ModelId+thinkingSuffix, "anthropic", supportsImage))
+	// 判断当前可用账号的主要类型
+	accounts := h.pool.GetAllAccounts()
+	hasFree := false
+	hasPro := false
+	for _, acc := range accounts {
+		switch acc.SubscriptionType {
+		case "FREE", "":
+			hasFree = true
+		default: // PRO, PRO_PLUS, POWER
+			hasPro = true
 		}
-	} else {
-		// fallback 静态列表
+	}
+
+	var models []map[string]interface{}
+
+	// 根据有哪些账号类型返回对应模型
+	if hasPro {
+		// PRO 账号可用的模型
+		models = append(models,
+			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
+			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
+			buildModelInfo("claude-opus-4.6", "anthropic", true),
+			buildModelInfo("claude-opus-4.6"+thinkingSuffix, "anthropic", true),
+		)
+	}
+	if hasFree {
+		// FREE 账号可用的模型
+		models = append(models,
+			buildModelInfo("claude-sonnet-4.5", "anthropic", true),
+			buildModelInfo("claude-sonnet-4.5"+thinkingSuffix, "anthropic", true),
+		)
+	}
+
+	// 如果没有任何账号，返回默认列表
+	if len(models) == 0 {
 		models = []map[string]interface{}{
 			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
 			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
@@ -35,14 +55,9 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 			buildModelInfo("claude-opus-4.6"+thinkingSuffix, "anthropic", true),
 			buildModelInfo("claude-sonnet-4.5", "anthropic", true),
 			buildModelInfo("claude-sonnet-4.5"+thinkingSuffix, "anthropic", true),
-			buildModelInfo("claude-sonnet-4", "anthropic", true),
-			buildModelInfo("claude-sonnet-4"+thinkingSuffix, "anthropic", true),
-			buildModelInfo("claude-haiku-4.5", "anthropic", true),
-			buildModelInfo("claude-haiku-4.5"+thinkingSuffix, "anthropic", true),
-			buildModelInfo("claude-opus-4.5", "anthropic", true),
-			buildModelInfo("claude-opus-4.5"+thinkingSuffix, "anthropic", true),
 		}
 	}
+
 	// 添加别名模型
 	models = append(models,
 		buildModelInfo("auto", "kiro-proxy", true),

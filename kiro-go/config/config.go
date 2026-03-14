@@ -149,6 +149,20 @@ func Init(path string) error {
 	return Load()
 }
 
+// GetDataDir returns the directory containing the config file (used for log persistence)
+func GetDataDir() string {
+	if cfgPath == "" {
+		return "."
+	}
+	dir := cfgPath
+	for i := len(dir) - 1; i >= 0; i-- {
+		if dir[i] == '/' || dir[i] == '\\' {
+			return dir[:i]
+		}
+	}
+	return "."
+}
+
 func Load() error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -271,6 +285,23 @@ func UpdateAccount(id string, account Account) error {
 	for i, a := range cfg.Accounts {
 		if a.ID == id {
 			cfg.Accounts[i] = account
+			return Save()
+		}
+	}
+	return nil
+}
+
+// UpdateAccountBanStatus 只更新封禁相关字段，不覆盖 token
+// 避免用旧副本覆盖刚刷新的 refreshToken
+func UpdateAccountBanStatus(id string, enabled bool, banStatus, banReason string, banTime int64) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.Accounts {
+		if a.ID == id {
+			cfg.Accounts[i].Enabled = enabled
+			cfg.Accounts[i].BanStatus = banStatus
+			cfg.Accounts[i].BanReason = banReason
+			cfg.Accounts[i].BanTime = banTime
 			return Save()
 		}
 	}
@@ -401,6 +432,29 @@ func UpdateAccountStats(id string, requestCount, errorCount, totalTokens int, to
 		}
 	}
 	return nil
+}
+
+// UpdateAccountStatsNoSave 更新账号统计但不写盘（用于批量刷新）
+func UpdateAccountStatsNoSave(id string, requestCount, errorCount, totalTokens int, totalCredits float64, lastUsed int64) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.Accounts {
+		if a.ID == id {
+			cfg.Accounts[i].RequestCount = requestCount
+			cfg.Accounts[i].ErrorCount = errorCount
+			cfg.Accounts[i].TotalTokens = totalTokens
+			cfg.Accounts[i].TotalCredits = totalCredits
+			cfg.Accounts[i].LastUsed = lastUsed
+			return
+		}
+	}
+}
+
+// SaveConfig 显式保存配置到磁盘（用于批量写入后的统一保存）
+func SaveConfig() error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	return Save()
 }
 
 // UpdateAccountInfo updates an account's subscription and usage information.

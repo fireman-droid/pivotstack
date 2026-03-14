@@ -1,15 +1,23 @@
 <script setup>
 import { RouterView, useRoute, useRouter } from 'vue-router'
-import { watchEffect } from 'vue'
+import { watchEffect, onMounted } from 'vue'
 import AppLayout from './components/AppLayout.vue'
 import Toast from './components/ui/Toast.vue'
+import CopperCoinLoader from './components/ui/CopperCoinLoader.vue'
+import WorldTransition from './components/WorldTransition.vue'
 import { useAuthStore } from './stores/auth'
+import { useWorldTheme } from './stores/worldTheme'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const theme = useWorldTheme()
 
-// 严格路由鉴权增强：当检测到未授权且访问受限路由时，强制拦截
+// 初始化 data-world 属性
+onMounted(() => {
+  document.documentElement.setAttribute('data-world', theme.currentWorld)
+})
+
 watchEffect(() => {
   if (route.meta.auth && !auth.password) {
     router.replace('/login')
@@ -18,18 +26,50 @@ watchEffect(() => {
 </script>
 
 <template>
-  <!-- 只有在登录页或已通过鉴权的情况下才渲染 -->
-  <template v-if="route.path === '/login' || auth.password">
-    <AppLayout v-if="route.path !== '/login'">
-      <RouterView />
-    </AppLayout>
-    <RouterView v-else />
-  </template>
-  
-  <!-- 未鉴权且不在登录页时展示加载占位或留白，防止内容泄露 -->
-  <div v-else class="min-h-screen bg-[#030712] flex items-center justify-center">
-    <div class="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-  </div>
+  <div class="abyss-layout min-h-screen">
+    <!-- 跳过导航链接（可访问性） -->
+    <a href="#main-content" class="skip-to-content">
+      跳转到主内容
+    </a>
 
-  <Toast />
+    <!-- SVG 滤镜定义（Gooey 边界溶解） -->
+    <svg style="position: absolute; width: 0; height: 0;">
+      <defs>
+        <filter id="gooey-filter">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+          <feColorMatrix in="blur" mode="matrix" values="
+            1 0 0 0 0
+            0 1 0 0 0
+            0 0 1 0 0
+            0 0 0 18 -7
+          " result="gooey" />
+          <feComposite in="SourceGraphic" in2="gooey" operator="atop" />
+        </filter>
+      </defs>
+    </svg>
+
+    <!-- 血雾背景层（仅 daogui 模式） -->
+    <div v-if="theme.currentWorld === 'daogui'" class="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+      <div class="absolute top-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-[#c41e3a] opacity-[0.04] blur-[120px] animate-blood-mist"></div>
+      <div class="absolute bottom-[-15%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#4a1a4a] opacity-[0.06] blur-[100px] animate-blood-mist" style="animation-delay: -5s;"></div>
+    </div>
+
+    <!-- 世界过渡动画 -->
+    <WorldTransition :currentWorld="theme.currentWorld" />
+
+    <!-- 已授权 -->
+    <template v-if="route.path === '/login' || auth.password">
+      <AppLayout v-if="route.path !== '/login'">
+        <RouterView />
+      </AppLayout>
+      <RouterView v-else />
+    </template>
+
+    <!-- 未授权：铜钱加载 -->
+    <div v-else class="min-h-screen flex items-center justify-center relative z-10">
+      <CopperCoinLoader />
+    </div>
+
+    <Toast />
+  </div>
 </template>

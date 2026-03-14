@@ -57,7 +57,7 @@ var kiroHttpClient = func() *http.Client {
 			transport.Proxy = http.ProxyURL(u)
 		}
 	}
-	return &http.Client{Timeout: 5 * time.Minute, Transport: transport}
+	return &http.Client{Timeout: 0, Transport: transport} // Timeout=0: 流式响应不设超时，避免长输出被截断
 }()
 
 // ==================== 请求结构 ====================
@@ -166,9 +166,9 @@ func getSortedEndpoints(preferred string) []kiroEndpoint {
 }
 
 // CallKiroAPI 调用 Kiro API（流式），双端点自动 fallback
-func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroStreamCallback) error {
+func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroStreamCallback) (*UpstreamError, error) {
 	if _, err := json.Marshal(payload); err != nil {
-		return err
+		return nil, err
 	}
 
 	// User-Agent
@@ -186,6 +186,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())
 
 	var lastErr error
+	var lastUpstreamErr *UpstreamError
 	for _, ep := range endpoints {
 		// 更新 payload 中的 origin
 		payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
@@ -218,6 +219,12 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...\n", ep.Name)
+			lastUpstreamErr = &UpstreamError{
+				StatusCode: 429,
+				Endpoint:   ep.Name,
+				Body:       "quota exhausted",
+				AccountID:  account.ID,
+			}
 			lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
 			continue
 		}
@@ -225,10 +232,17 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		if resp.StatusCode != 200 {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
+			upstreamErr := &UpstreamError{
+				StatusCode: resp.StatusCode,
+				Endpoint:   ep.Name,
+				Body:       string(errBody),
+				AccountID:  account.ID,
+			}
+			lastUpstreamErr = upstreamErr
+			lastErr = upstreamErr
 			// 认证错误不继续尝试
 			if resp.StatusCode == 401 || resp.StatusCode == 403 {
-				return lastErr
+				return upstreamErr, upstreamErr
 			}
 			fmt.Printf("[KiroAPI] Endpoint %s error %d | payload: %dKB | response: %s\n",
 				ep.Name, resp.StatusCode, len(reqBody)/1024, string(errBody))
@@ -237,13 +251,13 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 
 		err = parseEventStream(resp.Body, callback)
 		resp.Body.Close()
-		return err
+		return nil, err
 	}
 
 	if lastErr != nil {
-		return lastErr
+		return lastUpstreamErr, lastErr
 	}
-	return fmt.Errorf("all endpoints failed")
+	return nil, fmt.Errorf("all endpoints failed")
 }
 
 // ==================== Event Stream 解析 ====================
@@ -256,6 +270,9 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 	var currentToolUse *toolUseState
 	var lastAssistantContent string
 	var lastReasoningContent string
+	var totalBytesRead int64
+	var eventCount int
+	streamStart := time.Now()
 
 	for {
 		// Prelude: 12 bytes (total_len + headers_len + crc)
@@ -265,8 +282,13 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 			break
 		}
 		if err != nil {
-			return err
+			duration := time.Since(streamStart)
+			fmt.Printf("[StreamError] Prelude read failed after %d events, %d bytes, %.1fs: %v\n",
+				eventCount, totalBytesRead, duration.Seconds(), err)
+			return fmt.Errorf("stream interrupted after %d events (%.1fs, %dB): %w",
+				eventCount, duration.Seconds(), totalBytesRead, err)
 		}
+		totalBytesRead += 12
 
 		totalLength := int(prelude[0])<<24 | int(prelude[1])<<16 | int(prelude[2])<<8 | int(prelude[3])
 		headersLength := int(prelude[4])<<24 | int(prelude[5])<<16 | int(prelude[6])<<8 | int(prelude[7])
@@ -280,8 +302,13 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 		msgBuf := make([]byte, remaining)
 		_, err = io.ReadFull(body, msgBuf)
 		if err != nil {
-			return err
+			duration := time.Since(streamStart)
+			fmt.Printf("[StreamError] Payload read failed after %d events, %d bytes, %.1fs (expected %d more bytes): %v\n",
+				eventCount, totalBytesRead, duration.Seconds(), remaining, err)
+			return fmt.Errorf("stream interrupted reading payload after %d events (%.1fs, %dB): %w",
+				eventCount, duration.Seconds(), totalBytesRead, err)
 		}
+		totalBytesRead += int64(remaining)
 
 		if headersLength > len(msgBuf)-4 {
 			continue
@@ -292,6 +319,7 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 		if len(payloadBytes) == 0 {
 			continue
 		}
+		eventCount++
 
 		var event map[string]interface{}
 		if err := json.Unmarshal(payloadBytes, &event); err != nil {
@@ -324,6 +352,9 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 			}
 		}
 	}
+
+	duration := time.Since(streamStart)
+	fmt.Printf("[Stream] Complete: %d events, %d bytes, %.1fs\n", eventCount, totalBytesRead, duration.Seconds())
 
 	if callback.OnCredits != nil && totalCredits > 0 {
 		callback.OnCredits(totalCredits)
