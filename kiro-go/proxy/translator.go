@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -326,7 +327,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// 构建最终内容
 	finalContent := ""
 	if systemPrompt != "" {
-		finalContent = "--- SYSTEM PROMPT ---\n" + systemPrompt + "\n--- END SYSTEM PROMPT ---\n\n"
+		finalContent = "<instructions>\n" + systemPrompt + "\n</instructions>\n\n"
 	}
 	if currentContent != "" {
 		finalContent += currentContent
@@ -532,6 +533,22 @@ func extractClaudeAssistantContent(content interface{}) (string, []KiroToolUse) 
 	return text, toolUses
 }
 
+// toolNameMapping 存储 shortened → original 的工具名映射（线程安全）
+var (
+	toolNameMap   = make(map[string]string)
+	toolNameMapMu sync.RWMutex
+)
+
+// RestoreToolName 将截断后的工具名还原为原始名称
+func RestoreToolName(shortened string) string {
+	toolNameMapMu.RLock()
+	defer toolNameMapMu.RUnlock()
+	if original, ok := toolNameMap[shortened]; ok {
+		return original
+	}
+	return shortened
+}
+
 func convertClaudeTools(tools []ClaudeTool) []KiroToolWrapper {
 	if len(tools) == 0 {
 		return nil
@@ -543,8 +560,15 @@ func convertClaudeTools(tools []ClaudeTool) []KiroToolWrapper {
 		if len(desc) > maxToolDescLen {
 			desc = desc[:maxToolDescLen] + "..."
 		}
+		shortened := shortenToolName(tool.Name)
+		// 注册映射（仅在名字被改变时）
+		if shortened != tool.Name {
+			toolNameMapMu.Lock()
+			toolNameMap[shortened] = tool.Name
+			toolNameMapMu.Unlock()
+		}
 		result[i] = KiroToolWrapper{}
-		result[i].ToolSpecification.Name = shortenToolName(tool.Name)
+		result[i].ToolSpecification.Name = shortened
 		result[i].ToolSpecification.Description = desc
 		result[i].ToolSpecification.InputSchema = InputSchema{JSON: tool.InputSchema}
 	}

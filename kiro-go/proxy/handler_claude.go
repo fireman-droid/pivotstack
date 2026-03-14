@@ -429,6 +429,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			processClaudeText(text, isThinking, false)
 		},
 		OnToolUse: func(tu KiroToolUse) {
+			tu.Name = RestoreToolName(tu.Name)
 			// 先刷新缓冲区
 			processClaudeText("", false, true)
 			rawContentBuilder.WriteString(tu.Name)
@@ -566,6 +567,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 			}
 		},
 		OnToolUse: func(tu KiroToolUse) {
+			tu.Name = RestoreToolName(tu.Name)
 			toolUses = append(toolUses, tu)
 		},
 		OnComplete: func(inTok, outTok int) {

@@ -360,6 +360,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			processText(text, isThinking, false)
 		},
 		OnToolUse: func(tu KiroToolUse) {
+			tu.Name = RestoreToolName(tu.Name)
 			// 先刷新缓冲区
 			processText("", false, true)
 
@@ -500,7 +501,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 				content += text
 			}
 		},
-		OnToolUse:  func(tu KiroToolUse) { toolUses = append(toolUses, tu) },
+		OnToolUse:  func(tu KiroToolUse) { tu.Name = RestoreToolName(tu.Name); toolUses = append(toolUses, tu) },
 		OnComplete: func(inTok, outTok int) { inputTokens = inTok; outputTokens = outTok },
 		OnError:    func(err error) { h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429")) },
 		OnCredits:  func(c float64) { credits = c },
