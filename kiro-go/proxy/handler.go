@@ -7,6 +7,7 @@ import (
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,19 @@ import (
 	"sync"
 	"time"
 )
+
+func init() {
+	mime.AddExtensionType(".css", "text/css")
+	mime.AddExtensionType(".js", "application/javascript")
+	mime.AddExtensionType(".json", "application/json")
+	mime.AddExtensionType(".svg", "image/svg+xml")
+	mime.AddExtensionType(".woff", "font/woff")
+	mime.AddExtensionType(".woff2", "font/woff2")
+	mime.AddExtensionType(".ttf", "font/ttf")
+	mime.AddExtensionType(".png", "image/png")
+	mime.AddExtensionType(".jpg", "image/jpeg")
+	mime.AddExtensionType(".ico", "image/x-icon")
+}
 
 // Handler HTTP 处理器
 type Handler struct {
