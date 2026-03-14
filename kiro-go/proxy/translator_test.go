@@ -53,23 +53,40 @@ func TestOpenAIToKiroPreservesStructuredAssistantAndToolContent(t *testing.T) {
 
 	payload := OpenAIToKiro(req, false)
 
-	if len(payload.ConversationState.History) != 2 {
-		t.Fatalf("expected 2 history items, got %d", len(payload.ConversationState.History))
+	// history: system-user + system-assistant-ack + user(first-question) + assistant(assistant-structured) = 4
+	if len(payload.ConversationState.History) != 4 {
+		t.Fatalf("expected 4 history items, got %d", len(payload.ConversationState.History))
 	}
 
-	firstHistoryUser := payload.ConversationState.History[0].UserInputMessage
-	if firstHistoryUser == nil {
-		t.Fatalf("expected first history item to be user message")
+	// history[0]: system prompt as user message
+	sysUser := payload.ConversationState.History[0].UserInputMessage
+	if sysUser == nil {
+		t.Fatalf("expected first history item to be system prompt user message")
 	}
-	if !strings.Contains(firstHistoryUser.Content, "system-a") ||
-		!strings.Contains(firstHistoryUser.Content, "system-b") ||
-		!strings.Contains(firstHistoryUser.Content, "first-question") {
-		t.Fatalf("expected merged system+user content, got %q", firstHistoryUser.Content)
+	if !strings.Contains(sysUser.Content, "system-a") ||
+		!strings.Contains(sysUser.Content, "system-b") {
+		t.Fatalf("expected system prompt content, got %q", sysUser.Content)
 	}
 
-	historyAssistant := payload.ConversationState.History[1].AssistantResponseMessage
+	// history[1]: assistant ack
+	sysAck := payload.ConversationState.History[1].AssistantResponseMessage
+	if sysAck == nil || sysAck.Content != "I will follow these instructions." {
+		t.Fatalf("expected assistant ack for system prompt")
+	}
+
+	// history[2]: first user question
+	firstUser := payload.ConversationState.History[2].UserInputMessage
+	if firstUser == nil {
+		t.Fatalf("expected third history item to be user message")
+	}
+	if !strings.Contains(firstUser.Content, "first-question") {
+		t.Fatalf("expected first-question in user content, got %q", firstUser.Content)
+	}
+
+	// history[3]: assistant response
+	historyAssistant := payload.ConversationState.History[3].AssistantResponseMessage
 	if historyAssistant == nil {
-		t.Fatalf("expected second history item to be assistant message")
+		t.Fatalf("expected fourth history item to be assistant message")
 	}
 	if historyAssistant.Content != "assistant-structured" {
 		t.Fatalf("expected assistant structured content to be preserved, got %q", historyAssistant.Content)

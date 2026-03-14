@@ -273,7 +273,11 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 
 	// 如果启用 thinking 模式，注入 thinking 提示
 	if thinking {
-		systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+		if systemPrompt != "" {
+			systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+		} else {
+			systemPrompt = ThinkingModePrompt
+		}
 	}
 
 	// 合并连续的同角色消息（Kiro API 要求严格的 user/assistant 交替）
@@ -284,6 +288,22 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	var currentContent string
 	var currentImages []KiroImage
 	var currentToolResults []KiroToolResult
+
+	// 系统提示词作为 history 的第一轮对话（user + assistant 确认）
+	if systemPrompt != "" {
+		history = append(history, KiroHistoryMessage{
+			UserInputMessage: &KiroUserInputMessage{
+				Content: systemPrompt,
+				ModelID: modelID,
+				Origin:  origin,
+			},
+		})
+		history = append(history, KiroHistoryMessage{
+			AssistantResponseMessage: &KiroAssistantResponseMessage{
+				Content: "I will follow these instructions.",
+			},
+		})
+	}
 
 	for i, msg := range messages {
 		isLast := i == len(messages)-1
@@ -325,7 +345,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		}
 	}
 
-	// 确保 history 以 user 开始
+	// 确保 history 以 user 开始（仅在没有系统提示词且首条是 assistant 时）
 	if len(history) > 0 && history[0].AssistantResponseMessage != nil {
 		history = append([]KiroHistoryMessage{{
 			UserInputMessage: &KiroUserInputMessage{
@@ -336,19 +356,16 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		}}, history...)
 	}
 
-	// 构建最终内容
+	// 构建最终内容（不再嵌入系统提示词）
 	finalContent := ""
-	if systemPrompt != "" {
-		finalContent = "<instructions>\n" + systemPrompt + "\n</instructions>\n\n"
-	}
 	if currentContent != "" {
-		finalContent += currentContent
+		finalContent = currentContent
 	} else if len(currentImages) > 0 {
-		finalContent += normalizeUserContent("", true)
+		finalContent = normalizeUserContent("", true)
 	} else if len(currentToolResults) > 0 {
-		finalContent += buildToolResultsContinuation(currentToolResults)
+		finalContent = buildToolResultsContinuation(currentToolResults)
 	} else {
-		finalContent += minimalFallbackUserContent
+		finalContent = minimalFallbackUserContent
 	}
 
 	// 转换工具
@@ -728,10 +745,15 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 			nonSystemMessages = append(nonSystemMessages, msg)
 		}
 	}
+	systemPrompt = strings.TrimRight(systemPrompt, "\n")
 
 	// 如果启用 thinking 模式，注入 thinking 提示
 	if thinking {
-		systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+		if systemPrompt != "" {
+			systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+		} else {
+			systemPrompt = ThinkingModePrompt
+		}
 	}
 
 	// 构建历史消息
@@ -739,7 +761,22 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	var currentContent string
 	var currentImages []KiroImage
 	var currentToolResults []KiroToolResult
-	systemMerged := false
+
+	// 系统提示词作为 history 的第一轮对话（user + assistant 确认）
+	if systemPrompt != "" {
+		history = append(history, KiroHistoryMessage{
+			UserInputMessage: &KiroUserInputMessage{
+				Content: systemPrompt,
+				ModelID: modelID,
+				Origin:  origin,
+			},
+		})
+		history = append(history, KiroHistoryMessage{
+			AssistantResponseMessage: &KiroAssistantResponseMessage{
+				Content: "I will follow these instructions.",
+			},
+		})
+	}
 
 	for i, msg := range nonSystemMessages {
 		isLast := i == len(nonSystemMessages)-1
@@ -748,12 +785,6 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		case "user":
 			content, images := extractOpenAIUserContent(msg.Content)
 			content = normalizeUserContent(content, len(images) > 0)
-
-			// 第一条 user 消息合并 system prompt
-			if !systemMerged && systemPrompt != "" {
-				content = systemPrompt + "\n" + content
-				systemMerged = true
-			}
 
 			if isLast {
 				currentContent = content
@@ -821,7 +852,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		}
 	}
 
-	// 构建最终内容
+	// 构建最终内容（不再嵌入系统提示词）
 	finalContent := currentContent
 	if finalContent == "" {
 		if len(currentImages) > 0 {
@@ -831,9 +862,6 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		} else {
 			finalContent = minimalFallbackUserContent
 		}
-	}
-	if !systemMerged && systemPrompt != "" {
-		finalContent = systemPrompt + "\n" + finalContent
 	}
 
 	// 转换工具
