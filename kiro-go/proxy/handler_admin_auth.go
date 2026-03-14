@@ -60,14 +60,16 @@ func (h *Handler) apiCompleteIamSso(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Unix() + int64(expiresIn),
 		Enabled:   true, MachineId: config.GenerateMachineId(),
 	}
-	if err := config.AddAccount(account); err != nil {
+	id, isNew, err := config.AddOrUpdateAccount(account)
+	if err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	h.pool.Reload()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true, "account": map[string]interface{}{"id": account.ID, "email": account.Email},
+		"success": true, "isNew": isNew,
+		"account": map[string]interface{}{"id": id, "email": account.Email},
 	})
 }
 
@@ -122,15 +124,16 @@ func (h *Handler) apiPollBuilderIdAuth(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Unix() + int64(expiresIn),
 		Enabled:   true, MachineId: config.GenerateMachineId(),
 	}
-	if err := config.AddAccount(account); err != nil {
+	id, isNew, err := config.AddOrUpdateAccount(account)
+	if err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	h.pool.Reload()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true, "completed": true,
-		"account": map[string]interface{}{"id": account.ID, "email": account.Email},
+		"success": true, "completed": true, "isNew": isNew,
+		"account": map[string]interface{}{"id": id, "email": account.Email},
 	})
 }
 
@@ -171,11 +174,12 @@ func (h *Handler) apiImportSsoToken(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt: time.Now().Unix() + int64(expiresIn),
 			Enabled:   true, MachineId: config.GenerateMachineId(),
 		}
-		if err := config.AddAccount(account); err != nil {
+		id, isNew, err := config.AddOrUpdateAccount(account)
+		if err != nil {
 			errors = append(errors, err.Error())
 			continue
 		}
-		imported = append(imported, map[string]interface{}{"id": account.ID, "email": account.Email})
+		imported = append(imported, map[string]interface{}{"id": id, "email": account.Email, "isNew": isNew})
 	}
 	h.pool.Reload()
 	if len(imported) == 0 && len(errors) > 0 {
@@ -296,11 +300,13 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 		account.LastRefresh = time.Now().Unix()
 	}
 
-	if err := config.AddAccount(account); err != nil {
+	id, isNew, err := config.AddOrUpdateAccount(account)
+	if err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	account.ID = id
 	h.pool.Reload()
 
 	// 异步刷新配额（仅在没有 usageData 且刷新成功时）
@@ -320,7 +326,8 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true, "account": map[string]interface{}{"id": account.ID, "email": account.Email},
+		"success": true, "isNew": isNew,
+		"account": map[string]interface{}{"id": account.ID, "email": account.Email},
 	})
 }
 

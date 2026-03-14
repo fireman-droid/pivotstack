@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -399,11 +400,74 @@ func copyModelCounts(src map[string]int64) map[string]int64 {
 	return dst
 }
 
+// FindAccountByEmail returns the index of an account with matching email, or -1.
+// Must be called with cfgLock held.
+func findAccountByEmailLocked(email string) int {
+	if email == "" {
+		return -1
+	}
+	emailLower := strings.ToLower(strings.TrimSpace(email))
+	for i, a := range cfg.Accounts {
+		if strings.ToLower(strings.TrimSpace(a.Email)) == emailLower {
+			return i
+		}
+	}
+	return -1
+}
+
+func FindAccountByEmail(email string) *Account {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	idx := findAccountByEmailLocked(email)
+	if idx < 0 {
+		return nil
+	}
+	a := cfg.Accounts[idx]
+	return &a
+}
+
 func AddAccount(account Account) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
+	if idx := findAccountByEmailLocked(account.Email); idx >= 0 {
+		return fmt.Errorf("duplicate: account with email %s already exists (id: %s)", account.Email, cfg.Accounts[idx].ID)
+	}
 	cfg.Accounts = append(cfg.Accounts, account)
 	return Save()
+}
+
+// AddOrUpdateAccount adds a new account, or updates credentials if one with the same email exists.
+// Returns (accountID, isNew, error).
+func AddOrUpdateAccount(account Account) (string, bool, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if idx := findAccountByEmailLocked(account.Email); idx >= 0 {
+		existing := &cfg.Accounts[idx]
+		if account.AccessToken != "" {
+			existing.AccessToken = account.AccessToken
+		}
+		if account.RefreshToken != "" {
+			existing.RefreshToken = account.RefreshToken
+		}
+		if account.ClientID != "" {
+			existing.ClientID = account.ClientID
+		}
+		if account.ClientSecret != "" {
+			existing.ClientSecret = account.ClientSecret
+		}
+		if account.ExpiresAt > 0 {
+			existing.ExpiresAt = account.ExpiresAt
+		}
+		existing.Enabled = true
+		if existing.BanStatus != "" && existing.BanStatus != "ACTIVE" {
+			existing.BanStatus = "ACTIVE"
+			existing.BanReason = ""
+			existing.BanTime = 0
+		}
+		return existing.ID, false, Save()
+	}
+	cfg.Accounts = append(cfg.Accounts, account)
+	return account.ID, true, Save()
 }
 
 func UpdateAccount(id string, account Account) error {
