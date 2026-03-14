@@ -12,11 +12,13 @@ package config
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // GenerateMachineId generates a UUID v4 format machine identifier.
@@ -87,15 +89,34 @@ type Account struct {
 	TotalCredits float64 `json:"totalCredits,omitempty"` // Cumulative credits consumed
 }
 
+// ApiKeyInfo represents a commercial API key with subscription and usage stats.
+type ApiKeyInfo struct {
+	ID        string           `json:"id"`
+	Key       string           `json:"key"`
+	Tier      string           `json:"tier"`             // "normal" | "pro"
+	Plan      string           `json:"plan"`             // "timed"
+	ExpiresAt int64            `json:"expiresAt"`        // Unix seconds, 0 = never
+	Enabled   bool             `json:"enabled"`
+	Note      string           `json:"note,omitempty"`
+	CreatedAt int64            `json:"createdAt"`
+	LastUsed  int64            `json:"lastUsed,omitempty"`
+	Requests  int64            `json:"requests"`
+	Errors    int64            `json:"errors"`
+	Tokens    int64            `json:"tokens"`
+	Credits   float64          `json:"credits"`
+	Models    map[string]int64 `json:"models,omitempty"`
+}
+
 // Config represents the global application configuration.
 type Config struct {
 	// Server settings
 	Password      string    `json:"password"`         // Admin panel password
 	Port          int       `json:"port"`             // HTTP server port (default: 8080)
 	Host          string    `json:"host"`             // HTTP server bind address (default: 0.0.0.0)
-	ApiKey        string    `json:"apiKey,omitempty"` // API key for client authentication
-	RequireApiKey bool      `json:"requireApiKey"`    // Whether to enforce API key validation
-	Accounts      []Account `json:"accounts"`         // Registered Kiro accounts
+	ApiKey        string       `json:"apiKey,omitempty"` // Legacy single key (auto-migrated)
+	RequireApiKey bool         `json:"requireApiKey"`    // Whether to enforce API key validation
+	ApiKeys       []ApiKeyInfo `json:"apiKeys,omitempty"`
+	Accounts      []Account    `json:"accounts"`
 
 	// Thinking mode configuration for extended reasoning output
 	ThinkingSuffix       string `json:"thinkingSuffix,omitempty"`       // Model suffix to trigger thinking mode (default: "-thinking")
@@ -188,7 +209,20 @@ func Load() error {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return err
 	}
+	// Backward-compatible migration: single ApiKey → ApiKeys[]
+	migrated := false
+	if len(c.ApiKeys) == 0 && c.ApiKey != "" {
+		c.ApiKeys = []ApiKeyInfo{{
+			ID: GenerateMachineId(), Key: c.ApiKey, Tier: "pro", Plan: "timed",
+			ExpiresAt: 0, Enabled: true, Note: "migrated", CreatedAt: time.Now().Unix(),
+		}}
+		c.ApiKey = ""
+		migrated = true
+	}
 	cfg = &c
+	if migrated {
+		return Save()
+	}
 	return nil
 }
 
@@ -270,6 +304,99 @@ func GetEnabledAccounts() []Account {
 		}
 	}
 	return accounts
+}
+
+// ==================== API Key CRUD ====================
+
+func FindApiKey(key string) *ApiKeyInfo {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	for _, k := range cfg.ApiKeys {
+		if k.Key == key {
+			c := k
+			if c.Models != nil {
+				c.Models = copyModelCounts(c.Models)
+			}
+			return &c
+		}
+	}
+	return nil
+}
+
+func GetAllApiKeys() []ApiKeyInfo {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	keys := make([]ApiKeyInfo, len(cfg.ApiKeys))
+	for i, k := range cfg.ApiKeys {
+		keys[i] = k
+		if k.Models != nil {
+			keys[i].Models = copyModelCounts(k.Models)
+		}
+	}
+	return keys
+}
+
+func AddApiKey(key ApiKeyInfo) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.ApiKeys = append(cfg.ApiKeys, key)
+	return Save()
+}
+
+func DeleteApiKey(id string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == id {
+			cfg.ApiKeys = append(cfg.ApiKeys[:i], cfg.ApiKeys[i+1:]...)
+			return Save()
+		}
+	}
+	return nil
+}
+
+func UpdateApiKey(id string, key ApiKeyInfo) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == id {
+			cfg.ApiKeys[i] = key
+			return Save()
+		}
+	}
+	return nil
+}
+
+func UpdateApiKeyStatsNoSave(id string, lastUsed, requests, errors, tokens int64, credits float64, models map[string]int64) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == id {
+			cfg.ApiKeys[i].LastUsed = lastUsed
+			cfg.ApiKeys[i].Requests = requests
+			cfg.ApiKeys[i].Errors = errors
+			cfg.ApiKeys[i].Tokens = tokens
+			cfg.ApiKeys[i].Credits = credits
+			if models != nil {
+				cfg.ApiKeys[i].Models = copyModelCounts(models)
+			}
+			return
+		}
+	}
+}
+
+func GenerateApiKeyString() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "sk-" + hex.EncodeToString(b)
+}
+
+func copyModelCounts(src map[string]int64) map[string]int64 {
+	dst := make(map[string]int64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func AddAccount(account Account) error {

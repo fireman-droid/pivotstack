@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"kiro-api-proxy/auth"
@@ -34,11 +35,40 @@ type Handler struct {
 	// 调用日志
 	callLogs   []CallLog
 	callLogsMu sync.RWMutex
+	// API Key 统计 (内存缓存)
+	apiKeyStats   map[string]*ApiKeyStats
+	apiKeyStatsMu sync.RWMutex
 	// SSE 实时日志订阅
 	logSubscribers   map[chan CallLog]bool
 	logSubscribersMu sync.RWMutex
 	// Credit 消耗预测
-	creditPredictor *CreditPredictor
+	creditPredictor     *CreditPredictor
+	proCreditPredictor  *CreditPredictor
+	freeCreditPredictor *CreditPredictor
+}
+
+type contextKeyType string
+
+const userCtxKey contextKeyType = "userCtx"
+
+// UserContext holds per-request API key context.
+type UserContext struct {
+	KeyID   string
+	KeyTier string // "normal" | "pro"
+}
+
+func withUserContext(r *http.Request, uc *UserContext) *http.Request {
+	if uc == nil {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), userCtxKey, uc))
+}
+
+func getUserContext(ctx context.Context) *UserContext {
+	if v, ok := ctx.Value(userCtxKey).(*UserContext); ok {
+		return v
+	}
+	return nil
 }
 
 // CallLog 单次调用记录（结构化日志）
@@ -49,6 +79,8 @@ type CallLog struct {
 	OriginalModel   string  `json:"original_model"`
 	ActualModel     string  `json:"actual_model"`
 	Account         string  `json:"account"`
+	ApiKeyID        string  `json:"api_key_id,omitempty"`
+	ApiKeyTier      string  `json:"api_key_tier,omitempty"`
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	TotalTokens     int     `json:"total_tokens"`
@@ -103,8 +135,11 @@ func NewHandler() *Handler {
 		startTime:       time.Now().Unix(),
 		stopRefresh:     make(chan struct{}),
 		stopStatsSaver:  make(chan struct{}),
-		logSubscribers:  make(map[chan CallLog]bool),
-		creditPredictor: newCreditPredictor(200, 0.3),
+		// apiKeyStats:         make(map[string]*ApiKeyStats), // TODO: 定义 ApiKeyStats 后启用
+		logSubscribers:      make(map[chan CallLog]bool),
+		creditPredictor:     newCreditPredictor(200, 0.3),
+		proCreditPredictor:  newCreditPredictor(200, 0.3),
+		freeCreditPredictor: newCreditPredictor(200, 0.3),
 	}
 	// 从磁盘恢复历史日志和 CreditPredictor
 	h.loadLogsFromDisk()
@@ -206,15 +241,11 @@ func (h *Handler) refreshAllAccounts() {
 		refreshed, failed, skipped, len(accounts))
 }
 
-// validateApiKey 验证 API Key
-func (h *Handler) validateApiKey(r *http.Request) bool {
+// resolveApiKey resolves the API key from the request and returns a UserContext.
+// Returns (nil, nil) when API key validation is disabled.
+func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 	if !config.IsApiKeyRequired() {
-		return true
-	}
-
-	expectedKey := config.GetApiKey()
-	if expectedKey == "" {
-		return true
+		return &UserContext{KeyTier: "pro"}, nil
 	}
 
 	authHeader := r.Header.Get("Authorization")
@@ -227,7 +258,22 @@ func (h *Handler) validateApiKey(r *http.Request) bool {
 		providedKey = apiKeyHeader
 	}
 
-	return providedKey == expectedKey
+	if providedKey == "" {
+		return nil, fmt.Errorf("missing api key")
+	}
+
+	info := config.FindApiKey(providedKey)
+	if info == nil {
+		return nil, fmt.Errorf("invalid api key")
+	}
+	if !info.Enabled {
+		return nil, fmt.Errorf("api key disabled")
+	}
+	if info.Plan == "timed" && info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
+		return nil, fmt.Errorf("api key expired")
+	}
+
+	return &UserContext{KeyID: info.ID, KeyTier: info.Tier}, nil
 }
 
 // ServeHTTP 路由分发
@@ -252,23 +298,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case path == "/v1/messages" || path == "/messages" || path == "/anthropic/v1/messages":
-		if !h.validateApiKey(r) {
-			h.sendClaudeError(w, 401, "authentication_error", "Invalid or missing API key")
+		uc, err := h.resolveApiKey(r)
+		if err != nil {
+			h.sendClaudeError(w, 401, "authentication_error", err.Error())
 			return
 		}
-		h.handleClaudeMessages(w, r)
+		h.handleClaudeMessages(w, withUserContext(r, uc))
 	case path == "/v1/messages/count_tokens" || path == "/messages/count_tokens":
-		if !h.validateApiKey(r) {
-			h.sendClaudeError(w, 401, "authentication_error", "Invalid or missing API key")
+		uc, err := h.resolveApiKey(r)
+		if err != nil {
+			h.sendClaudeError(w, 401, "authentication_error", err.Error())
 			return
 		}
-		h.handleCountTokens(w, r)
+		h.handleCountTokens(w, withUserContext(r, uc))
 	case path == "/v1/chat/completions" || path == "/chat/completions":
-		if !h.validateApiKey(r) {
-			h.sendOpenAIError(w, 401, "authentication_error", "Invalid or missing API key")
+		uc, err := h.resolveApiKey(r)
+		if err != nil {
+			h.sendOpenAIError(w, 401, "authentication_error", err.Error())
 			return
 		}
-		h.handleOpenAIChat(w, r)
+		h.handleOpenAIChat(w, withUserContext(r, uc))
 	case path == "/v1/models" || path == "/models":
 		h.handleModels(w, r)
 	case path == "/api/event_logging/batch":
@@ -301,7 +350,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleHealth(w, r)
 
 	case path == "/v1/stats":
-		if !h.validateApiKey(r) {
+		if _, err := h.resolveApiKey(r); err != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(401)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid or missing API key"})

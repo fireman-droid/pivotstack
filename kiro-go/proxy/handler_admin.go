@@ -380,9 +380,11 @@ func (h *Handler) apiGetStatus(w http.ResponseWriter, r *http.Request) {
 		"totalRequests": h.totalRequests, "successRequests": h.successRequests,
 		"failedRequests": h.failedRequests, "totalTokens": h.totalTokens,
 		"totalCredits": h.totalCredits, "uptime": time.Now().Unix() - h.startTime,
-		"freePool":   freePool,
-		"proPool":    proPool,
-		"prediction": h.creditPredictor.Predict(proRemaining + freeRemaining),
+		"freePool":       freePool,
+		"proPool":        proPool,
+		"prediction":     h.creditPredictor.Predict(proRemaining + freeRemaining),
+		"proPrediction":  h.proCreditPredictor.Predict(proRemaining),
+		"freePrediction": h.freeCreditPredictor.Predict(freeRemaining),
 	})
 }
 
@@ -606,6 +608,8 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 	remaining := (proTotal - proUsed) + (freeTotal - freeUsed)
 
 	prediction := h.creditPredictor.Predict(remaining)
+	proPrediction := h.proCreditPredictor.Predict(proTotal - proUsed)
+	freePrediction := h.freeCreditPredictor.Predict(freeTotal - freeUsed)
 
 	// 成本计算（1 Credit = 0.04 元）
 	costPerCredit := 0.04
@@ -645,7 +649,9 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 			"pro":  map[string]interface{}{"used": proUsed, "total": proTotal, "remaining": proTotal - proUsed, "accounts": proPool.Total},
 			"free": map[string]interface{}{"used": freeUsed, "total": freeTotal, "remaining": freeTotal - freeUsed, "accounts": freePool.Total},
 		},
-		"prediction": prediction,
+		"prediction":     prediction,
+		"proPrediction":  proPrediction,
+		"freePrediction": freePrediction,
 		"pricingHints": map[string]string{
 			"costFormula":    "用户面板扣费 = 起步价 + (Token费 × 模型倍率)",
 			"revenueFormula": "真实收入 = 用户面板扣费 × 0.2 元/刀",

@@ -38,8 +38,14 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	maxRetries := 3
 	var lastErr error
 
-	// 先根据模型确定号池
-	tier := DeterminePoolTier(req.Model)
+	// 用户层 tier 决策（必须在 GetNextByTier 之前）
+	uc := getUserContext(r.Context())
+	userTier := ""
+	if uc != nil {
+		userTier = uc.KeyTier
+	}
+	tier, effectiveModel := DetermineUserTier(req.Model, userTier)
+	req.Model = effectiveModel
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		account := h.pool.GetNextByTier(tier)
@@ -455,7 +461,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, true, credits, "", "")
+	h.addCallLog("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送结束
 	finishReason := "stop"
@@ -544,7 +550,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, inputTokens, outputTokens, false, credits, "", "")
+	h.addCallLog("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "")
 
 	thinkingFormat := config.GetThinkingConfig().OpenAIFormat
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -302,12 +303,19 @@ func (h *Handler) loadLogsFromDisk() {
 	creditRestored := 0
 	for _, entry := range allLogs {
 		if entry.Credits > 0 && entry.Timestamp > 0 {
-			h.creditPredictor.Add(CreditRecord{
+			rec := CreditRecord{
 				Timestamp: entry.Timestamp,
 				Credits:   entry.Credits,
 				Model:     entry.ActualModel,
 				Tokens:    entry.TotalTokens,
-			})
+			}
+			h.creditPredictor.Add(rec)
+			// 按 tier 分流
+			if strings.EqualFold(entry.Subscription, "PRO") {
+				h.proCreditPredictor.Add(rec)
+			} else {
+				h.freeCreditPredictor.Add(rec)
+			}
 			creditRestored++
 		}
 	}
@@ -404,7 +412,7 @@ func (h *Handler) recordSuccess(inputTokens, outputTokens int, credits float64) 
 	h.addCredits(credits)
 }
 
-func (h *Handler) addCallLog(apiType, originalModel, actualModel, account string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string) {
+func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
 	entry := CallLog{
@@ -420,6 +428,7 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account string
 		Credits:         credits,
 		Stream:          stream,
 		Status:          "success",
+		Subscription:    tier,
 		RequestSummary:  reqSummary,
 		ResponseSummary: respSummary,
 	}
@@ -433,12 +442,18 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account string
 
 	// 记录 credit 历史用于预测
 	if credits > 0 && h.creditPredictor != nil {
-		h.creditPredictor.Add(CreditRecord{
+		rec := CreditRecord{
 			Timestamp: now.Unix(),
 			Credits:   credits,
 			Model:     actualModel,
 			Tokens:    inputTokens + outputTokens,
-		})
+		}
+		h.creditPredictor.Add(rec)
+		if strings.EqualFold(tier, "PRO") {
+			h.proCreditPredictor.Add(rec)
+		} else {
+			h.freeCreditPredictor.Add(rec)
+		}
 	}
 
 	// 持久化日志到 JSONL 文件
@@ -580,6 +595,8 @@ func (h *Handler) handleSSEStats(w http.ResponseWriter, r *http.Request) {
 			"freePool":        freePool,
 			"proPool":         proPool,
 			"prediction":      h.creditPredictor.Predict(proRemaining + freeRemaining),
+			"proPrediction":   h.proCreditPredictor.Predict(proRemaining),
+			"freePrediction":  h.freeCreditPredictor.Predict(freeRemaining),
 		}
 		data, _ := json.Marshal(stats)
 		fmt.Fprintf(w, "event: stats\ndata: %s\n\n", string(data))

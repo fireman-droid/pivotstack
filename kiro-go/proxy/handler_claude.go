@@ -76,8 +76,14 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	maxRetries := 3
 	var lastErr error
 
-	// 先根据模型确定号池
-	tier := DeterminePoolTier(req.Model)
+	// 用户层 tier 决策（必须在 GetNextByTier 之前）
+	uc := getUserContext(r.Context())
+	userTier := ""
+	if uc != nil {
+		userTier = uc.KeyTier
+	}
+	tier, effectiveModel := DetermineUserTier(req.Model, userTier)
+	req.Model = effectiveModel
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
@@ -526,7 +532,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, true, credits, "", "")
+	h.addCallLog("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送 message_delta
 	stopReason := "end_turn"
@@ -621,7 +627,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, inputTokens, outputTokens, false, credits, "", "")
+	h.addCallLog("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "")
 
 	if thinking && thinkingContent != "" {
 		switch thinkingFormat {
