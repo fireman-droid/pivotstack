@@ -258,6 +258,14 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
               <span class="opacity-20 text-[var(--text)]-secondary">|</span>
               <span class="text-[var(--primary)]">{{ (stats.freePool?.usageCurrent || 0) + (stats.freePool?.trialCurrent || 0) }}/{{ (stats.freePool?.usageLimit || 0) + (stats.freePool?.trialLimit || 0) }}</span>
             </div>
+            <div v-if="stats.freePrediction?.sufficient" class="mt-2 text-[10px] font-bold flex items-center gap-1.5 text-green-300/80">
+              <span>⏱</span>
+              <span v-if="stats.freePrediction.remainingDays >= 1">预计可用 {{ Math.floor(stats.freePrediction.remainingDays) }}天</span>
+              <span v-else-if="stats.freePrediction.remainingHours >= 1">活跃可用 {{ Math.floor(stats.freePrediction.remainingHours) }}h{{ Math.floor((stats.freePrediction.remainingHours % 1) * 60) }}m</span>
+              <span v-else>额度即将用尽!</span>
+              <span class="opacity-40 ml-1">({{ stats.freePrediction.avgPerRequest?.toFixed(2) }} cr/次)</span>
+            </div>
+            <div v-else class="mt-2 text-[10px] opacity-40">⏱ 需要更多请求数据用于预测</div>
           </div>
         </div>
 
@@ -298,12 +306,12 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
               <span class="opacity-20 text-[var(--text)]-secondary">|</span>
               <span class="text-purple-400">{{ stats.proPool?.total || 0 }} 总号</span>
             </div>
-            <div v-if="stats.prediction?.sufficient" class="mt-2 text-[10px] font-bold flex items-center gap-1.5 text-purple-300/80">
+            <div v-if="stats.proPrediction?.sufficient" class="mt-2 text-[10px] font-bold flex items-center gap-1.5 text-purple-300/80">
               <span>⏱</span>
-              <span v-if="stats.prediction.remainingDays >= 1">预计可用 {{ Math.floor(stats.prediction.remainingDays) }}天</span>
-              <span v-else-if="stats.prediction.remainingHours >= 1">活跃可用 {{ Math.floor(stats.prediction.remainingHours) }}h{{ Math.floor((stats.prediction.remainingHours % 1) * 60) }}m</span>
+              <span v-if="stats.proPrediction.remainingDays >= 1">预计可用 {{ Math.floor(stats.proPrediction.remainingDays) }}天</span>
+              <span v-else-if="stats.proPrediction.remainingHours >= 1">活跃可用 {{ Math.floor(stats.proPrediction.remainingHours) }}h{{ Math.floor((stats.proPrediction.remainingHours % 1) * 60) }}m</span>
               <span v-else>额度即将用尽!</span>
-              <span class="opacity-40 ml-1">({{ stats.prediction.avgPerRequest?.toFixed(2) }} cr/次)</span>
+              <span class="opacity-40 ml-1">({{ stats.proPrediction.avgPerRequest?.toFixed(2) }} cr/次)</span>
             </div>
             <div v-else class="mt-2 text-[10px] opacity-40">⏱ 需要更多请求数据用于预测</div>
           </div>
@@ -345,6 +353,13 @@ const isErrorHigh = computed(() => (100 - successRate.value) > 5)
             <div class="mt-2 text-[10px] font-bold flex gap-3">
               <span class="text-green-400">FREE {{ (stats.freePool?.usageCurrent || 0) + (stats.freePool?.trialCurrent || 0) }}/{{ (stats.freePool?.usageLimit || 0) + (stats.freePool?.trialLimit || 0) }}</span>
               <span class="text-purple-400">PRO {{ (stats.proPool?.usageCurrent || 0) + (stats.proPool?.trialCurrent || 0) }}/{{ (stats.proPool?.usageLimit || 0) + (stats.proPool?.trialLimit || 0) }}</span>
+            </div>
+            <div v-if="stats.prediction?.sufficient" class="mt-2 text-[10px] font-bold flex items-center gap-1.5 text-[var(--text)]/60">
+              <span>⏱</span>
+              <span v-if="stats.prediction.remainingDays >= 1">合计可用 {{ Math.floor(stats.prediction.remainingDays) }}天</span>
+              <span v-else-if="stats.prediction.remainingHours >= 1">活跃可用 {{ Math.floor(stats.prediction.remainingHours) }}h{{ Math.floor((stats.prediction.remainingHours % 1) * 60) }}m</span>
+              <span v-else>额度即将用尽!</span>
+              <span class="opacity-40 ml-1">(日均 {{ stats.prediction.dailyRate?.toFixed(1) }} cr)</span>
             </div>
           </div>
         </div>

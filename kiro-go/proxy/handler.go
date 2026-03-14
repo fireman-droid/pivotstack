@@ -135,7 +135,7 @@ func NewHandler() *Handler {
 		startTime:       time.Now().Unix(),
 		stopRefresh:     make(chan struct{}),
 		stopStatsSaver:  make(chan struct{}),
-		// apiKeyStats:         make(map[string]*ApiKeyStats), // TODO: 定义 ApiKeyStats 后启用
+		apiKeyStats:         make(map[string]*ApiKeyStats),
 		logSubscribers:      make(map[chan CallLog]bool),
 		creditPredictor:     newCreditPredictor(200, 0.3),
 		proCreditPredictor:  newCreditPredictor(200, 0.3),

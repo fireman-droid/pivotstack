@@ -94,6 +94,17 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiImportFromDB(w, r)
 	case path == "/import/db-status" && r.Method == "GET":
 		h.apiGetDBStatus(w, r)
+	case path == "/apikeys" && r.Method == "GET":
+		h.apiGetApiKeys(w, r)
+	case path == "/apikeys" && r.Method == "POST":
+		h.apiCreateApiKey(w, r)
+	case strings.HasPrefix(path, "/apikeys/") && strings.HasSuffix(path, "/logs") && r.Method == "GET":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/apikeys/"), "/logs")
+		h.apiGetApiKeyLogs(w, r, id)
+	case strings.HasPrefix(path, "/apikeys/") && r.Method == "PUT":
+		h.apiUpdateApiKey(w, r, strings.TrimPrefix(path, "/apikeys/"))
+	case strings.HasPrefix(path, "/apikeys/") && r.Method == "DELETE":
+		h.apiDeleteApiKey(w, r, strings.TrimPrefix(path, "/apikeys/"))
 	case path == "/logs" && r.Method == "GET":
 		h.apiGetLogs(w, r)
 	case path == "/logs" && r.Method == "DELETE":
@@ -661,4 +672,133 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 			"avgTokenHint":   "平均Token<1K=聊天党,提高起步价; >15K=程序员,降起步价提倍率",
 		},
 	})
+}
+
+// ==================== API Key 管理 ====================
+
+func (h *Handler) apiGetApiKeys(w http.ResponseWriter, r *http.Request) {
+	keys := config.GetAllApiKeys()
+	// 合并内存中的实时统计
+	h.apiKeyStatsMu.RLock()
+	for i, k := range keys {
+		if stats, ok := h.apiKeyStats[k.ID]; ok {
+			keys[i].LastUsed = stats.LastUsed
+			keys[i].Requests = stats.Requests
+			keys[i].Errors = stats.Errors
+			keys[i].Tokens = stats.Tokens
+			keys[i].Credits = stats.Credits
+			if stats.Models != nil {
+				keys[i].Models = make(map[string]int64, len(stats.Models))
+				for m, c := range stats.Models {
+					keys[i].Models[m] = c
+				}
+			}
+		}
+	}
+	h.apiKeyStatsMu.RUnlock()
+	json.NewEncoder(w).Encode(keys)
+}
+
+func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tier      string `json:"tier"`
+		ExpiresAt int64  `json:"expiresAt"`
+		Note      string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.Tier != "normal" && req.Tier != "pro" {
+		req.Tier = "normal"
+	}
+	key := config.ApiKeyInfo{
+		ID:        config.GenerateMachineId(),
+		Key:       config.GenerateApiKeyString(),
+		Tier:      req.Tier,
+		Plan:      "timed",
+		ExpiresAt: req.ExpiresAt,
+		Enabled:   true,
+		Note:      req.Note,
+		CreatedAt: time.Now().Unix(),
+	}
+	if err := config.AddApiKey(key); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(key)
+}
+
+func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
+	var req struct {
+		Tier      *string `json:"tier"`
+		ExpiresAt *int64  `json:"expiresAt"`
+		Enabled   *bool   `json:"enabled"`
+		Note      *string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	keys := config.GetAllApiKeys()
+	var existing *config.ApiKeyInfo
+	for i := range keys {
+		if keys[i].ID == id {
+			existing = &keys[i]
+			break
+		}
+	}
+	if existing == nil {
+		w.WriteHeader(404)
+		json.NewEncoder(w).Encode(map[string]string{"error": "API key not found"})
+		return
+	}
+	if req.Tier != nil {
+		existing.Tier = *req.Tier
+	}
+	if req.ExpiresAt != nil {
+		existing.ExpiresAt = *req.ExpiresAt
+	}
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
+	if req.Note != nil {
+		existing.Note = *req.Note
+	}
+	if err := config.UpdateApiKey(id, *existing); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (h *Handler) apiDeleteApiKey(w http.ResponseWriter, r *http.Request, id string) {
+	if err := config.DeleteApiKey(id); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	h.apiKeyStatsMu.Lock()
+	delete(h.apiKeyStats, id)
+	h.apiKeyStatsMu.Unlock()
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, r *http.Request, keyID string) {
+	h.callLogsMu.RLock()
+	var filtered []CallLog
+	for _, log := range h.callLogs {
+		if log.ApiKeyID == keyID {
+			filtered = append(filtered, log)
+		}
+	}
+	h.callLogsMu.RUnlock()
+	for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
+		filtered[i], filtered[j] = filtered[j], filtered[i]
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"logs": filtered})
 }

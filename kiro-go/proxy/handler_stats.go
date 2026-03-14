@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+// ==================== API Key 统计 ====================
+
+// ApiKeyStats 内存中的 API Key 使用统计
+type ApiKeyStats struct {
+	LastUsed int64
+	Requests int64
+	Errors   int64
+	Tokens   int64
+	Credits  float64
+	Models   map[string]int64
+}
+
 // ==================== Credit 消耗记录 & EMA 预测 ====================
 
 // CreditRecord 单次 credit 消耗记录
@@ -299,7 +311,7 @@ func (h *Handler) loadLogsFromDisk() {
 	}
 	h.callLogsMu.Unlock()
 
-	// 恢复 CreditPredictor 历史
+	// 恢复 CreditPredictor 历史 + API Key 统计
 	creditRestored := 0
 	for _, entry := range allLogs {
 		if entry.Credits > 0 && entry.Timestamp > 0 {
@@ -317,6 +329,26 @@ func (h *Handler) loadLogsFromDisk() {
 				h.freeCreditPredictor.Add(rec)
 			}
 			creditRestored++
+		}
+		// 恢复 API Key 统计
+		if entry.ApiKeyID != "" {
+			stats, ok := h.apiKeyStats[entry.ApiKeyID]
+			if !ok {
+				stats = &ApiKeyStats{Models: make(map[string]int64)}
+				h.apiKeyStats[entry.ApiKeyID] = stats
+			}
+			stats.Requests++
+			if entry.Status == "error" {
+				stats.Errors++
+			}
+			stats.Tokens += int64(entry.TotalTokens)
+			stats.Credits += entry.Credits
+			if entry.Timestamp > stats.LastUsed {
+				stats.LastUsed = entry.Timestamp
+			}
+			if entry.ActualModel != "" {
+				stats.Models[entry.ActualModel]++
+			}
 		}
 	}
 
@@ -375,7 +407,9 @@ func (h *Handler) flushAllStats() {
 	h.saveStats()
 	// 2. 从账号池批量更新到配置（内存操作）
 	h.pool.FlushStatsToConfig()
-	// 3. 一次性写盘
+	// 3. 刷新 API Key 统计到配置（内存操作）
+	h.flushApiKeyStats()
+	// 4. 一次性写盘
 	config.SaveConfig()
 }
 
@@ -413,6 +447,10 @@ func (h *Handler) recordSuccess(inputTokens, outputTokens int, credits float64) 
 }
 
 func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string) {
+	h.addCallLogWithKey(apiType, originalModel, actualModel, account, tier, inputTokens, outputTokens, stream, credits, reqSummary, respSummary, nil)
+}
+
+func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string, uc *UserContext) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
 	entry := CallLog{
@@ -432,6 +470,10 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier 
 		RequestSummary:  reqSummary,
 		ResponseSummary: respSummary,
 	}
+	if uc != nil {
+		entry.ApiKeyID = uc.KeyID
+		entry.ApiKeyTier = uc.KeyTier
+	}
 	h.callLogsMu.Lock()
 	h.callLogs = append(h.callLogs, entry)
 	if len(h.callLogs) > maxCallLogs {
@@ -439,6 +481,11 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier 
 	}
 	h.callLogsMu.Unlock()
 	h.broadcastLog(entry)
+
+	// 记录 API Key 使用统计
+	if uc != nil && uc.KeyID != "" {
+		h.recordKeyUsage(uc.KeyID, actualModel, int64(inputTokens+outputTokens), credits, false)
+	}
 
 	// 记录 credit 历史用于预测
 	if credits > 0 && h.creditPredictor != nil {
@@ -461,6 +508,10 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier 
 }
 
 func (h *Handler) addCallLogError(apiType, originalModel, actualModel, account string, stream bool, errMsg string, payloadKB int) {
+	h.addCallLogErrorWithKey(apiType, originalModel, actualModel, account, stream, errMsg, payloadKB, nil)
+}
+
+func (h *Handler) addCallLogErrorWithKey(apiType, originalModel, actualModel, account string, stream bool, errMsg string, payloadKB int, uc *UserContext) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
 	entry := CallLog{
@@ -475,6 +526,10 @@ func (h *Handler) addCallLogError(apiType, originalModel, actualModel, account s
 		PayloadKB:     payloadKB,
 		Status:        "error",
 	}
+	if uc != nil {
+		entry.ApiKeyID = uc.KeyID
+		entry.ApiKeyTier = uc.KeyTier
+	}
 	h.callLogsMu.Lock()
 	h.callLogs = append(h.callLogs, entry)
 	if len(h.callLogs) > maxCallLogs {
@@ -483,8 +538,54 @@ func (h *Handler) addCallLogError(apiType, originalModel, actualModel, account s
 	h.callLogsMu.Unlock()
 	h.broadcastLog(entry)
 
+	// 记录 API Key 错误统计
+	if uc != nil && uc.KeyID != "" {
+		h.recordKeyUsage(uc.KeyID, actualModel, 0, 0, true)
+	}
+
 	// 持久化错误日志
 	go appendLogToFile(entry)
+}
+
+// recordKeyUsage 记录 API Key 使用统计到内存缓存
+func (h *Handler) recordKeyUsage(keyID, model string, tokens int64, credits float64, isError bool) {
+	h.apiKeyStatsMu.Lock()
+	defer h.apiKeyStatsMu.Unlock()
+
+	stats, ok := h.apiKeyStats[keyID]
+	if !ok {
+		stats = &ApiKeyStats{Models: make(map[string]int64)}
+		h.apiKeyStats[keyID] = stats
+	}
+	stats.LastUsed = time.Now().Unix()
+	stats.Requests++
+	if isError {
+		stats.Errors++
+	}
+	stats.Tokens += tokens
+	stats.Credits += credits
+	if model != "" {
+		stats.Models[model]++
+	}
+}
+
+// flushApiKeyStats 将内存中的 API Key 统计刷新到配置
+func (h *Handler) flushApiKeyStats() {
+	h.apiKeyStatsMu.RLock()
+	snapshot := make(map[string]*ApiKeyStats, len(h.apiKeyStats))
+	for k, v := range h.apiKeyStats {
+		cp := *v
+		cp.Models = make(map[string]int64, len(v.Models))
+		for m, c := range v.Models {
+			cp.Models[m] = c
+		}
+		snapshot[k] = &cp
+	}
+	h.apiKeyStatsMu.RUnlock()
+
+	for id, stats := range snapshot {
+		config.UpdateApiKeyStatsNoSave(id, stats.LastUsed, stats.Requests, stats.Errors, stats.Tokens, stats.Credits, stats.Models)
+	}
 }
 
 func (h *Handler) recordFailure() {
