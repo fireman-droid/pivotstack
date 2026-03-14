@@ -47,5 +47,7 @@ services:
       - KIRO_GATEWAY_BASE=http://kiro-gateway:8001
       - KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY}
       - VPN_PROXY_URL=http://host.docker.internal:7890
+      - HTTP_PROXY=http://host.docker.internal:7890
+      - HTTPS_PROXY=http://host.docker.internal:7890
       - PORT=8088
       - HOST=0.0.0.0
