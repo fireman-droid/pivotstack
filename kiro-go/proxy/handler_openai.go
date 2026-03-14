@@ -85,9 +85,9 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		kiroPayload := OpenAIToKiro(&req, thinking)
 
 		if req.Stream {
-			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
 		} else {
-			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
 		}
 		return // 成功或已处理错误，退出循环
 	}
@@ -102,7 +102,12 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+	requestStart := time.Now()
+	requestID := genRequestID()
+	fmt.Printf("[req-%s] → OpenAI Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
+		requestID, originalModel, model, account.Email, estimatedInputTokens/1000, thinking)
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -429,7 +434,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			fmt.Printf("[ERROR] OpenAI Stream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogError("OpenAI", originalModel, model, account.Email, true, err.Error(), payloadKB)
+		h.addCallLogErrorWithKey("OpenAI", originalModel, model, account.Email, true, err.Error(), payloadKB, uc)
 		if upstreamErr != nil {
 			WriteOpenAIStreamError(w, upstreamErr.ToAppError(""))
 		}
@@ -461,13 +466,17 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送结束
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
+
+	durationMs := time.Since(requestStart).Milliseconds()
+	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "", finishReason, requestID, durationMs, uc)
+	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
+		requestID, outputTokens, finishReason, credits, durationMs)
 
 	chunk := map[string]interface{}{
 		"id":      chatID,
@@ -492,7 +501,12 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+	requestStart := time.Now()
+	requestID := genRequestID()
+	fmt.Printf("[req-%s] → OpenAI NonStream | %s → %s | account: %s | input≈%dK\n",
+		requestID, originalModel, model, account.Email, estimatedInputTokens/1000)
+
 	var content string
 	var reasoningContent string
 	var toolUses []KiroToolUse
@@ -526,7 +540,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 			fmt.Printf("[ERROR] OpenAI NonStream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogError("OpenAI", originalModel, model, account.Email, false, err.Error(), payloadKB)
+		h.addCallLogErrorWithKey("OpenAI", originalModel, model, account.Email, false, err.Error(), payloadKB, uc)
 		if upstreamErr != nil {
 			appErr := upstreamErr.ToAppError("")
 			WriteOpenAIError(w, appErr, upstreamErr.StatusCode)
@@ -550,7 +564,15 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "")
+
+	stopReason := "stop"
+	if len(toolUses) > 0 {
+		stopReason = "tool_use"
+	}
+	durationMs := time.Since(requestStart).Milliseconds()
+	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "", stopReason, requestID, durationMs, uc)
+	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
+		requestID, outputTokens, stopReason, credits, durationMs)
 
 	thinkingFormat := config.GetThinkingConfig().OpenAIFormat
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)

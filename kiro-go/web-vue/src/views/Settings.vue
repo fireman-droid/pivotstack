@@ -126,15 +126,14 @@ async function resetStats() {
           <span class="text-sm font-bold text-[var(--text)]-secondary group-hover:text-[var(--text)] transition-colors">启用全局 API Key 强制验证</span>
         </label>
 
-        <div class="space-y-3">
-          <div class="flex justify-between items-end pl-1">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">系统 API 密钥</span>
-            <button @click="generateApiKey" class="text-[10px] font-black text-[var(--primary)] hover:underline uppercase tracking-tighter">重新生成密钥</button>
+        <div class="p-4 bg-[var(--bg)] rounded-2xl border border-[var(--border)] flex items-center justify-between">
+          <div>
+            <div class="text-sm font-bold text-[var(--text)]">商业 Key 管理</div>
+            <div class="text-[11px] text-[var(--text)]-secondary mt-0.5">支持普通卡 / Pro 卡分级，按时间发放，独立监控</div>
           </div>
-          <div class="relative group">
-            <Fingerprint class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-[var(--primary)] transition-colors" />
-            <input v-model="apiKey" placeholder="留空则允许匿名访问" class="w-full h-14 pl-12 pr-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-mono outline-none focus:border-[var(--primary)]/50 focus:ring-4 focus:ring-primary/5 transition-all" />
-          </div>
+          <router-link to="/apikeys" class="flex items-center gap-2 px-4 py-2 bg-[var(--primary)] text-white rounded-xl text-xs font-bold hover:scale-[1.02] active:scale-95 transition-all">
+            <Key class="w-3.5 h-3.5" /> 管理 Key
+          </router-link>
         </div>
 
         <button @click="saveApiSettings" :disabled="loading.api" class="flex items-center gap-2 px-6 py-3 bg-[var(--primary)] text-white rounded-xl font-black text-xs shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">

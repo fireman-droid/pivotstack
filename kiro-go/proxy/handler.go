@@ -75,6 +75,7 @@ func getUserContext(ctx context.Context) *UserContext {
 type CallLog struct {
 	Time            string  `json:"time"`
 	Timestamp       int64   `json:"timestamp"`
+	RequestID       string  `json:"request_id,omitempty"`
 	APIType         string  `json:"api_type"`
 	OriginalModel   string  `json:"original_model"`
 	ActualModel     string  `json:"actual_model"`
@@ -89,6 +90,8 @@ type CallLog struct {
 	Error           string  `json:"error,omitempty"`
 	PayloadKB       int     `json:"payload_kb,omitempty"`
 	Status          string  `json:"status"`
+	StopReason      string  `json:"stop_reason,omitempty"`
+	DurationMs      int64   `json:"duration_ms,omitempty"`
 	Attempt         int     `json:"attempt,omitempty"`
 	Subscription    string  `json:"subscription,omitempty"`
 	RequestSummary  string  `json:"request_summary,omitempty"`
@@ -126,15 +129,15 @@ func allowTagSource(source *thinkingStreamSource) bool {
 func NewHandler() *Handler {
 	totalReq, successReq, failedReq, totalTokens, totalCredits := config.GetStats()
 	h := &Handler{
-		pool:            pool.GetPool(),
-		totalRequests:   int64(totalReq),
-		successRequests: int64(successReq),
-		failedRequests:  int64(failedReq),
-		totalTokens:     int64(totalTokens),
-		totalCredits:    totalCredits,
-		startTime:       time.Now().Unix(),
-		stopRefresh:     make(chan struct{}),
-		stopStatsSaver:  make(chan struct{}),
+		pool:                pool.GetPool(),
+		totalRequests:       int64(totalReq),
+		successRequests:     int64(successReq),
+		failedRequests:      int64(failedReq),
+		totalTokens:         int64(totalTokens),
+		totalCredits:        totalCredits,
+		startTime:           time.Now().Unix(),
+		stopRefresh:         make(chan struct{}),
+		stopStatsSaver:      make(chan struct{}),
 		apiKeyStats:         make(map[string]*ApiKeyStats),
 		logSubscribers:      make(map[chan CallLog]bool),
 		creditPredictor:     newCreditPredictor(200, 0.3),

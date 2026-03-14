@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bufio"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"kiro-api-proxy/config"
@@ -13,6 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// genRequestID 生成短请求 ID (8 字符 hex)
+func genRequestID() string {
+	b := make([]byte, 4)
+	crand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // ==================== API Key 统计 ====================
 
@@ -446,11 +455,11 @@ func (h *Handler) recordSuccess(inputTokens, outputTokens int, credits float64) 
 	h.addCredits(credits)
 }
 
-func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string) {
-	h.addCallLogWithKey(apiType, originalModel, actualModel, account, tier, inputTokens, outputTokens, stream, credits, reqSummary, respSummary, nil)
+func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64) {
+	h.addCallLogWithKey(apiType, originalModel, actualModel, account, tier, inputTokens, outputTokens, stream, credits, reqSummary, respSummary, stopReason, requestID, durationMs, nil)
 }
 
-func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary string, uc *UserContext) {
+func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64, uc *UserContext) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
 	entry := CallLog{
@@ -467,6 +476,9 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 		Stream:          stream,
 		Status:          "success",
 		Subscription:    tier,
+		StopReason:      stopReason,
+		DurationMs:      durationMs,
+		RequestID:       requestID,
 		RequestSummary:  reqSummary,
 		ResponseSummary: respSummary,
 	}

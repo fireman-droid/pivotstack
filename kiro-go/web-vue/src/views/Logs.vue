@@ -2,18 +2,19 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { 
-  RotateCw, 
-  Trash2, 
-  Zap, 
-  AlertCircle, 
+import {
+  RotateCw,
+  Trash2,
+  Zap,
+  AlertCircle,
   Search,
   Monitor,
   Cpu,
   History,
   ChevronDown,
   X,
-  Radio
+  Radio,
+  Key
 } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
@@ -22,6 +23,8 @@ const loading = ref(false)
 const searchQuery = ref('')
 const expandedIndex = ref(-1)
 const statusFilter = ref('all')
+const keyFilter = ref('all')
+const apiKeys = ref([])
 const sseConnected = ref(false)
 let eventSource = null
 
@@ -64,6 +67,14 @@ function connectSSE() {
   }
 }
 
+// 加载 API Keys 列表（用于筛选下拉）
+async function loadApiKeys() {
+  try {
+    const res = await api('/apikeys')
+    if (res.ok) apiKeys.value = await res.json()
+  } catch {}
+}
+
 // 传统 HTTP 加载（作为 fallback 和初始加载）
 async function loadLogs() {
   loading.value = true
@@ -95,6 +106,12 @@ function toggleExpand(i) {
   expandedIndex.value = expandedIndex.value === i ? -1 : i
 }
 
+function formatDuration(ms) {
+  if (!ms && ms !== 0) return '-'
+  if (ms < 1000) return ms + 'ms'
+  return (ms / 1000).toFixed(1) + 's'
+}
+
 const filteredLogs = computed(() => {
   let result = logs.value
   if (statusFilter.value === 'error') {
@@ -102,21 +119,26 @@ const filteredLogs = computed(() => {
   } else if (statusFilter.value === 'success') {
     result = result.filter(l => !l.error && l.status !== 'error')
   }
+  if (keyFilter.value !== 'all') {
+    result = result.filter(l => l.api_key_id === keyFilter.value)
+  }
   if (!searchQuery.value) return result
   const q = searchQuery.value.toLowerCase()
-  return result.filter(l => 
-    l.actual_model?.toLowerCase().includes(q) || 
+  return result.filter(l =>
+    l.actual_model?.toLowerCase().includes(q) ||
     l.original_model?.toLowerCase().includes(q) ||
     l.account?.toLowerCase().includes(q) ||
-    l.error?.toLowerCase().includes(q)
+    l.error?.toLowerCase().includes(q) ||
+    l.request_id?.toLowerCase().includes(q) ||
+    l.stop_reason?.toLowerCase().includes(q)
   )
 })
 
 const errorCount = computed(() => logs.value.filter(l => l.error || l.status === 'error').length)
 
 onMounted(async () => {
-  await loadLogs()  // 先加载历史日志
-  connectSSE()      // 再连接 SSE 接收实时日志
+  await Promise.all([loadLogs(), loadApiKeys()])
+  connectSSE()
 })
 
 onUnmounted(() => {
@@ -161,12 +183,24 @@ onUnmounted(() => {
     <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
       <div class="relative flex-1 group">
         <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-[var(--primary)] transition-colors" />
-        <input 
+        <input
           v-model="searchQuery"
-          type="text" 
+          type="text"
           placeholder="搜索模型、账号或错误信息..."
           class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all"
         />
+      </div>
+      <div v-if="apiKeys.length" class="relative">
+        <Key class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-secondary)] pointer-events-none" />
+        <select v-model="keyFilter"
+          class="h-10 pl-9 pr-8 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer hover:border-[var(--primary)] transition-colors"
+          style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 0.5rem center; background-size: 1em;"
+        >
+          <option value="all">全部 Key</option>
+          <option v-for="k in apiKeys" :key="k.id" :value="k.id">
+            {{ k.note || k.key?.slice(0, 10) + '...' }} ({{ k.tier }})
+          </option>
+        </select>
       </div>
       <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
         <button v-for="f in [{v:'all',l:'全部'},{v:'success',l:'成功'},{v:'error',l:'失败'}]" :key="f.v"
@@ -214,6 +248,14 @@ onUnmounted(() => {
                     class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold border border-emerald-500/10">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 成功
                   </span>
+                  <span v-if="log.stop_reason" class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold"
+                    :class="{
+                      'bg-sky-500/10 text-sky-400': log.stop_reason === 'end_turn' || log.stop_reason === 'stop',
+                      'bg-amber-500/10 text-amber-400': log.stop_reason === 'tool_use' || log.stop_reason === 'tool_calls',
+                      'bg-rose-500/10 text-rose-400': log.stop_reason === 'max_tokens'
+                    }">
+                    {{ log.stop_reason }}
+                  </span>
                 </td>
 
                 <td class="px-6 py-4">
@@ -244,9 +286,12 @@ onUnmounted(() => {
                 <td class="px-6 py-4 text-right">
                   <div class="flex items-center justify-end gap-1.5">
                     <Zap class="w-3 h-3 text-amber-500" />
-                    <span class="text-xs font-bold">{{ (log.duration || 0).toFixed(0) }}ms</span>
+                    <span class="text-xs font-bold">{{ formatDuration(log.duration_ms) }}</span>
                   </div>
-                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.stream ? 'Stream' : 'Block' }}</div>
+                  <div class="text-[9px] text-[var(--text-secondary)]">
+                    {{ log.stream ? 'Stream' : 'Block' }}
+                    <span v-if="log.request_id" class="ml-1 opacity-50">#{{ log.request_id }}</span>
+                  </div>
                 </td>
 
                 <td class="px-6 py-4">
@@ -288,6 +333,36 @@ onUnmounted(() => {
                         <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求时间</div>
                         <div class="text-xs font-bold font-mono">{{ log.time }}</div>
                       </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Request ID</div>
+                        <div class="text-xs font-bold font-mono text-sky-400">{{ log.request_id || '-' }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Stop Reason</div>
+                        <div class="text-xs font-bold font-mono" :class="{
+                          'text-emerald-400': log.stop_reason === 'end_turn' || log.stop_reason === 'stop',
+                          'text-amber-400': log.stop_reason === 'tool_use' || log.stop_reason === 'tool_calls',
+                          'text-rose-400': log.stop_reason === 'max_tokens'
+                        }">{{ log.stop_reason || '-' }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">耗时</div>
+                        <div class="text-xs font-bold font-mono">{{ formatDuration(log.duration_ms) }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Credits</div>
+                        <div class="text-xs font-bold font-mono text-amber-400">{{ log.credits?.toFixed(2) || '0' }}</div>
+                      </div>
+                    </div>
+                    <!-- API Key Info -->
+                    <div v-if="log.api_key_id" class="flex items-center gap-3 p-3 bg-[var(--bg)] rounded-xl">
+                      <Key class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                      <span class="text-[10px] font-bold text-[var(--text-secondary)]">API Key:</span>
+                      <span class="text-[10px] font-bold font-mono text-[var(--text)]">{{ log.api_key_id.slice(0, 8) }}...</span>
+                      <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+                        :class="log.api_key_tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
+                        {{ log.api_key_tier || '-' }}
+                      </span>
                     </div>
                   </div>
                 </td>

@@ -3,9 +3,9 @@ import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import WorldSwitcher from './WorldSwitcher.vue'
-import { 
-  LayoutDashboard, Key, FileText, Users, Settings, 
-  LogOut, Menu, X, ChevronRight, Shield, TrendingUp
+import {
+  LayoutDashboard, Key, FileText, Users, Settings,
+  LogOut, Menu, X, ChevronRight, Shield, TrendingUp, KeyRound
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -15,6 +15,7 @@ const isSidebarOpen = ref(true)
 
 const navItems = [
   { name: '数据面板', path: '/', icon: LayoutDashboard },
+  { name: 'Key 管理', path: '/apikeys', icon: KeyRound },
   { name: 'API 令牌', path: '/api', icon: Key },
   { name: '使用日志', path: '/logs', icon: FileText },
   { name: '定价分析', path: '/pricing', icon: TrendingUp },

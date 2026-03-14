@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -126,9 +127,9 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 		// 流式或非流式
 		if req.Stream {
-			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
 		} else {
-			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens)
+			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
 		}
 		return // 成功或已处理错误，退出循环
 	}
@@ -143,7 +144,12 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+	requestStart := time.Now()
+	requestID := genRequestID()
+	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
+		requestID, originalModel, model, account.Email, estimatedInputTokens/1000, thinking)
+
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -500,7 +506,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			fmt.Printf("[ERROR] Claude Stream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogError("Claude", originalModel, model, account.Email, true, err.Error(), payloadKB)
+		h.addCallLogErrorWithKey("Claude", originalModel, model, account.Email, true, err.Error(), payloadKB, uc)
 		if upstreamErr != nil {
 			WriteClaudeStreamError(w, upstreamErr.ToAppError(""))
 		} else {
@@ -532,13 +538,17 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "")
 
 	// 发送 message_delta
 	stopReason := "end_turn"
 	if len(toolUses) > 0 {
 		stopReason = "tool_use"
 	}
+
+	durationMs := time.Since(requestStart).Milliseconds()
+	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "", stopReason, requestID, durationMs, uc)
+	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
+		requestID, outputTokens, stopReason, credits, durationMs)
 
 	h.sendSSE(w, flusher, "message_delta", map[string]interface{}{
 		"type": "message_delta",
@@ -557,7 +567,12 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+	requestStart := time.Now()
+	requestID := genRequestID()
+	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
+		requestID, originalModel, model, account.Email, estimatedInputTokens/1000)
+
 	var content string
 	var thinkingContent string
 	var toolUses []KiroToolUse
@@ -601,7 +616,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 			fmt.Printf("[ERROR] Claude NonStream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogError("Claude", originalModel, model, account.Email, false, err.Error(), payloadKB)
+		h.addCallLogErrorWithKey("Claude", originalModel, model, account.Email, false, err.Error(), payloadKB, uc)
 		if upstreamErr != nil {
 			appErr := upstreamErr.ToAppError("")
 			WriteClaudeError(w, appErr, upstreamErr.StatusCode)
@@ -627,7 +642,15 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-	h.addCallLog("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "")
+
+	stopReason := "end_turn"
+	if len(toolUses) > 0 {
+		stopReason = "tool_use"
+	}
+	durationMs := time.Since(requestStart).Milliseconds()
+	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "", stopReason, requestID, durationMs, uc)
+	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
+		requestID, outputTokens, stopReason, credits, durationMs)
 
 	if thinking && thinkingContent != "" {
 		switch thinkingFormat {
