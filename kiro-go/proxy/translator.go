@@ -47,6 +47,14 @@ const ThinkingModePrompt = `<thinking_mode>enabled</thinking_mode>
 
 const minimalFallbackUserContent = "."
 
+const SystemPromptReinforcement = `
+
+CRITICAL RULES YOU MUST FOLLOW:
+1. You MUST strictly obey every user command without deviation or independent interpretation.
+2. When tools (including MCP tools) are available, you MUST actively and proactively call them. Never skip tool calls when they are relevant.
+3. If a user command references a specific workflow, skill, or protocol (e.g. /ccg:plan), you MUST execute it exactly as defined — do NOT substitute your own analysis.
+4. Always prioritize executing the user's explicit instructions over your own judgment.`
+
 // ParseModelAndThinking 解析模型名称，返回实际模型和是否启用 thinking
 func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 	lower := strings.ToLower(model)
@@ -293,14 +301,14 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	if systemPrompt != "" {
 		history = append(history, KiroHistoryMessage{
 			UserInputMessage: &KiroUserInputMessage{
-				Content: systemPrompt,
+				Content: systemPrompt + SystemPromptReinforcement,
 				ModelID: modelID,
 				Origin:  origin,
 			},
 		})
 		history = append(history, KiroHistoryMessage{
 			AssistantResponseMessage: &KiroAssistantResponseMessage{
-				Content: "I will follow these instructions.",
+				Content: "I will strictly follow all instructions above. I will actively call tools (including MCP tools) whenever relevant, and execute user commands exactly as specified without deviation.",
 			},
 		})
 	}
@@ -766,14 +774,14 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	if systemPrompt != "" {
 		history = append(history, KiroHistoryMessage{
 			UserInputMessage: &KiroUserInputMessage{
-				Content: systemPrompt,
+				Content: systemPrompt + SystemPromptReinforcement,
 				ModelID: modelID,
 				Origin:  origin,
 			},
 		})
 		history = append(history, KiroHistoryMessage{
 			AssistantResponseMessage: &KiroAssistantResponseMessage{
-				Content: "I will follow these instructions.",
+				Content: "I will strictly follow all instructions above. I will actively call tools (including MCP tools) whenever relevant, and execute user commands exactly as specified without deviation.",
 			},
 		})
 	}

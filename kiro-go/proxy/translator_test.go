@@ -70,7 +70,7 @@ func TestOpenAIToKiroPreservesStructuredAssistantAndToolContent(t *testing.T) {
 
 	// history[1]: assistant ack
 	sysAck := payload.ConversationState.History[1].AssistantResponseMessage
-	if sysAck == nil || sysAck.Content != "I will follow these instructions." {
+	if sysAck == nil || !strings.Contains(sysAck.Content, "strictly follow") {
 		t.Fatalf("expected assistant ack for system prompt")
 	}
 
