@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o kiro-api-proxy .
 
 # Stage 2: Runtime
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates mailcap
 WORKDIR /app
 COPY --from=builder /app/kiro-api-proxy .
 COPY --from=builder /app/web-vue/dist ./web-vue/dist
