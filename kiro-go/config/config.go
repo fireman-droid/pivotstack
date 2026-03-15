@@ -888,11 +888,11 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 			return "insufficient_balance", fmt.Errorf("insufficient balance")
 		}
 	case "hybrid":
-		if info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
-			return "key_expired", fmt.Errorf("api key expired")
-		}
-		if info.Balance <= 0 {
-			return "insufficient_balance", fmt.Errorf("insufficient balance")
+		// 优先检查时间卡：时间有效就放行，不看余额
+		timeValid := info.ExpiresAt == 0 || time.Now().Unix() <= info.ExpiresAt
+		balanceValid := info.Balance > 0
+		if !timeValid && !balanceValid {
+			return "key_expired", fmt.Errorf("api key expired and insufficient balance")
 		}
 	default:
 		return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
