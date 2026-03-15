@@ -57,8 +57,13 @@ watchEffect(() => {
     <!-- 世界过渡动画 -->
     <WorldTransition :currentWorld="theme.currentWorld" />
 
-    <!-- 已授权 -->
-    <template v-if="route.path === '/login' || auth.password">
+    <!-- 用户端 (不需要管理权限) -->
+    <template v-if="route.path.startsWith('/user')">
+      <RouterView />
+    </template>
+
+    <!-- 已授权 (管理端) -->
+    <template v-else-if="route.path === '/login' || auth.password">
       <AppLayout v-if="route.path !== '/login'">
         <RouterView />
       </AppLayout>
