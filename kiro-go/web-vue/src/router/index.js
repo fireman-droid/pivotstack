@@ -46,7 +46,7 @@ router.beforeEach((to) => {
   // User auth guard
   if (to.meta.userAuth || to.matched.some(r => r.meta.userAuth)) {
     const apiKey = localStorage.getItem('user_api_key')
-    if (!apiKey) return '/user/login'
+    if (!apiKey) return '/login'
   }
 })
 
