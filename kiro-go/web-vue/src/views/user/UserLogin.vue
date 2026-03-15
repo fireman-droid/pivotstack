@@ -6,10 +6,11 @@ import { useUserAuth } from '../../stores/userAuth'
 const router = useRouter()
 const auth = useUserAuth()
 const apiKey = ref('')
+const rememberDevice = ref(true)
 
 async function handleLogin() {
   if (!apiKey.value.trim()) return
-  const ok = await auth.login(apiKey.value.trim())
+  const ok = await auth.login(apiKey.value.trim(), rememberDevice.value)
   if (ok) {
     router.replace('/user/dashboard')
   }
@@ -22,7 +23,8 @@ async function handleLogin() {
       <div class="login-header">
         <div class="logo">🪙</div>
         <h1>KiroStack</h1>
-        <p class="subtitle">输入您的 API Key 登录用户面板</p>
+        <p class="subtitle">无需注册，API Key 即账户</p>
+        <p class="sub-desc">输入您的 API Key 登录用户面板</p>
       </div>
 
       <form @submit.prevent="handleLogin" class="login-form">
@@ -45,6 +47,11 @@ async function handleLogin() {
           <span v-if="auth.loading">验证中...</span>
           <span v-else>登 录</span>
         </button>
+
+        <label class="remember-toggle">
+          <input type="checkbox" v-model="rememberDevice" />
+          <span>记住此设备</span>
+        </label>
       </form>
 
       <div class="login-footer">
@@ -184,5 +191,25 @@ button:disabled {
 
 .admin-link:hover {
   color: #f5af19;
+}
+
+.sub-desc {
+  color: rgba(255,255,255,0.35);
+  font-size: 0.8rem;
+  margin-top: 0.3rem;
+}
+
+.remember-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: rgba(255,255,255,0.5);
+  cursor: pointer;
+  justify-content: center;
+}
+
+.remember-toggle input[type="checkbox"] {
+  accent-color: #f5af19;
 }
 </style>

@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
+import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
 
 const auth = useUserAuth()
 const usage = ref(null)
@@ -89,6 +90,7 @@ function copyUrl() {
         <div class="stat-value status-dot" :style="{ color: statusColor }">
           ● {{ info.status === 'active' ? '正常' : info.statusMessage || info.status }}
         </div>
+        <PlanStatusBadge :plan="info.plan" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top: 6px" />
       </div>
     </div>
 

@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { userApi } from '../api/user'
 
 export const useUserAuth = defineStore('userAuth', () => {
-  const apiKey = ref(localStorage.getItem('user_api_key') || '')
+  const apiKey = ref(localStorage.getItem('user_api_key') || sessionStorage.getItem('user_api_key') || '')
   const userInfo = ref(null)
   const loading = ref(false)
   const error = ref('')
@@ -13,11 +13,16 @@ export const useUserAuth = defineStore('userAuth', () => {
   const plan = computed(() => userInfo.value?.plan || '')
   const status = computed(() => userInfo.value?.status || '')
 
-  async function login(key) {
+  async function login(key, remember = true) {
     loading.value = true
     error.value = ''
     try {
-      localStorage.setItem('user_api_key', key)
+      if (remember) {
+        localStorage.setItem('user_api_key', key)
+      } else {
+        sessionStorage.setItem('user_api_key', key)
+        localStorage.removeItem('user_api_key')
+      }
       apiKey.value = key
       const data = await userApi('/me')
       userInfo.value = data
@@ -25,6 +30,7 @@ export const useUserAuth = defineStore('userAuth', () => {
     } catch (e) {
       error.value = e.message
       localStorage.removeItem('user_api_key')
+      sessionStorage.removeItem('user_api_key')
       apiKey.value = ''
       userInfo.value = null
       return false
@@ -43,6 +49,7 @@ export const useUserAuth = defineStore('userAuth', () => {
 
   function logout() {
     localStorage.removeItem('user_api_key')
+    sessionStorage.removeItem('user_api_key')
     apiKey.value = ''
     userInfo.value = null
   }
