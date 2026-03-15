@@ -21,15 +21,7 @@ const keyLogs = ref({})
 const keyLogsLoading = ref({})
 
 // Create form
-const form = ref({ plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' })
-const durationPresets = [
-  { label: '1天', days: 1 },
-  { label: '3天', days: 3 },
-  { label: '7天', days: 7 },
-  { label: '15天', days: 15 },
-  { label: '30天', days: 30 },
-  { label: '自选', days: -1 },
-]
+const form = ref({ note: '' })
 
 async function loadKeys() {
   loading.value = true
@@ -41,24 +33,17 @@ async function loadKeys() {
 }
 
 async function createKey() {
-  let expiresAt = 0
-  if (form.value.durationDays === -1) {
-    if (!form.value.customDate) return toastError('请选择到期日期')
-    expiresAt = Math.floor(new Date(form.value.customDate).getTime() / 1000)
-  } else if (form.value.durationDays > 0) {
-    expiresAt = Math.floor(Date.now() / 1000) + form.value.durationDays * 86400
-  }
   try {
     const res = await api('/apikeys', {
       method: 'POST',
-      body: JSON.stringify({ plan: form.value.plan, expiresAt, balance: form.value.balance, note: form.value.note })
+      body: JSON.stringify({ note: form.value.note })
     })
     if (res.ok) {
       const newKey = await res.json()
       keys.value.unshift(newKey)
       showCreate.value = false
       showKeyId.value = newKey.id
-      form.value = { plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' }
+      form.value = { note: '' }
       success('API Key 已创建')
     }
   } catch { toastError('创建失败') }
@@ -208,50 +193,10 @@ onMounted(loadKeys)
             <h3 class="text-sm font-black text-[var(--text)]">创建 API Key</h3>
             <button @click="showCreate = false" class="p-1 hover:bg-[var(--bg)] rounded-lg"><X class="w-4 h-4" /></button>
           </div>
-          <div class="p-6 space-y-5">
-            <!-- Plan -->
-            <div class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">计费模式</label>
-              <div class="grid grid-cols-3 gap-2">
-                <button @click="form.plan = 'timed'"
-                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-                  :class="form.plan === 'timed' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-                  ⏱ 时间制
-                </button>
-                <button @click="form.plan = 'credit'"
-                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-                  :class="form.plan === 'credit' ? 'bg-emerald-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-                  💰 计量制
-                </button>
-                <button @click="form.plan = 'hybrid'"
-                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-                  :class="form.plan === 'hybrid' ? 'bg-purple-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-                  🔀 混合制
-                </button>
-              </div>
-            </div>
-
-            <!-- Duration (for timed/hybrid) -->
-            <div v-if="form.plan !== 'credit'" class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">有效期</label>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="p in durationPresets" :key="p.days" @click="form.durationDays = p.days"
-                  class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
-                  :class="form.durationDays === p.days ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-                  {{ p.label }}
-                </button>
-              </div>
-              <input v-if="form.durationDays === -1" v-model="form.customDate" type="datetime-local"
-                class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)] mt-2" />
-            </div>
-
-            <!-- Balance (for credit/hybrid) -->
-            <div v-if="form.plan !== 'timed'" class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">初始余额 (¥)</label>
-              <input v-model.number="form.balance" type="number" step="0.01" min="0" placeholder="0.00"
-                class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
-            </div>
-
+          <div class="p-6 space-y-4">
+            <p class="text-xs text-[var(--text-secondary)] leading-relaxed">
+              创建后需通过兑换激活码来充值时间或余额，才能开始使用。
+            </p>
             <!-- Note -->
             <div class="space-y-2">
               <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注</label>

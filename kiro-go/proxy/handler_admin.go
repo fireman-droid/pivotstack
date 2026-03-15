@@ -756,25 +756,16 @@ func (h *Handler) apiGetApiKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Plan      string  `json:"plan"`
-		ExpiresAt int64   `json:"expiresAt"`
-		Balance   float64 `json:"balance"`
-		Note      string  `json:"note"`
+		Note string `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
-	if req.Plan != "credit" && req.Plan != "hybrid" {
-		req.Plan = "timed"
-	}
 	key := config.ApiKeyInfo{
 		ID:        config.GenerateMachineId(),
 		Key:       config.GenerateApiKeyString(),
-		Plan:      req.Plan,
-		ExpiresAt: req.ExpiresAt,
-		Balance:   req.Balance,
 		Enabled:   true,
 		Note:      req.Note,
 		CreatedAt: time.Now().Unix(),

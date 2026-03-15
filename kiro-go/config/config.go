@@ -892,6 +892,8 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 		if info.Balance <= 0 {
 			return "insufficient_balance", fmt.Errorf("insufficient balance")
 		}
+	default:
+		return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
 	}
 	return "", nil
 }
