@@ -3,11 +3,13 @@ import { ref, onMounted, computed } from 'vue'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
 import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
+import RedemptionModal from '../../components/user/RedemptionModal.vue'
 
 const auth = useUserAuth()
 const usage = ref(null)
 const pricing = ref(null)
 const loading = ref(true)
+const showRedeem = ref(false)
 
 onMounted(async () => {
   try {
@@ -52,10 +54,30 @@ function copyUrl() {
   copied.value = true
   setTimeout(() => copied.value = false, 2000)
 }
+
+async function onRedeemed() {
+  showRedeem.value = false
+  // Refresh user info
+  try {
+    const me = await userApi('/me')
+    if (me && !me.error) auth.userInfo = me
+  } catch {}
+}
 </script>
 
 <template>
   <div class="dashboard" v-if="!loading">
+    <!-- Not Activated Banner -->
+    <div v-if="!info.plan" class="activate-banner">
+      <div class="activate-text">
+        <span class="activate-icon">🔑</span>
+        <div>
+          <div class="activate-title">账号未激活</div>
+          <div class="activate-desc">请兑换激活码来充值时间或余额</div>
+        </div>
+      </div>
+      <button @click="showRedeem = true" class="activate-btn">🎁 兑换激活码</button>
+    </div>
     <!-- Stats Cards -->
     <div class="stat-cards">
       <div class="stat-card">
@@ -90,8 +112,13 @@ function copyUrl() {
         <div class="stat-value status-dot" :style="{ color: statusColor }">
           ● {{ info.status === 'active' ? '正常' : info.statusMessage || info.status }}
         </div>
-        <PlanStatusBadge :plan="info.plan" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top: 6px" />
+        <PlanStatusBadge :plan="info.plan" :tier="info.tier" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top: 6px" />
       </div>
+    </div>
+
+    <!-- Redeem Button (when activated) -->
+    <div v-if="info.plan" class="redeem-section">
+      <button @click="showRedeem = true" class="redeem-trigger">🎁 兑换激活码</button>
     </div>
 
     <!-- Model Usage -->
@@ -157,6 +184,9 @@ function copyUrl() {
   </div>
 
   <div v-else class="loading">加载中...</div>
+
+  <!-- Redemption Modal -->
+  <RedemptionModal :show="showRedeem" @close="showRedeem = false" @redeemed="onRedeemed" />
 </template>
 
 <style scoped>
@@ -165,6 +195,37 @@ function copyUrl() {
   flex-direction: column;
   gap: 1.5rem;
 }
+
+.activate-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(241,39,17,0.08));
+  border: 1px solid rgba(245,158,11,0.15);
+  border-radius: 14px;
+  padding: 1.2rem 1.5rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.activate-text { display: flex; align-items: center; gap: 1rem; }
+.activate-icon { font-size: 1.8rem; }
+.activate-title { font-size: 1rem; font-weight: 700; color: #f5af19; }
+.activate-desc { font-size: 0.8rem; color: rgba(255,255,255,0.5); margin-top: 2px; }
+.activate-btn {
+  padding: 0.6rem 1.2rem; border: none; border-radius: 10px;
+  background: linear-gradient(135deg, #f5af19, #f12711); color: #fff;
+  font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  white-space: nowrap;
+}
+.activate-btn:hover { transform: scale(1.03); }
+
+.redeem-section { text-align: right; }
+.redeem-trigger {
+  padding: 0.5rem 1rem; border: 1px solid rgba(245,158,11,0.3);
+  background: rgba(245,158,11,0.08); border-radius: 10px;
+  color: #f5af19; font-weight: 600; cursor: pointer; font-size: 0.8rem;
+}
+.redeem-trigger:hover { background: rgba(245,158,11,0.15); }
 
 .stat-cards {
   display: grid;
