@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useUserAuth } from '../stores/userAuth'
@@ -11,54 +11,46 @@ const input = ref('')
 const error = ref('')
 const loading = ref(false)
 
-const isApiKey = computed(() => input.value.trim().startsWith('sk-'))
-const inputHint = computed(() => {
-  if (!input.value.trim()) return ''
-  return isApiKey.value ? '🔑 将以用户身份登录' : '🛡️ 将以管理员身份登录'
-})
-
 async function handleLogin() {
   if (!input.value.trim() || loading.value) return
   loading.value = true
   error.value = ''
+  const val = input.value.trim()
 
   try {
-    if (isApiKey.value) {
-      // User login with API Key
-      const ok = await userAuth.login(input.value.trim(), true)
-      if (ok) {
-        router.push('/user/dashboard')
-      } else {
-        error.value = userAuth.error || 'API Key 无效或已禁用'
-      }
-    } else {
-      // Admin login with password
-      const ok = await auth.login(input.value.trim())
-      if (ok) {
-        router.push('/')
-      } else {
-        error.value = '管理凭证无效'
-      }
+    // Try user login first
+    const userOk = await userAuth.login(val, true)
+    if (userOk) {
+      router.push('/user/dashboard')
+      return
     }
-  } catch (e) {
-    error.value = e.message || '连接失败，请检查服务是否运行'
-  } finally {
-    loading.value = false
-  }
+  } catch {}
+
+  try {
+    // Then try admin login
+    const adminOk = await auth.login(val)
+    if (adminOk) {
+      router.push('/')
+      return
+    }
+  } catch {}
+
+  // Both failed
+  error.value = '凭证无效'
+  // Clean up failed user attempt
+  userAuth.logout()
+  loading.value = false
 }
 </script>
 
 <template>
   <div class="min-h-screen w-full flex flex-col items-center justify-center p-8 relative overflow-hidden">
-    <!-- 血雾渐变背景 -->
     <div class="absolute inset-0 z-0">
       <div class="absolute top-[-15%] left-[20%] w-[50%] h-[50%] bg-[var(--primary)] opacity-[0.06] blur-[150px] rounded-full animate-blood-mist"></div>
       <div class="absolute bottom-[-10%] right-[10%] w-[40%] h-[40%] bg-text-secondary opacity-[0.08] blur-[120px] rounded-full animate-blood-mist" style="animation-delay: -3s;"></div>
     </div>
 
     <div class="w-full max-w-[460px] relative z-10 flex flex-col items-stretch">
-      
-      <!-- 符文 Logo -->
       <div class="text-center mb-14 flex flex-col items-center gap-5">
         <div class="relative">
           <svg class="w-20 h-20 animate-rune-pulse" viewBox="0 0 100 100">
@@ -69,7 +61,6 @@ async function handleLogin() {
           </svg>
           <div class="absolute inset-0 rounded-full bg-[var(--world-accent-alt)] opacity-[0.08] blur-xl animate-rune-pulse"></div>
         </div>
-
         <div class="space-y-2">
           <h1 class="text-4xl font-black tracking-tighter text-[var(--text)]">
             Kiro<span class="text-[var(--primary)]">Stack</span>
@@ -78,50 +69,39 @@ async function handleLogin() {
         </div>
       </div>
 
-      <!-- 统一登录卡 -->
-      <div class="bg-[var(--card)]/80 backdrop-blur-2xl border border-[var(--border)] rounded-3xl px-10 py-14 shadow-2xl flex flex-col gap-8 relative overflow-hidden">
+      <div class="bg-[var(--card)]/80 backdrop-blur-2xl border border-[var(--border)] rounded-3xl px-10 py-14 shadow-2xl flex flex-col gap-10 relative overflow-hidden">
         <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#b8860b]/40 to-transparent"></div>
         <div class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#c41e3a]/30 to-transparent"></div>
 
         <div class="space-y-2">
-          <h2 class="text-xl font-bold text-[var(--text)] tracking-tight">统 一 登 录</h2>
-          <p class="text-[var(--text)]-secondary text-[10px] font-bold uppercase tracking-[0.2em]">API Key 或 管理密码</p>
+          <h2 class="text-xl font-bold text-[var(--text)] tracking-tight">身 份 鉴 权</h2>
+          <p class="text-[var(--text)]-secondary text-[10px] font-bold uppercase tracking-[0.2em]">Authentication Required</p>
         </div>
 
-        <form @submit.prevent="handleLogin" class="flex flex-col gap-6">
+        <form @submit.prevent="handleLogin" class="flex flex-col gap-8">
           <div class="flex flex-col gap-3">
             <label class="block text-[10px] font-black uppercase tracking-[0.3em] text-[var(--world-accent-alt)] ml-1">凭证 / CREDENTIAL</label>
             <div class="relative group">
-              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--world-accent-alt)]/40 text-lg select-none">{{ isApiKey ? '🔑' : '卍' }}</span>
+              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--world-accent-alt)]/40 text-lg select-none">卍</span>
               <input 
                 v-model="input" 
                 type="password" 
-                placeholder="输入 API Key (sk-...) 或管理密码" 
+                placeholder="请输入访问凭证..." 
                 required
                 autofocus
                 class="w-full h-16 pl-12 pr-6 bg-[var(--bg)]/60 border border-[var(--border)] rounded-xl text-[var(--text)] outline-none focus:border-[var(--primary)]/50 focus:shadow-[0_0_20px_rgba(196,30,58,0.15)] transition-all text-base font-medium placeholder:text-[var(--text)]-secondary"
               />
             </div>
-            <!-- 类型提示 -->
-            <Transition name="fade-slide">
-              <p v-if="inputHint" class="text-[11px] font-bold ml-1 transition-all"
-                :class="isApiKey ? 'text-emerald-400' : 'text-amber-400'">
-                {{ inputHint }}
-              </p>
-            </Transition>
           </div>
 
           <button 
             type="submit" 
             :disabled="loading"
-            class="w-full h-16 rounded-xl text-white font-black text-base shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 relative overflow-hidden"
-            :class="isApiKey 
-              ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20' 
-              : 'bg-[var(--primary)] hover:bg-[#d42444] shadow-[var(--primary)]/20 blood-glow-hover'"
+            class="w-full h-16 rounded-xl bg-[var(--primary)] hover:bg-[#d42444] text-white font-black text-base shadow-xl shadow-[var(--primary)]/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 blood-glow-hover relative overflow-hidden"
           >
             <template v-if="!loading">
-              <span>{{ isApiKey ? '进 入 用 户 面 板' : '进 入 管 理 控 制 台' }}</span>
-              <span class="text-lg opacity-60">{{ isApiKey ? '→' : '☯' }}</span>
+              <span>登 录</span>
+              <span class="text-lg opacity-60">☯</span>
             </template>
             <template v-else>
               <svg class="w-6 h-6 animate-coin-spin" viewBox="0 0 100 100">
@@ -139,12 +119,6 @@ async function handleLogin() {
             {{ error }}
           </div>
         </Transition>
-
-        <!-- 提示 -->
-        <div class="text-center text-[10px] text-[var(--text)]-secondary opacity-50 space-y-1">
-          <p>输入以 <code class="text-emerald-400/70 font-mono">sk-</code> 开头的 API Key 进入用户面板</p>
-          <p>输入管理密码进入管理控制台</p>
-        </div>
       </div>
 
       <div class="mt-12 text-center text-[9px] font-bold uppercase tracking-[0.5em] text-[var(--text)]-secondary">
