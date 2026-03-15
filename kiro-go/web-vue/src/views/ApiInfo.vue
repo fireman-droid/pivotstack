@@ -10,6 +10,7 @@ import {
   Code,
   Check
 } from 'lucide-vue-next'
+import { copyToClipboard } from '../utils/clipboard'
 
 const { success } = useToast()
 const base = location.origin
@@ -78,17 +79,7 @@ const selected = computed(() => endpoints.value[selectedIndex.value])
 const selectedCurl = computed(() => selected.value[shell.value])
 
 function copy(text) {
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text)
-  } else {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.cssText = 'position:fixed;left:-9999px'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
+  copyToClipboard(text)
   success('已复制到剪贴板')
 }
 </script>

@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import { Plus, Trash2, Copy, Gift, Clock, Download, Search, Filter, CheckSquare, Square, RefreshCw, X } from 'lucide-vue-next'
+import { copyToClipboard } from '../utils/clipboard'
 
 const { success, error: toastError } = useToast()
 const codes = ref([])
@@ -175,21 +176,21 @@ async function batchDelete() {
 }
 
 function copyCode(code) {
-  navigator.clipboard?.writeText(code)
+  copyToClipboard(code)
   success('已复制')
 }
 
 function copySelected() {
   const list = [...selectedCodes.value].join('\n')
   if (!list) return toastError('未选择任何激活码')
-  navigator.clipboard?.writeText(list)
+  copyToClipboard(list)
   success(`已复制 ${selectedCodes.value.size} 个激活码`)
 }
 
 function copyAllUnused() {
   const unused = filteredCodes.value.filter(c => !c.usedBy).map(c => c.code).join('\n')
   if (!unused) return toastError('没有未使用激活码')
-  navigator.clipboard?.writeText(unused)
+  copyToClipboard(unused)
   success(`已复制 ${unused.split('\n').length} 个激活码`)
 }
 

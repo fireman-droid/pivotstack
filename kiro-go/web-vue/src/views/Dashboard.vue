@@ -11,6 +11,7 @@ import {
   Users, Zap, Activity, CreditCard, Clock, 
   Copy, Terminal, Globe, AlertTriangle, Crown
 } from 'lucide-vue-next'
+import { copyToClipboard } from '../utils/clipboard'
 
 const { success } = useToast()
 const stats = ref({ accounts: 0, totalRequests: 0, successRequests: 0, failedRequests: 0, totalTokens: 0, totalCredits: 0, uptime: 0, freePool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 }, proPool: { total: 0, available: 0, usageLimit: 0, usageCurrent: 0, trialLimit: 0, trialCurrent: 0 } })
@@ -189,14 +190,7 @@ function formatUptime(s) {
 }
 
 function copy(text) {
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text)
-  } else {
-    const ta = document.createElement('textarea')
-    ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px'
-    document.body.appendChild(ta); ta.select()
-    document.execCommand('copy'); document.body.removeChild(ta)
-  }
+  copyToClipboard(text)
   success('已复制到剪贴板')
 }
 

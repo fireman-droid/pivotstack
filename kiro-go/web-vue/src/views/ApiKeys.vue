@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, reactive } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
+import { copyToClipboard } from '../utils/clipboard'
 import {
   Plus, Trash2, Copy, Eye, EyeOff, Key,
   ToggleLeft, ToggleRight, Pencil, Search,
@@ -102,7 +103,7 @@ function toggleExpand(k) {
 }
 
 function copyText(text) {
-  navigator.clipboard?.writeText(text)
+  copyToClipboard(text)
   success('已复制')
 }
 

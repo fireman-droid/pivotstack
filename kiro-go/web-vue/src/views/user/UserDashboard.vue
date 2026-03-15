@@ -8,6 +8,7 @@ import {
   AlertTriangle, Gift, Wallet, Clock, Activity,
   Copy, Check, LayoutGrid
 } from 'lucide-vue-next'
+import { copyToClipboard } from '../../utils/clipboard'
 
 const router = useRouter()
 const auth = useUserAuth()
@@ -94,7 +95,7 @@ const topModels = computed(() => {
 const baseUrl = computed(() => `${location.protocol}//${location.host}`)
 
 function copyUrl() {
-  navigator.clipboard.writeText(baseUrl.value)
+  copyToClipboard(baseUrl.value)
   copied.value = true
   setTimeout(() => copied.value = false, 2000)
 }
