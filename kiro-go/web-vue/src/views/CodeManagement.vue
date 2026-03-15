@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { Plus, Trash2, Copy, Gift, Clock } from 'lucide-vue-next'
+import { Plus, Trash2, Copy, Gift, Clock, Download } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
 const codes = ref([])
@@ -77,6 +77,16 @@ function fmtDate(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function exportCSV() {
+  const rows = [['激活码','类型','面值','状态','使用方','创建时间']]
+  codes.value.forEach(c => rows.push([c.code, c.type, c.amount, c.usedBy ? '已使用' : '未使用', c.usedBy || '-', fmtDate(c.createdAt)]))
+  const csv = rows.map(r => r.join(',')).join('\n')
+  const a = document.createElement('a')
+  a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv)
+  a.download = 'activation_codes.csv'
+  a.click()
+}
+
 onMounted(loadCodes)
 </script>
 
@@ -139,6 +149,9 @@ onMounted(loadCodes)
     <div class="flex gap-2">
       <button @click="copyAllUnused" class="px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold hover:border-[var(--primary)] transition-all">
         📋 复制所有未使用码
+      </button>
+      <button @click="exportCSV" class="flex items-center gap-1.5 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold hover:border-[var(--primary)] transition-all">
+        <Download class="w-3.5 h-3.5" /> 导出 CSV
       </button>
     </div>
 

@@ -111,14 +111,15 @@ type ApiKeyInfo struct {
 
 // ActivationCode represents a redeemable code for balance or time extension.
 type ActivationCode struct {
-	Code      string  `json:"code"`   // e.g. KIRO-XXXX-XXXX-XXXX
-	Type      string  `json:"type"`   // "balance" | "days"
-	Amount    float64 `json:"amount"` // balance: CNY amount; days: number of days
-	Used      bool    `json:"used"`
-	UsedBy    string  `json:"usedBy,omitempty"` // ApiKey ID
-	UsedAt    int64   `json:"usedAt,omitempty"`
-	CreatedAt int64   `json:"createdAt"`
-	Note      string  `json:"note,omitempty"`
+	Code          string  `json:"code"`                    // e.g. KIRO-XXXX-XXXX-XXXX
+	Type          string  `json:"type"`                    // "balance" | "days"
+	Amount        float64 `json:"amount"`                  // balance: CNY amount; days: number of days
+	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
+	Used          bool    `json:"used"`
+	UsedBy        string  `json:"usedBy,omitempty"` // ApiKey ID
+	UsedAt        int64   `json:"usedAt,omitempty"`
+	CreatedAt     int64   `json:"createdAt"`
+	Note          string  `json:"note,omitempty"`
 }
 
 // ModelPricing defines per-model pricing in CNY.
@@ -130,9 +131,10 @@ type ModelPricing struct {
 
 // PricingConfig holds pricing for all models.
 type PricingConfig struct {
-	Models        map[string]ModelPricing `json:"models"`
-	DefaultInput  float64                 `json:"defaultInput"`  // CNY per million input tokens
-	DefaultOutput float64                 `json:"defaultOutput"` // CNY per million output tokens
+	Models         map[string]ModelPricing `json:"models"`
+	DefaultInput   float64                 `json:"defaultInput"`   // CNY per million input tokens
+	DefaultOutput  float64                 `json:"defaultOutput"`  // CNY per million output tokens
+	MinRequestCost float64                 `json:"minRequestCost"` // minimum cost per request in CNY
 }
 
 // Config represents the global application configuration.
@@ -922,6 +924,9 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 		if ac.Code == codeStr {
 			if ac.Used {
 				return "", fmt.Errorf("activation code already used")
+			}
+			if ac.CodeExpiresAt > 0 && time.Now().Unix() > ac.CodeExpiresAt {
+				return "", fmt.Errorf("activation code has expired")
 			}
 			cfg.ActivationCodes[i].Used = true
 			cfg.ActivationCodes[i].UsedBy = keyID

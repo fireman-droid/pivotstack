@@ -46,9 +46,14 @@ async function handleRedeem() {
       </form>
 
       <div v-if="result" class="result success">
-        ✅ 兑换成功！
-        <template v-if="result.type === 'balance'">余额已更新为 ¥{{ result.balance.toFixed(2) }}</template>
-        <template v-else>有效期已延长</template>
+        <div class="receipt-title">✅ 兑换成功！</div>
+        <div class="receipt-detail" v-if="result.type === 'balance'">
+          余额：¥{{ (result.balanceBefore || 0).toFixed(2) }} → ¥{{ (result.balanceAfter || 0).toFixed(2) }}
+          <span class="receipt-add">(+¥{{ (result.amount || 0).toFixed(2) }})</span>
+        </div>
+        <div class="receipt-detail" v-if="result.type === 'days'">
+          有效期延长 <span class="receipt-add">+{{ result.amount }}天</span>
+        </div>
       </div>
 
       <div v-if="error" class="result error">

@@ -161,6 +161,16 @@ func (h *Handler) handleUserLogs(w http.ResponseWriter, r *http.Request, info *c
 
 // POST /user/api/redeem - redeem activation code
 func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info *config.ApiKeyInfo) {
+	// IP rate limiting for brute force prevention
+	ip := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = strings.Split(fwd, ",")[0]
+	}
+	if allowed, reason := CheckRedeemRateLimit(ip); !allowed {
+		writeJSON(w, 429, map[string]string{"error": reason})
+		return
+	}
+
 	var req struct {
 		Code string `json:"code"`
 	}
@@ -172,6 +182,10 @@ func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info 
 		writeJSON(w, 400, map[string]string{"error": "code is required"})
 		return
 	}
+
+	// Capture before state for receipt
+	balanceBefore := info.Balance
+	expiresAtBefore := info.ExpiresAt
 
 	codeType, err := config.RedeemActivationCode(req.Code, info.ID)
 	if err != nil {
@@ -189,10 +203,24 @@ func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info 
 	fmt.Printf("[Redeem] key=%s code=%s type=%s balance=¥%.2f expiresAt=%d\n",
 		info.ID[:8], req.Code, codeType, updated.Balance, updated.ExpiresAt)
 
+	// Find the code amount for receipt
+	var amount float64
+	codes := config.GetActivationCodes()
+	for _, ac := range codes {
+		if ac.Code == req.Code {
+			amount = ac.Amount
+			break
+		}
+	}
+
 	writeJSON(w, 200, map[string]interface{}{
-		"type":      codeType,
-		"balance":   updated.Balance,
-		"expiresAt": updated.ExpiresAt,
+		"type":            codeType,
+		"amount":          amount,
+		"balance":         updated.Balance,
+		"balanceBefore":   balanceBefore,
+		"balanceAfter":    updated.Balance,
+		"expiresAt":       updated.ExpiresAt,
+		"expiresAtBefore": expiresAtBefore,
 	})
 }
 

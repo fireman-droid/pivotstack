@@ -3,6 +3,7 @@ package proxy
 import (
 	crand "crypto/rand"
 	"encoding/json"
+	"fmt"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
 	"net/http"
@@ -892,6 +893,7 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	AuditLog("pricing_update", "admin", fmt.Sprintf("models=%d defaultIn=%.2f defaultOut=%.2f", len(pricing.Models), pricing.DefaultInput, pricing.DefaultOutput))
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -950,6 +952,8 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		codes = append(codes, code)
 	}
 
+	AuditLog("codes_create", "admin", fmt.Sprintf("type=%s amount=%.2f count=%d note=%s", req.Type, req.Amount, len(codes), req.Note))
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"codes":   codes,
@@ -964,6 +968,7 @@ func (h *Handler) apiDeleteCode(w http.ResponseWriter, r *http.Request, code str
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	AuditLog("code_delete", "admin", fmt.Sprintf("code=%s", code))
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
