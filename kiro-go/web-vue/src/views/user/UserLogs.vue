@@ -161,6 +161,7 @@ h3 {
   transition: all 200ms ease;
   position: relative;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .log-card:hover {

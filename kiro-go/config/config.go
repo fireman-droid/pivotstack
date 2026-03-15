@@ -553,15 +553,23 @@ func ImportAccounts(accounts []Account) (int, int, error) {
 	imported := 0
 	skipped := 0
 	existingIDs := make(map[string]bool)
+	existingEmails := make(map[string]bool)
 
-	// Build map of existing account IDs
+	// Build map of existing account IDs and emails
 	for _, a := range cfg.Accounts {
 		existingIDs[a.ID] = true
+		if a.Email != "" {
+			existingEmails[strings.ToLower(a.Email)] = true
+		}
 	}
 
-	// Import new accounts
+	// Import new accounts (skip duplicates by ID or email)
 	for _, account := range accounts {
 		if existingIDs[account.ID] {
+			skipped++
+			continue
+		}
+		if account.Email != "" && existingEmails[strings.ToLower(account.Email)] {
 			skipped++
 			continue
 		}
@@ -573,6 +581,9 @@ func ImportAccounts(accounts []Account) (int, int, error) {
 
 		cfg.Accounts = append(cfg.Accounts, account)
 		existingIDs[account.ID] = true
+		if account.Email != "" {
+			existingEmails[strings.ToLower(account.Email)] = true
+		}
 		imported++
 	}
 

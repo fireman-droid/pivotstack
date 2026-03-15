@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, computed, ref } from 'vue'
+import { onMounted, computed, ref, watch } from 'vue'
 import { useWorldTheme } from '../stores/worldTheme'
 import { Line } from 'vue-chartjs'
 import {
@@ -28,7 +28,10 @@ import {
   Sparkles,
   X,
   Cpu,
-  Crown
+  Crown,
+  Trash2,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-vue-next'
 import AccountCard from '../components/AccountCard.vue'
 import BatchBar from '../components/BatchBar.vue'
@@ -40,10 +43,16 @@ const theme = useWorldTheme()
 const { success, error } = useToast()
 const isRefreshing = ref(false)
 const viewMode = ref('grid')
+const currentPage = ref(1)
+const pageSize = 50
 
 const showAddDialog = ref(false)
 const isAdding = ref(false)
 const jsonText = ref('')
+
+// 导入进度状态
+const importStatus = ref({ phase: 'idle', total: 0, imported: 0, failed: 0, elapsed: 0, message: '', details: null })
+let elapsedTimer = null
 
 // 号池统计数据（从 /status API 获取）
 const poolStats = ref({
@@ -91,6 +100,14 @@ onMounted(() => {
   loadPoolStats()
 })
 
+const totalPages = computed(() => Math.max(1, Math.ceil(store.filtered.length / pageSize)))
+const paginatedAccounts = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return store.filtered.slice(start, start + pageSize)
+})
+// 过滤条件变化时重置页码
+watch(() => [store.filterKeyword, store.filterStatus, store.filterTier], () => { currentPage.value = 1 })
+
 const refreshAll = async () => {
   isRefreshing.value = true
   try {
@@ -101,8 +118,34 @@ const refreshAll = async () => {
   }
 }
 
+const isDeletingBanned = ref(false)
+async function deleteBanned() {
+  const banned = store.accounts.filter(a => a.banStatus && a.banStatus !== 'ACTIVE')
+  if (!banned.length) { error('没有封禁账号'); return }
+  if (!confirm(`确定删除 ${banned.length} 个封禁/限制账号？此操作不可恢复！`)) return
+  isDeletingBanned.value = true
+  try {
+    const res = await api('/accounts/batch', {
+      method: 'POST',
+      body: JSON.stringify({ ids: banned.map(a => a.id), action: 'delete' })
+    })
+    const data = await res.json()
+    if (data.success) {
+      success(`已删除 ${data.deleted} 个封禁账号`)
+      await store.load()
+    } else {
+      error(data.error || '删除失败')
+    }
+  } catch (e) {
+    error('删除失败: ' + e.message)
+  }
+  isDeletingBanned.value = false
+}
+
 function resetAddDialog() {
   jsonText.value = ''
+  importStatus.value = { phase: 'idle', total: 0, imported: 0, failed: 0, elapsed: 0, message: '', details: null }
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
 }
 
 async function submitImport() {
@@ -113,13 +156,8 @@ async function submitImport() {
   const items = Array.isArray(parsed) ? parsed : [parsed]
   if (!items.length) { error('JSON 数组为空'); return }
 
-  isAdding.value = true
-  let successCount = 0
-  let failCount = 0
-  const errors = []
-
-  for (const item of items) {
-    // 自动检测 authMethod
+  // 预处理每个账号的字段
+  const accounts = items.map(item => {
     let authMethod = item.authMethod || ''
     if (!authMethod) {
       const provider = (item.provider || '').toLowerCase()
@@ -127,43 +165,104 @@ async function submitImport() {
       else if (item.clientId || item.clientID) authMethod = 'idc'
       else authMethod = 'social'
     }
-    const payload = {
+    return {
       accessToken: item.accessToken || item.access_token || '',
       refreshToken: item.refreshToken || item.refresh_token || '',
       clientId: item.clientId || item.clientID || item.client_id || '',
       clientSecret: item.clientSecret || item.client_secret || '',
-      authMethod: authMethod,
+      authMethod,
       provider: item.provider || '',
       region: item.region || 'us-east-1',
-      // 额外字段：kiro-account-manager 导出的完整信息
       email: item.email || '',
       userId: item.userId || item.user_id || '',
       profileArn: item.profileArn || '',
       machineId: item.machineId || '',
       usageData: item.usageData || null,
     }
-    if (!payload.refreshToken && !payload.accessToken) {
-      failCount++
-      errors.push(`第 ${successCount + failCount} 条: 缺少 token`)
-      continue
+  }).filter(a => a.refreshToken || a.accessToken)
+
+  if (!accounts.length) { error('没有有效的账号（缺少 token）'); return }
+
+  isAdding.value = true
+  importStatus.value = { phase: 'importing', total: accounts.length, done: 0, imported: 0, failed: 0, elapsed: 0, message: '', details: null }
+
+  const startMs = Date.now()
+  elapsedTimer = setInterval(() => {
+    importStatus.value.elapsed = ((Date.now() - startMs) / 1000).toFixed(1)
+  }, 200)
+
+  try {
+    const auth = (await import('../stores/auth')).useAuthStore()
+    const res = await fetch('/admin/api/auth/credentials/batch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Password': auth.password
+      },
+      body: JSON.stringify({ accounts, concurrency: 20 })
+    })
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
     }
-    try {
-      await api('/auth/credentials', { method: 'POST', body: JSON.stringify(payload) })
-      successCount++
-    } catch (e) {
-      failCount++
-      errors.push(`第 ${successCount + failCount} 条: ${e.message}`)
+
+    // 读取 SSE 流
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() // 保留不完整的行
+
+      let currentEvent = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6)
+          try {
+            const data = JSON.parse(dataStr)
+            if (currentEvent === 'progress') {
+              importStatus.value.done = data.done || 0
+              importStatus.value.imported = data.ok || 0
+              importStatus.value.failed = data.fail || 0
+            } else if (currentEvent === 'done') {
+              clearInterval(elapsedTimer); elapsedTimer = null
+              importStatus.value = {
+                phase: 'done',
+                total: accounts.length,
+                done: accounts.length,
+                imported: data.imported || 0,
+                failed: data.failed || 0,
+                elapsed: data.elapsed_sec?.toFixed(1) || importStatus.value.elapsed,
+                message: data.message,
+                details: data.details
+              }
+              setTimeout(() => store.load(), 1500)
+            }
+          } catch {}
+          currentEvent = ''
+        }
+      }
     }
+
+    // 如果流结束了但没收到 done 事件
+    if (importStatus.value.phase === 'importing') {
+      clearInterval(elapsedTimer); elapsedTimer = null
+      importStatus.value.phase = 'done'
+      importStatus.value.message = `导入完成: ${importStatus.value.imported} 成功, ${importStatus.value.failed} 失败`
+      setTimeout(() => store.load(), 1500)
+    }
+  } catch (e) {
+    clearInterval(elapsedTimer); elapsedTimer = null
+    importStatus.value = { ...importStatus.value, phase: 'error', message: '请求失败: ' + e.message }
   }
 
-  if (successCount > 0) {
-    success(`成功导入 ${successCount} 个账号${failCount > 0 ? `，${failCount} 个失败` : ''}，正在后台刷新配额...`)
-    showAddDialog.value = false
-    resetAddDialog()
-    setTimeout(() => store.load(), 4000)
-  } else {
-    error(`全部导入失败：${errors[0]}`)
-  }
   isAdding.value = false
 }
 </script>
@@ -320,6 +419,12 @@ async function submitImport() {
           class="p-2.5 bg-[var(--card)] border border-[var(--border)] rounded-xl hover:bg-[var(--bg)] transition-all disabled:opacity-50">
           <RotateCw class="w-4 h-4 text-[var(--text)]-secondary" :class="{ 'animate-spin': isRefreshing }" />
         </button>
+
+        <button v-if="stats.banned > 0" @click="deleteBanned" :disabled="isDeletingBanned"
+          class="flex items-center gap-1.5 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500/20 transition-all disabled:opacity-50">
+          <Trash2 class="w-3.5 h-3.5" />
+          删除封禁 ({{ stats.banned }})
+        </button>
       </div>
     </div>
 
@@ -331,9 +436,30 @@ async function submitImport() {
       <div v-for="i in 8" :key="i" class="h-64 bg-[var(--card)] rounded-2xl animate-pulse border border-[var(--border)]"></div>
     </div>
 
-    <div v-else-if="store.filtered.length > 0"
-         :class="viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4' : 'flex flex-col gap-3'">
-      <AccountCard v-for="account in store.filtered" :key="account.id" :account="account" :horizontal="viewMode === 'list'" />
+    <div v-else-if="store.filtered.length > 0">
+      <div :class="viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4' : 'flex flex-col gap-3'">
+        <AccountCard v-for="account in paginatedAccounts" :key="account.id" :account="account" :horizontal="viewMode === 'list'" />
+      </div>
+      <!-- 分页 -->
+      <div v-if="totalPages > 1" class="flex items-center justify-center gap-2 mt-6">
+        <button @click="currentPage = Math.max(1, currentPage - 1)" :disabled="currentPage <= 1"
+          class="p-2 rounded-xl bg-[var(--card)] border border-[var(--border)] disabled:opacity-30 hover:bg-[var(--bg)] transition-all">
+          <ChevronLeft class="w-4 h-4" />
+        </button>
+        <template v-for="p in totalPages" :key="p">
+          <button v-if="p === 1 || p === totalPages || (p >= currentPage - 2 && p <= currentPage + 2)"
+            @click="currentPage = p"
+            class="w-9 h-9 rounded-xl text-xs font-bold transition-all"
+            :class="currentPage === p ? 'bg-[var(--primary)] text-white shadow-sm' : 'bg-[var(--card)] border border-[var(--border)] hover:bg-[var(--bg)]'">
+            {{ p }}
+          </button>
+          <span v-else-if="p === currentPage - 3 || p === currentPage + 3" class="text-[var(--text)]-secondary text-xs">...</span>
+        </template>
+        <button @click="currentPage = Math.min(totalPages, currentPage + 1)" :disabled="currentPage >= totalPages"
+          class="p-2 rounded-xl bg-[var(--card)] border border-[var(--border)] disabled:opacity-30 hover:bg-[var(--bg)] transition-all">
+          <ChevronRight class="w-4 h-4" />
+        </button>
+      </div>
     </div>
 
     <!-- Empty State -->
@@ -348,7 +474,7 @@ async function submitImport() {
 
     <!-- Footer -->
     <div class="flex items-center justify-between pt-6 border-t border-[var(--border)] text-xs font-bold text-[var(--text)]-secondary">
-      <span>显示 {{ store.filtered.length }} / {{ store.accounts.length }} 个账号</span>
+      <span>显示 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, store.filtered.length) }} / {{ store.filtered.length }} 个账号（共 {{ store.accounts.length }}）</span>
       <span v-if="store.selectedIds.size">已选 {{ store.selectedIds.size }} 个</span>
     </div>
   </div>
@@ -356,29 +482,90 @@ async function submitImport() {
   <!-- Add Account Dialog -->
   <Teleport to="body">
     <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-         @click.self="showAddDialog = false; resetAddDialog()">
+         @click.self="!isAdding && (showAddDialog = false, resetAddDialog())">
       <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-5">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-black text-[var(--text)]">导入账号</h2>
-          <button @click="showAddDialog = false; resetAddDialog()" class="p-2 rounded-xl hover:bg-[var(--bg)] transition-all">
-            <X class="w-4 h-4" />
-          </button>
-        </div>
 
-        <p class="text-[11px] text-[var(--text)]-secondary leading-relaxed">
-          粘贴 Kiro Account Manager 导出的 JSON（单个或数组），自动解析 accessToken / refreshToken / provider 等字段。
-        </p>
+        <!-- 导入中：进度面板 -->
+        <template v-if="importStatus.phase === 'importing'">
+          <div class="flex flex-col items-center py-8 gap-4">
+            <div class="w-12 h-12 border-3 border-[var(--primary)]/20 border-t-[var(--primary)] rounded-full animate-spin"></div>
+            <h3 class="text-lg font-black">正在导入账号...</h3>
+            <div class="text-3xl font-black text-[var(--primary)] tabular-nums">{{ importStatus.done }} <span class="text-base font-bold text-[var(--text)]-secondary">/ {{ importStatus.total }}</span></div>
+            <!-- 进度条 -->
+            <div class="w-full h-2 bg-[var(--border)] rounded-full overflow-hidden">
+              <div class="h-full bg-[var(--primary)] rounded-full transition-all duration-300"
+                   :style="{ width: (importStatus.total > 0 ? (importStatus.done / importStatus.total * 100) : 0) + '%' }"></div>
+            </div>
+            <div class="flex items-center gap-4 text-xs font-bold">
+              <span class="text-green-500">✓ {{ importStatus.imported }}</span>
+              <span class="text-red-500" v-if="importStatus.failed > 0">✗ {{ importStatus.failed }}</span>
+              <span class="text-[var(--text)]-secondary font-mono tabular-nums">{{ importStatus.elapsed }}s</span>
+            </div>
+          </div>
+        </template>
 
-        <textarea v-model="jsonText" rows="14"
-          placeholder="粘贴 kiro-account-manager 导出的 JSON&#10;&#10;支持单个对象或数组批量导入 [...]"
-          class="w-full px-3 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all resize-none leading-relaxed" />
+        <!-- 导入完成：结果面板 -->
+        <template v-else-if="importStatus.phase === 'done'">
+          <div class="flex flex-col items-center py-6 gap-4">
+            <CheckCircle2 class="w-14 h-14 text-green-500" />
+            <h3 class="text-lg font-black">导入完成</h3>
+            <div class="flex items-center gap-6">
+              <div class="text-center">
+                <div class="text-3xl font-black text-green-500">{{ importStatus.imported }}</div>
+                <div class="text-[10px] font-bold text-[var(--text)]-secondary uppercase">成功</div>
+              </div>
+              <div class="text-center" v-if="importStatus.failed > 0">
+                <div class="text-3xl font-black text-red-500">{{ importStatus.failed }}</div>
+                <div class="text-[10px] font-bold text-[var(--text)]-secondary uppercase">失败</div>
+              </div>
+              <div class="text-center">
+                <div class="text-3xl font-black text-[var(--text)]-secondary">{{ importStatus.elapsed }}s</div>
+                <div class="text-[10px] font-bold text-[var(--text)]-secondary uppercase">耗时</div>
+              </div>
+            </div>
+            <!-- 失败详情 -->
+            <div v-if="importStatus.details?.failed?.length" class="w-full max-h-32 overflow-y-auto bg-red-500/5 border border-red-500/10 rounded-xl p-3 text-xs space-y-1">
+              <div v-for="(f, i) in importStatus.details.failed" :key="i" class="text-red-400 truncate">{{ f.email || '未知' }}: {{ f.error }}</div>
+            </div>
+            <button @click="showAddDialog = false; resetAddDialog()" class="w-full h-10 rounded-xl bg-[var(--primary)] text-white text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-[0.98] transition-all">确定</button>
+          </div>
+        </template>
 
-        <div class="flex gap-3">
-          <button @click="showAddDialog = false; resetAddDialog()" class="flex-1 h-10 rounded-xl border border-[var(--border)] text-sm font-bold hover:bg-[var(--bg)] transition-all">取消</button>
-          <button @click="submitImport" :disabled="isAdding" class="flex-1 h-10 rounded-xl bg-[var(--primary)] text-white text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
-            {{ isAdding ? '导入中...' : '解析并导入' }}
-          </button>
-        </div>
+        <!-- 导入失败：错误面板 -->
+        <template v-else-if="importStatus.phase === 'error'">
+          <div class="flex flex-col items-center py-6 gap-4">
+            <ShieldAlert class="w-14 h-14 text-red-500" />
+            <h3 class="text-lg font-black">导入失败</h3>
+            <p class="text-sm text-red-400 text-center">{{ importStatus.message }}</p>
+            <button @click="importStatus.phase = 'idle'" class="w-full h-10 rounded-xl border border-[var(--border)] text-sm font-bold hover:bg-[var(--bg)] transition-all">返回重试</button>
+          </div>
+        </template>
+
+        <!-- 默认：输入面板 -->
+        <template v-else>
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-black text-[var(--text)]">导入账号</h2>
+            <button @click="showAddDialog = false; resetAddDialog()" class="p-2 rounded-xl hover:bg-[var(--bg)] transition-all">
+              <X class="w-4 h-4" />
+            </button>
+          </div>
+
+          <p class="text-[11px] text-[var(--text)]-secondary leading-relaxed">
+            粘贴 Kiro Account Manager 导出的 JSON（单个或数组），自动解析 accessToken / refreshToken / provider 等字段。
+          </p>
+
+          <textarea v-model="jsonText" rows="14"
+            placeholder="粘贴 kiro-account-manager 导出的 JSON&#10;&#10;支持单个对象或数组批量导入 [...]"
+            class="w-full px-3 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all resize-none leading-relaxed" />
+
+          <div class="flex gap-3">
+            <button @click="showAddDialog = false; resetAddDialog()" class="flex-1 h-10 rounded-xl border border-[var(--border)] text-sm font-bold hover:bg-[var(--bg)] transition-all">取消</button>
+            <button @click="submitImport" :disabled="isAdding" class="flex-1 h-10 rounded-xl bg-[var(--primary)] text-white text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
+              解析并导入
+            </button>
+          </div>
+        </template>
+
       </div>
     </div>
   </Teleport>

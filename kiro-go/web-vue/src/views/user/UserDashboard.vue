@@ -76,6 +76,14 @@ const statusColor = computed(() => {
   return '#64748b'
 })
 
+const statusText = computed(() => {
+  const s = info.value.status
+  if (s === 'active') return '正常运行'
+  if (s === 'key_expired') return '密钥已过期'
+  if (s === 'insufficient_balance') return '余额不足'
+  return info.value.statusMessage || s || '未知'
+})
+
 const topModels = computed(() => {
   if (!usage.value?.models) return []
   return Object.entries(usage.value.models)
@@ -465,6 +473,7 @@ function goRecharge() {
   color: #64748b;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
 }
 
 .data-table td {
@@ -472,6 +481,13 @@ function goRecharge() {
   font-size: 0.875rem;
   color: #cbd5e1;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.data-table th.text-right,
+.data-table td.text-right {
+  text-align: right;
 }
 
 .data-table tr:last-child td {
