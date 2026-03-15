@@ -111,7 +111,7 @@ type CallLog struct {
 	ResponseSummary string  `json:"response_summary,omitempty"`
 }
 
-const maxCallLogs = 500
+const maxCallLogs = 5000
 
 type thinkingStreamSource int
 
@@ -159,6 +159,8 @@ func NewHandler() *Handler {
 	}
 	// 从磁盘恢复历史日志和 CreditPredictor
 	h.loadLogsFromDisk()
+	// 启动日志自动清理（每6小时清理超过7天的）
+	h.startLogCleanupTicker()
 	// 启动后台刷新
 	go h.backgroundRefresh()
 	// 启动后台统计保存 (每5分钟批量写入)

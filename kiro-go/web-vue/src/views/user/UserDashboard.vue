@@ -4,12 +4,17 @@ import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
 import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
 import RedemptionModal from '../../components/user/RedemptionModal.vue'
+import {
+  AlertTriangle, Gift, Wallet, Clock, Activity, Database,
+  Copy, Check, LayoutGrid
+} from 'lucide-vue-next'
 
 const auth = useUserAuth()
 const usage = ref(null)
 const pricing = ref(null)
 const loading = ref(true)
 const showRedeem = ref(false)
+const copied = ref(false)
 
 onMounted(async () => {
   try {
@@ -24,16 +29,28 @@ onMounted(async () => {
 })
 
 const info = computed(() => auth.userInfo || {})
-
 const isActivated = computed(() => !!info.value.plan)
 const isTimedPlan = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
+const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid')
 const balanceValue = computed(() => Number(info.value.balance || 0))
 
 const daysRemaining = computed(() => {
   if (!isTimedPlan.value) return '-'
   if (!info.value.expiresAt || info.value.expiresAt === 0) return '∞'
-  const days = Math.max(0, Math.floor((info.value.expiresAt - Date.now()/1000) / 86400))
-  return days
+  return Math.max(0, Math.floor((info.value.expiresAt - Date.now() / 1000) / 86400))
+})
+
+const expiryDate = computed(() => {
+  if (!info.value.expiresAt || info.value.expiresAt === 0) return '永久有效'
+  return new Date(info.value.expiresAt * 1000).toLocaleDateString('zh-CN')
+})
+
+const daysClass = computed(() => {
+  const d = daysRemaining.value
+  if (d === '∞') return 'ok'
+  if (d < 3) return 'danger'
+  if (d < 7) return 'warning'
+  return 'ok'
 })
 
 const statusColor = computed(() => {
@@ -41,7 +58,7 @@ const statusColor = computed(() => {
   if (s === 'active') return '#22c55e'
   if (s === 'key_expired') return '#ef4444'
   if (s === 'insufficient_balance') return '#f59e0b'
-  return '#6b7280'
+  return '#64748b'
 })
 
 const topModels = computed(() => {
@@ -52,7 +69,6 @@ const topModels = computed(() => {
 })
 
 const baseUrl = computed(() => `${location.protocol}//${location.host}`)
-const copied = ref(false)
 
 function copyUrl() {
   navigator.clipboard.writeText(baseUrl.value)
@@ -62,7 +78,6 @@ function copyUrl() {
 
 async function onRedeemed() {
   showRedeem.value = false
-  // Refresh user info
   try {
     const me = await userApi('/me')
     if (me && !me.error) auth.userInfo = me
@@ -72,127 +87,160 @@ async function onRedeemed() {
 
 <template>
   <div class="dashboard" v-if="!loading">
-    <!-- Not Activated Banner -->
-    <div v-if="!info.plan" class="activate-banner">
-      <div class="activate-text">
-        <span class="activate-icon">🔑</span>
-        <div>
-          <div class="activate-title">账号未激活</div>
-          <div class="activate-desc">请兑换激活码来充值时间或余额</div>
+    <!-- Header -->
+    <div class="header-section">
+      <h2 class="page-title">账户概览</h2>
+      <button v-if="info.plan" @click="showRedeem = true" class="redeem-btn-top">
+        <Gift :size="14" style="margin-right:6px" />兑换激活码
+      </button>
+    </div>
+
+    <!-- Activation Banner -->
+    <div v-if="!info.plan" class="activate-banner glass">
+      <div class="banner-content">
+        <div class="icon-box">
+          <AlertTriangle :size="24" color="#818cf8" />
+        </div>
+        <div class="text-box">
+          <h3>账号尚未激活</h3>
+          <p>请兑换激活码来获取余额或时间，开始使用 API 服务</p>
         </div>
       </div>
-      <button @click="showRedeem = true" class="activate-btn">🎁 兑换激活码</button>
+      <button @click="showRedeem = true" class="activate-btn">
+        <Gift :size="16" style="margin-right:6px" />兑换激活码
+      </button>
     </div>
-    <!-- Stats Cards -->
+
+    <!-- Stat Cards -->
     <div class="stat-cards">
-      <div class="stat-card">
-        <div class="stat-label">当前余额</div>
-        <div class="stat-value balance">
-          <template v-if="!isActivated">未激活</template>
-          <template v-else-if="info.plan === 'timed'">—</template>
-          <template v-else>¥{{ balanceValue.toFixed(2) }}</template>
+      <!-- Balance -->
+      <div v-if="isCreditPlan" class="stat-card glass">
+        <div class="stat-header">
+          <span class="stat-label">当前余额</span>
+          <Wallet :size="18" class="stat-icon" />
         </div>
-        <div class="stat-sub" v-if="isActivated && (info.plan === 'credit' || info.plan === 'hybrid')"
-          :style="{ color: balanceValue < 1 ? '#ff6b6b' : '#22c55e' }">
-          {{ balanceValue < 1 ? '⚠️ 余额不足' : '✅ 正常' }}
-        </div>
-      </div>
-
-      <div class="stat-card" v-if="isTimedPlan">
-        <div class="stat-label">剩余天数</div>
-        <div class="stat-value">{{ daysRemaining }}</div>
-        <div class="stat-sub" v-if="info.expiresAt > 0">
-          到期: {{ new Date(info.expiresAt * 1000).toLocaleDateString() }}
+        <div class="stat-value balance">¥{{ balanceValue.toFixed(2) }}</div>
+        <div class="stat-sub" :style="{ color: balanceValue < 1 ? '#ef4444' : '#22c55e' }">
+          {{ balanceValue < 1 ? '⚠ 余额不足' : '✓ 账户正常' }}
         </div>
       </div>
 
-      <div class="stat-card">
-        <div class="stat-label">累计请求</div>
+      <!-- Days -->
+      <div v-if="isTimedPlan" class="stat-card glass">
+        <div class="stat-header">
+          <span class="stat-label">剩余天数</span>
+          <Clock :size="18" class="stat-icon" />
+        </div>
+        <div class="stat-value">{{ daysRemaining }}<small>天</small></div>
+        <div class="stat-sub" :class="daysClass">到期：{{ expiryDate }}</div>
+      </div>
+
+      <!-- Requests -->
+      <div class="stat-card glass">
+        <div class="stat-header">
+          <span class="stat-label">累计请求</span>
+          <Activity :size="18" class="stat-icon" />
+        </div>
         <div class="stat-value">{{ (info.requests || 0).toLocaleString() }}</div>
-        <div class="stat-sub">
-          Token: {{ ((info.tokens || 0) / 1000).toFixed(1) }}K
-        </div>
+        <div class="stat-sub muted">消耗 Token：{{ ((info.tokens || 0) / 1000).toFixed(1) }}K</div>
       </div>
 
-      <div class="stat-card">
-        <div class="stat-label">状态</div>
-        <div class="stat-value status-dot" :style="{ color: statusColor }">
-          ● {{ info.status === 'active' ? '正常' : info.statusMessage || info.status }}
+      <!-- Status -->
+      <div class="stat-card glass">
+        <div class="stat-header">
+          <span class="stat-label">服务状态</span>
+          <div class="status-dot-pulse" :style="{ '--color': statusColor }"></div>
         </div>
-        <PlanStatusBadge :plan="info.plan" :tier="info.tier" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top: 6px" />
-      </div>
-    </div>
-
-    <!-- Redeem Button (when activated) -->
-    <div v-if="info.plan" class="redeem-section">
-      <button @click="showRedeem = true" class="redeem-trigger">🎁 兑换激活码</button>
-    </div>
-
-    <!-- Model Usage -->
-    <div class="section" v-if="topModels.length > 0">
-      <h3>📈 模型使用排行</h3>
-      <div class="model-table">
-        <div class="model-row header">
-          <span>模型</span>
-          <span>请求数</span>
-          <span>输入Token</span>
-          <span>输出Token</span>
+        <div class="stat-value" :style="{ color: statusColor, fontSize: '1.25rem' }">
+          {{ info.status === 'active' ? '正常运行' : info.statusMessage || info.status || '未知' }}
         </div>
-        <div class="model-row" v-for="[model, stats] in topModels" :key="model">
-          <span class="model-name">{{ model }}</span>
-          <span>{{ stats.requests }}</span>
-          <span>{{ (stats.inputTokens / 1000).toFixed(1) }}K</span>
-          <span>{{ (stats.outputTokens / 1000).toFixed(1) }}K</span>
-        </div>
+        <PlanStatusBadge :plan="info.plan" :tier="info.tier" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top:8px" />
       </div>
     </div>
 
-    <!-- API Access Info -->
-    <div class="section">
-      <h3>🔗 API 接入信息</h3>
-      <div class="api-info">
-        <div class="info-row">
-          <label>Base URL</label>
-          <div class="url-copy">
-            <code>{{ baseUrl }}</code>
-            <button @click="copyUrl" class="copy-btn">
-              {{ copied ? '✅' : '📋' }}
-            </button>
+    <!-- Model Usage + API Access -->
+    <div class="grid-layout">
+      <div class="section glass usage-section" v-if="topModels.length > 0">
+        <h3 class="section-title">
+          <LayoutGrid :size="16" style="margin-right:8px" />模型消耗排行
+        </h3>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th class="text-right">请求</th>
+                <th class="text-right">输入(K)</th>
+                <th class="text-right">输出(K)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="[model, stats] in topModels" :key="model">
+                <td class="model-name">{{ model }}</td>
+                <td class="text-right">{{ stats.requests }}</td>
+                <td class="text-right">{{ (stats.inputTokens / 1000).toFixed(1) }}</td>
+                <td class="text-right">{{ (stats.outputTokens / 1000).toFixed(1) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section glass access-section">
+        <h3 class="section-title">API 接入配置</h3>
+        <div class="api-config">
+          <div class="config-item">
+            <label>接口地址 (Base URL)</label>
+            <div class="copy-box">
+              <code>{{ baseUrl }}</code>
+              <button @click="copyUrl" class="copy-btn" :class="{ copied }">
+                <Check v-if="copied" :size="14" />
+                <Copy v-else :size="14" />
+              </button>
+            </div>
           </div>
-        </div>
-        <div class="info-row">
-          <label>兼容格式</label>
-          <div class="tags">
-            <span class="tag">Claude API</span>
-            <span class="tag">OpenAI API</span>
+          <div class="config-item">
+            <label>协议兼容性</label>
+            <div class="tag-cloud">
+              <span class="tech-tag">OpenAI</span>
+              <span class="tech-tag">Claude</span>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Pricing -->
-    <div class="section" v-if="pricing && pricing.models">
-      <h3>💲 当前定价</h3>
-      <div class="model-table">
-        <div class="model-row header">
-          <span>模型</span>
-          <span>输入 (¥/M)</span>
-          <span>输出 (¥/M)</span>
-          <span>倍率</span>
-        </div>
-        <div class="model-row" v-for="(p, model) in pricing.models" :key="model">
-          <span class="model-name">{{ model }}</span>
-          <span>¥{{ p.inputPricePerM }}</span>
-          <span>¥{{ p.outputPricePerM }}</span>
-          <span>×{{ p.multiplier }}</span>
-        </div>
+    <div class="section glass pricing-section" v-if="pricing && pricing.models">
+      <h3 class="section-title">实时定价表</h3>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>模型名称</th>
+              <th class="text-right">输入 (¥/M)</th>
+              <th class="text-right">输出 (¥/M)</th>
+              <th class="text-right">费率倍率</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(p, model) in pricing.models" :key="model">
+              <td class="model-name">{{ model }}</td>
+              <td class="text-right">¥{{ p.inputPricePerM }}</td>
+              <td class="text-right">¥{{ p.outputPricePerM }}</td>
+              <td class="text-right">×{{ p.multiplier }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
 
-  <div v-else class="loading">加载中...</div>
+  <div v-else class="loading-state">
+    <div class="spinner"></div>
+    <span>载入数据中...</span>
+  </div>
 
-  <!-- Redemption Modal -->
   <RedemptionModal :show="showRedeem" @close="showRedeem = false" @redeemed="onRedeemed" />
 </template>
 
@@ -200,68 +248,149 @@ async function onRedeemed() {
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 2rem;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.header-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.page-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+  color: #f8fafc;
+}
+
+.redeem-btn-top {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.redeem-btn-top:hover {
+  background: rgba(99, 102, 241, 0.2);
+  transform: translateY(-1px);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
 }
 
 .activate-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(241,39,17,0.08));
-  border: 1px solid rgba(245,158,11,0.15);
-  border-left: 4px solid #f5af19;
-  border-radius: 14px;
-  padding: 1.2rem 1.5rem;
+  padding: 1.5rem 2rem;
+  border-color: rgba(99, 102, 241, 0.2);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
   gap: 1rem;
   flex-wrap: wrap;
-  box-shadow: 0 12px 30px rgba(245,158,11,0.12);
 }
-.activate-text { display: flex; align-items: center; gap: 1rem; }
-.activate-icon { font-size: 1.8rem; }
-.activate-title { font-size: 1rem; font-weight: 700; color: #f5af19; }
-.activate-desc { font-size: 0.8rem; color: rgba(255,255,255,0.5); margin-top: 2px; }
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.icon-box {
+  width: 52px;
+  height: 52px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.text-box h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+  font-family: 'Space Grotesk', sans-serif;
+  color: #f8fafc;
+}
+
+.text-box p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
 .activate-btn {
-  padding: 0.6rem 1.2rem; border: none; border-radius: 10px;
-  background: linear-gradient(135deg, #f5af19, #f12711); color: #fff;
-  font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
   white-space: nowrap;
 }
-.activate-btn:hover { transform: scale(1.03); }
 
-.redeem-section { text-align: right; }
-.redeem-trigger {
-  padding: 0.5rem 1rem; border: 1px solid rgba(245,158,11,0.3);
-  background: rgba(245,158,11,0.08); border-radius: 10px;
-  color: #f5af19; font-weight: 600; cursor: pointer; font-size: 0.8rem;
+.activate-btn:hover {
+  background: #4f46e5;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
-.redeem-trigger:hover { background: rgba(245,158,11,0.15); }
 
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.5rem;
 }
 
 .stat-card {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
-  padding: 1.2rem;
-  transition: transform 0.2s;
+  padding: 1.5rem;
 }
 
-.stat-card:hover { transform: translateY(-2px); }
+.stat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
 
 .stat-label {
-  font-size: 0.8rem;
-  color: rgba(255,255,255,0.45);
-  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.stat-icon {
+  color: #64748b;
 }
 
 .stat-value {
-  font-size: 1.6rem;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 2rem;
   font-weight: 700;
-  color: #fff;
+  color: #f8fafc;
+  margin-bottom: 0.5rem;
 }
 
 .stat-value.balance {
@@ -270,115 +399,213 @@ async function onRedeemed() {
   -webkit-text-fill-color: transparent;
 }
 
+.stat-value small {
+  font-size: 1rem;
+  margin-left: 0.25rem;
+  color: #64748b;
+  -webkit-text-fill-color: #64748b;
+}
+
 .stat-sub {
-  font-size: 0.75rem;
-  color: rgba(255,255,255,0.4);
-  margin-top: 0.3rem;
+  font-size: 0.8125rem;
+}
+
+.stat-sub.ok { color: #22c55e; }
+.stat-sub.warning { color: #f59e0b; }
+.stat-sub.danger { color: #ef4444; }
+.stat-sub.muted { color: #64748b; }
+
+.status-dot-pulse {
+  width: 10px;
+  height: 10px;
+  background: var(--color);
+  border-radius: 50%;
+  position: relative;
+}
+
+.status-dot-pulse::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: var(--color);
+  border-radius: 50%;
+  animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes ping {
+  75%, 100% { transform: scale(2.5); opacity: 0; }
+}
+
+.grid-layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1.5rem;
 }
 
 .section {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 14px;
-  padding: 1.2rem;
+  padding: 1.5rem;
 }
 
-.section h3 {
-  font-size: 1rem;
-  margin: 0 0 1rem 0;
-  color: rgba(255,255,255,0.8);
-}
-
-.model-table {
+.section-title {
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
+  align-items: center;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0 0 1.5rem;
 }
 
-.model-row {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
-  padding: 0.5rem 0.8rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
+.table-container {
+  overflow-x: auto;
 }
 
-.model-row.header {
-  color: rgba(255,255,255,0.4);
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th {
+  text-align: left;
   font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.model-row:not(.header) {
-  background: rgba(255,255,255,0.03);
+.data-table td {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: #cbd5e1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.model-row:not(.header):hover {
-  background: rgba(255,255,255,0.06);
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .model-name {
-  font-family: monospace;
-  color: #a78bfa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #a855f7;
+  font-weight: 600;
 }
 
-.api-info {
+.text-right { text-align: right; }
+
+.api-config {
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
+  gap: 1.5rem;
 }
 
-.info-row {
+.config-item label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.copy-box {
   display: flex;
   align-items: center;
-  gap: 1rem;
-}
-
-.info-row label {
-  min-width: 80px;
-  color: rgba(255,255,255,0.5);
-  font-size: 0.85rem;
-}
-
-.url-copy {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: rgba(0,0,0,0.3);
-  padding: 0.4rem 0.8rem;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  flex: 1;
+  padding: 0.25rem 0.25rem 0.25rem 1rem;
 }
 
-.url-copy code {
-  font-size: 0.85rem;
-  color: #22c55e;
+.copy-box code {
   flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+  color: #22c55e;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copy-btn {
-  background: none;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
   border: none;
+  border-radius: 6px;
+  color: #94a3b8;
   cursor: pointer;
-  font-size: 1rem;
-  padding: 0.2rem;
+  transition: all 0.2s;
+  flex-shrink: 0;
 }
 
-.tags {
+.copy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+.copy-btn.copied {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.tag-cloud {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
-.tag {
-  padding: 0.2rem 0.6rem;
+.tech-tag {
+  padding: 0.25rem 0.625rem;
   border-radius: 6px;
-  background: rgba(139,92,246,0.15);
-  color: #a78bfa;
+  background: rgba(99, 102, 241, 0.1);
+  color: #818cf8;
   font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid rgba(99, 102, 241, 0.2);
 }
 
-.loading {
-  text-align: center;
-  padding: 3rem;
-  color: rgba(255,255,255,0.4);
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+  color: #64748b;
+  gap: 1rem;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(99, 102, 241, 0.1);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1024px) {
+  .grid-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .activate-banner { padding: 1.25rem; }
+  .banner-content { flex-direction: column; text-align: center; align-items: center; }
+  .activate-btn { width: 100%; justify-content: center; }
+  .stat-cards { grid-template-columns: 1fr; }
 }
 </style>

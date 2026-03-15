@@ -411,13 +411,16 @@ onMounted(loadCodes)
             class="h-9 pl-9 pr-3 w-60 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs outline-none focus:border-[var(--primary)] transition-colors" />
         </div>
         <!-- 类型筛选 -->
-        <div class="flex gap-1">
+        <div class="flex gap-1 items-center">
+          <span class="text-[10px] text-[var(--text-secondary)] font-bold mr-1">类型</span>
           <button @click="filterType = 'all'" class="filter-btn" :class="filterType === 'all' ? 'filter-btn-active' : ''">全部</button>
           <button @click="filterType = 'balance'" class="filter-btn" :class="filterType === 'balance' ? 'filter-btn-active' : ''">💰 余额</button>
           <button @click="filterType = 'time'" class="filter-btn" :class="filterType === 'time' ? 'filter-btn-active' : ''">⏱️ 时间</button>
         </div>
+        <span class="text-[var(--border)] mx-1">|</span>
         <!-- 状态筛选 -->
-        <div class="flex gap-1">
+        <div class="flex gap-1 items-center">
+          <span class="text-[10px] text-[var(--text-secondary)] font-bold mr-1">状态</span>
           <button @click="filterStatus = 'all'" class="filter-btn" :class="filterStatus === 'all' ? 'filter-btn-active' : ''">全部</button>
           <button @click="filterStatus = 'unused'" class="filter-btn" :class="filterStatus === 'unused' ? 'filter-btn-active' : ''">可用</button>
           <button @click="filterStatus = 'used'" class="filter-btn" :class="filterStatus === 'used' ? 'filter-btn-active' : ''">已使用</button>
@@ -447,62 +450,59 @@ onMounted(loadCodes)
     <!-- 列表 -->
     <div class="modern-card overflow-hidden">
       <!-- 表头 -->
-      <div class="grid grid-cols-[32px_2fr_80px_100px_70px_100px_1fr_60px] gap-2 px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] border-b border-[var(--border)] bg-[var(--bg)]/30">
-        <div class="flex items-center justify-center cursor-pointer" @click="toggleSelectAll">
-          <CheckSquare v-if="isAllSelected" class="w-3.5 h-3.5 text-[var(--primary)]" />
-          <Square v-else class="w-3.5 h-3.5" />
+      <div class="code-table-row" style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); border-bottom: 1px solid var(--border); padding: 10px 20px;">
+        <div style="cursor: pointer; display: flex; align-items: center; justify-content: center;" @click="toggleSelectAll">
+          <CheckSquare v-if="isAllSelected" class="w-4 h-4" style="color: var(--primary)" />
+          <Square v-else class="w-4 h-4" />
         </div>
         <span>激活码</span>
-        <span>类型</span>
-        <span>面值</span>
+        <span>类型 / 面值</span>
         <span>状态</span>
         <span>创建时间</span>
         <span>备注</span>
-        <span class="text-right">操作</span>
+        <span style="text-align: right">操作</span>
       </div>
 
       <!-- 数据行 -->
       <div v-for="c in pagedCodes" :key="c.code"
-        class="grid grid-cols-[32px_2fr_80px_100px_70px_100px_1fr_60px] gap-2 px-4 py-2.5 items-center text-sm border-b border-[var(--border)]/30 hover:bg-[var(--bg)]/40 transition-colors cursor-pointer"
-        :class="{ 'opacity-40': c.usedBy, 'bg-[var(--primary)]/5': selectedCodes.has(c.code) }"
+        class="code-table-row"
+        :style="{ opacity: c.usedBy ? 0.5 : 1, background: selectedCodes.has(c.code) ? 'rgba(var(--primary-rgb, 196,30,58), 0.04)' : 'transparent', padding: '12px 20px', borderBottom: '1px solid rgba(128,128,128,0.1)', cursor: 'pointer' }"
         @click="toggleSelect(c.code)">
 
-        <div class="flex items-center justify-center">
-          <CheckSquare v-if="selectedCodes.has(c.code)" class="w-3.5 h-3.5 text-[var(--primary)]" />
-          <Square v-else class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+        <div style="display: flex; align-items: center; justify-content: center;">
+          <CheckSquare v-if="selectedCodes.has(c.code)" class="w-4 h-4" style="color: var(--primary)" />
+          <Square v-else class="w-4 h-4" style="color: var(--text-secondary)" />
         </div>
 
-        <div class="flex items-center gap-2 min-w-0">
-          <span class="font-mono font-bold text-[var(--primary)] text-xs truncate">{{ c.code }}</span>
-          <button @click.stop="copyCode(c.code)" class="p-0.5 hover:bg-[var(--bg)] rounded shrink-0">
-            <Copy class="w-3 h-3 text-[var(--text-secondary)]" />
+        <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+          <span style="font-family: monospace; font-weight: 700; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ c.code }}</span>
+          <button @click.stop="copyCode(c.code)" style="padding: 4px; border: none; background: none; cursor: pointer; border-radius: 4px; display: flex; flex-shrink: 0;">
+            <Copy class="w-3.5 h-3.5" style="color: var(--text-secondary)" />
           </button>
         </div>
 
-        <div class="flex items-center gap-1">
-          <Gift v-if="c.type === 'balance'" class="w-3 h-3 text-emerald-500 shrink-0" />
-          <Clock v-else class="w-3 h-3 text-sky-500 shrink-0" />
-          <span class="text-[11px]">{{ c.type === 'balance' ? '余额' : '时间' }}</span>
-          <span v-if="(c.type === 'days' || c.type === 'time') && c.tier" class="px-1 py-0.5 rounded text-[8px] font-bold uppercase"
-            :class="c.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <Gift v-if="c.type === 'balance'" class="w-4 h-4" style="color: #059669; flex-shrink: 0;" />
+          <Clock v-else class="w-4 h-4" style="color: #0284c7; flex-shrink: 0;" />
+          <span style="font-size: 13px; font-weight: 600; color: var(--text);">{{ fmtAmount(c) }}</span>
+          <span v-if="(c.type === 'days' || c.type === 'time') && c.tier"
+            :style="'padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase;' + (c.tier === 'pro' ? 'background:rgba(217,119,6,0.15);color:#b45309' : 'background:rgba(2,132,199,0.12);color:#0369a1')">
             {{ c.tier }}
           </span>
         </div>
 
-        <span class="text-xs font-bold">{{ fmtAmount(c) }}</span>
-
-        <span class="text-xs">
-          <span v-if="c.usedBy" class="px-1.5 py-0.5 rounded bg-[var(--text-secondary)]/10 text-[var(--text-secondary)] text-[10px]">已使用</span>
-          <span v-else class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-bold text-[10px]">可用</span>
+        <span>
+          <span v-if="c.usedBy" style="padding: 3px 8px; border-radius: 4px; font-size: 12px; background: rgba(107,114,128,0.12); color: #6b7280;">已使用</span>
+          <span v-else style="padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 700; background: rgba(5,150,105,0.12); color: #059669;">可用</span>
         </span>
 
-        <span class="text-[10px] text-[var(--text-secondary)]">{{ fmtDate(c.createdAt) }}</span>
+        <span style="font-size: 12px; color: var(--text-secondary);">{{ fmtDate(c.createdAt) }}</span>
 
-        <span class="text-[10px] text-[var(--text-secondary)] truncate">{{ c.note || '-' }}</span>
+        <span style="font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ c.note || '-' }}</span>
 
-        <div class="flex justify-end">
-          <button v-if="!c.usedBy" @click.stop="deleteCode(c.code)" class="p-1.5 rounded-lg hover:bg-rose-500/10" title="作废">
-            <Trash2 class="w-3 h-3 text-rose-500" />
+        <div style="display: flex; justify-content: flex-end;">
+          <button v-if="!c.usedBy" @click.stop="deleteCode(c.code)" style="padding: 6px; border: none; background: none; cursor: pointer; border-radius: 6px;" title="作废">
+            <Trash2 class="w-4 h-4" style="color: #e11d48" />
           </button>
         </div>
       </div>
@@ -545,6 +545,14 @@ onMounted(loadCodes)
 </template>
 
 <style scoped>
+/* 表格行布局 */
+.code-table-row {
+  display: grid;
+  grid-template-columns: 36px 2fr 1.5fr 80px 140px 1fr 50px;
+  gap: 16px;
+  align-items: center;
+}
+
 /* 工具栏按钮 */
 .toolbar-btn {
   display: flex;

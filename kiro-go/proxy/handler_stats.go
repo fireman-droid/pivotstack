@@ -229,15 +229,18 @@ func (cp *CreditPredictor) Predict(remainingCredits float64) CreditPrediction {
 
 var logFileMu sync.Mutex
 
+// logRetentionDays 日志保留天数
+const logRetentionDays = 7
+
 func appendLogToFile(entry CallLog) {
 	logFileMu.Lock()
 	defer logFileMu.Unlock()
 
 	logPath := filepath.Join(config.GetDataDir(), "call_logs.jsonl")
 
-	// 检查文件大小，超过 10MB 轮转
-	if info, err := os.Stat(logPath); err == nil && info.Size() > 10*1024*1024 {
-		rotateLogFile(logPath)
+	// 文件超过 2MB 时清理过期条目（避免频繁扫描）
+	if info, err := os.Stat(logPath); err == nil && info.Size() > 2*1024*1024 {
+		cleanupLogFile(logPath)
 	}
 
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -252,35 +255,74 @@ func appendLogToFile(entry CallLog) {
 	f.WriteString("\n")
 }
 
-func rotateLogFile(path string) {
-	// 读取文件，保留后半部分
+// cleanupLogFile 清理超过 logRetentionDays 天的日志条目
+func cleanupLogFile(path string) {
+	cutoff := time.Now().Unix() - int64(logRetentionDays*86400)
+
 	f, err := os.Open(path)
 	if err != nil {
 		return
 	}
-	var lines []string
+	var kept []string
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	total := 0
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		total++
+		line := scanner.Text()
+		var entry struct {
+			Timestamp int64 `json:"timestamp"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Timestamp >= cutoff {
+			kept = append(kept, line)
+		}
 	}
 	f.Close()
 
-	// 保留后半部分
-	half := len(lines) / 2
-	if half < 1 {
+	removed := total - len(kept)
+	if removed == 0 {
 		return
 	}
 
-	f, err = os.Create(path)
+	f2, err := os.Create(path)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	for _, line := range lines[half:] {
-		f.WriteString(line + "\n")
+	defer f2.Close()
+	for _, line := range kept {
+		f2.WriteString(line + "\n")
 	}
-	fmt.Printf("[LogPersist] Rotated log file, kept %d/%d entries\n", len(lines)-half, len(lines))
+	fmt.Printf("[LogCleanup] Removed %d expired entries (>%d days), kept %d\n", removed, logRetentionDays, len(kept))
+}
+
+// startLogCleanupTicker 每 6 小时自动清理过期日志（磁盘 + 内存）
+func (h *Handler) startLogCleanupTicker() {
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			// 清理磁盘
+			logFileMu.Lock()
+			cleanupLogFile(filepath.Join(config.GetDataDir(), "call_logs.jsonl"))
+			logFileMu.Unlock()
+
+			// 清理内存
+			cutoff := time.Now().Unix() - int64(logRetentionDays*86400)
+			h.callLogsMu.Lock()
+			newLogs := make([]CallLog, 0, len(h.callLogs))
+			for _, l := range h.callLogs {
+				if l.Timestamp >= cutoff {
+					newLogs = append(newLogs, l)
+				}
+			}
+			removed := len(h.callLogs) - len(newLogs)
+			h.callLogs = newLogs
+			h.callLogsMu.Unlock()
+			if removed > 0 {
+				fmt.Printf("[LogCleanup] Cleaned %d expired entries from memory\n", removed)
+			}
+		}
+	}()
 }
 
 // loadLogsFromDisk 启动时从 JSONL 恢复历史日志和 CreditPredictor
@@ -294,16 +336,26 @@ func (h *Handler) loadLogsFromDisk() {
 	defer f.Close()
 
 	var allLogs []CallLog
+	cutoff := time.Now().Unix() - int64(logRetentionDays*86400)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	lineCount := 0
+	skipped := 0
 	for scanner.Scan() {
 		lineCount++
 		var entry CallLog
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
+		// 只加载 7 天内的日志
+		if entry.Timestamp > 0 && entry.Timestamp < cutoff {
+			skipped++
+			continue
+		}
 		allLogs = append(allLogs, entry)
+	}
+	if skipped > 0 {
+		fmt.Printf("[LogRestore] Skipped %d expired entries (>%d days)\n", skipped, logRetentionDays)
 	}
 
 	if len(allLogs) == 0 {

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { userApi } from '../../api/user'
+import { FileX, CheckCircle2, XCircle, Clock, Database, Coins, Timer } from 'lucide-vue-next'
 
 const logs = ref([])
 const loading = ref(true)
@@ -21,115 +22,274 @@ function fmtTime(ts) {
 
 <template>
   <div class="logs-page">
-    <h3>📋 请求日志</h3>
+    <div class="page-header">
+      <div class="title-section">
+        <h3>请求日志</h3>
+        <span class="count-badge">{{ logs.length }}</span>
+      </div>
+    </div>
 
-    <div v-if="loading" class="loading">加载中...</div>
+    <div v-if="loading" class="loading-state">
+      <div v-for="i in 3" :key="i" class="skeleton-card shimmer"></div>
+    </div>
 
-    <div v-else-if="logs.length === 0" class="empty">
-      <div class="empty-icon">📭</div>
-      <div class="empty-title">暂无请求记录</div>
-      <div class="empty-desc">开始使用 API 后，您的请求日志将在此显示</div>
+    <div v-else-if="logs.length === 0" class="empty-state">
+      <div class="empty-icon-wrapper">
+        <FileX class="w-12 h-12 text-slate-600" />
+      </div>
+      <h4>暂无请求记录</h4>
+      <p>开始使用 API 后，您的请求日志将在此显示</p>
     </div>
 
     <div v-else class="log-list">
-      <div class="log-item" v-for="log in logs" :key="log.request_id">
-        <div class="log-header">
-          <span class="log-model">{{ log.actual_model || log.original_model }}</span>
-          <span :class="['log-status', log.status === 'error' ? 'err' : 'ok']">
-            {{ log.status === 'error' ? '❌' : '✅' }}
-          </span>
-          <span class="log-time">{{ log.time || fmtTime(log.timestamp * 1000) }}</span>
+      <div 
+        v-for="log in logs" 
+        :key="log.request_id"
+        :class="['log-card', log.status === 'error' ? 'status-error' : 'status-success']"
+      >
+        <div class="log-main">
+          <div class="log-info">
+            <div class="model-name">
+              {{ log.actual_model || log.original_model }}
+            </div>
+            <div class="status-indicator">
+              <CheckCircle2 v-if="log.status !== 'error'" class="status-icon success" />
+              <XCircle v-else class="status-icon error" />
+            </div>
+          </div>
+          <div class="log-time">
+            <Clock class="w-3 h-3 mr-1" />
+            {{ log.time || fmtTime(log.timestamp * 1000) }}
+          </div>
         </div>
+
         <div class="log-meta">
-          <span v-if="log.input_tokens">入: {{ (log.input_tokens/1000).toFixed(1) }}K</span>
-          <span v-if="log.output_tokens">出: {{ (log.output_tokens/1000).toFixed(1) }}K</span>
-          <span v-if="log.credits">Credits: {{ log.credits.toFixed(2) }}</span>
-          <span v-if="log.duration_ms">{{ log.duration_ms }}ms</span>
-          <span v-if="log.stop_reason" class="stop-reason">{{ log.stop_reason }}</span>
+          <div class="meta-item">
+            <Database class="w-3.5 h-3.5" />
+            <span>Tokens: {{ ((log.input_tokens || 0) + (log.output_tokens || 0)) / 1000 }}K</span>
+          </div>
+          <div class="meta-item">
+            <Coins class="w-3.5 h-3.5" />
+            <span>Credits: {{ (log.credits || 0).toFixed(4) }}</span>
+          </div>
+          <div class="meta-item" v-if="log.duration_ms">
+            <Timer class="w-3.5 h-3.5" />
+            <span>{{ log.duration_ms }}ms</span>
+          </div>
+          <div v-if="log.stop_reason" class="stop-reason-badge">
+            {{ log.stop_reason }}
+          </div>
         </div>
-        <div v-if="log.error" class="log-error">{{ log.error }}</div>
+
+        <div v-if="log.error" class="error-detail">
+          {{ log.error }}
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.logs-page h3 {
-  margin: 0 0 1rem 0;
-  color: rgba(255,255,255,0.8);
+.logs-page {
+  padding: 1rem 0;
+}
+
+.page-header {
+  margin-bottom: 2rem;
+}
+
+.title-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+h3 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+.count-badge {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid rgba(99, 102, 241, 0.2);
 }
 
 .log-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 1rem;
 }
 
-.log-item {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 10px;
-  padding: 0.8rem 1rem;
-  transition: background 0.2s;
+.log-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  transition: all 200ms ease;
+  position: relative;
+  overflow: hidden;
 }
 
-.log-item:hover {
-  background: rgba(255,255,255,0.06);
+.log-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-.log-header {
+.status-success { border-left: 3px solid #22c55e; }
+.status-error { border-left: 3px solid #ef4444; }
+
+.log-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.log-info {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
-  margin-bottom: 0.3rem;
+  gap: 0.75rem;
 }
 
-.log-model {
-  font-family: monospace;
-  color: #a78bfa;
-  font-size: 0.85rem;
+.model-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #c084fc;
   font-weight: 600;
+  font-size: 0.9375rem;
 }
 
-.log-status.ok { color: #22c55e; }
-.log-status.err { color: #ef4444; }
+.status-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.status-icon.success { color: #22c55e; }
+.status-icon.error { color: #ef4444; }
 
 .log-time {
-  margin-left: auto;
-  color: rgba(255,255,255,0.3);
+  display: flex;
+  align-items: center;
+  color: #6b7280;
   font-size: 0.75rem;
 }
 
 .log-meta {
   display: flex;
-  gap: 1rem;
-  font-size: 0.75rem;
-  color: rgba(255,255,255,0.4);
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: center;
 }
 
-.stop-reason {
-  padding: 0.1rem 0.4rem;
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: #94a3b8;
+  font-size: 0.8125rem;
+}
+
+.stop-reason-badge {
+  background: rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+  padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(139,92,246,0.1);
-  color: #a78bfa;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
-.log-error {
-  margin-top: 0.3rem;
-  font-size: 0.8rem;
-  color: #ef4444;
-  background: rgba(239,68,68,0.08);
-  padding: 0.3rem 0.6rem;
-  border-radius: 6px;
+.error-detail {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(239, 68, 68, 0.05);
+  border-radius: 8px;
+  color: #f87171;
+  font-size: 0.8125rem;
+  border: 1px solid rgba(239, 68, 68, 0.1);
 }
 
-.loading, .empty {
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
   text-align: center;
-  padding: 3rem;
-  color: rgba(255,255,255,0.3);
 }
 
-.empty-icon { font-size: 2.5rem; margin-bottom: 0.8rem; }
-.empty-title { font-size: 1rem; font-weight: 600; color: rgba(255,255,255,0.5); margin-bottom: 0.4rem; }
-.empty-desc { font-size: 0.8rem; color: rgba(255,255,255,0.25); }
+.empty-icon-wrapper {
+  width: 80px;
+  height: 80px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.empty-state h4 {
+  color: #f8fafc;
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.empty-state p {
+  color: #64748b;
+  font-size: 0.875rem;
+  max-width: 240px;
+  margin: 0;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.skeleton-card {
+  height: 80px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.03) 20%,
+    rgba(255, 255, 255, 0.06) 60%,
+    rgba(255, 255, 255, 0)
+  );
+  animation: shimmer 2s infinite;
+  content: '';
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+.w-12 { width: 3rem; }
+.h-12 { height: 3rem; }
+.mr-1 { margin-right: 0.25rem; }
 </style>
