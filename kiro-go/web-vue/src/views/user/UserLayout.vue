@@ -19,7 +19,16 @@ const balanceValue = computed(() => Number(auth.balance || 0))
 
 const balanceDisplay = computed(() => {
   if (!isActivated.value) return '未激活'
-  if (auth.plan === 'timed') return '时间制'
+  if (auth.plan === 'timed') {
+    // 显示剩余时间
+    const exp = auth.userInfo?.expiresAt || 0
+    if (!exp) return '永久'
+    const diff = Math.max(0, exp - Date.now() / 1000)
+    if (diff <= 0) return '已过期'
+    if (diff >= 86400) return Math.floor(diff / 86400) + '天'
+    if (diff >= 3600) return Math.floor(diff / 3600) + '小时'
+    return Math.max(1, Math.ceil(diff / 60)) + '分钟'
+  }
   return `¥${balanceValue.value.toFixed(2)}`
 })
 
@@ -77,7 +86,6 @@ onMounted(() => {
         <div :class="['balance-badge', balanceBadgeClass]">
           {{ balanceDisplay }}
         </div>
-        <div :class="['plan-tag', planTagClass]">{{ planLabel }}</div>
         <button class="logout-btn" @click="handleLogout" title="退出登录">
           <LogOut :size="16" />
         </button>

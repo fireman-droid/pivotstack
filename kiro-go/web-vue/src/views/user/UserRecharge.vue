@@ -19,7 +19,7 @@ async function handleRedeem() {
     const data = await userApi('/redeem', { method: 'POST', body: { code: code.value.trim() } })
     result.value = data
     code.value = ''
-    auth.refresh() // refresh balance
+    auth.refresh()
   } catch (e) {
     error.value = e.message
   }
@@ -29,58 +29,68 @@ async function handleRedeem() {
 
 <template>
   <div class="recharge-page">
-    <div class="recharge-card">
+    <div class="recharge-card glass">
       <div class="card-header">
         <div class="icon-wrapper">
-          <Gift class="w-6 h-6 text-indigo-400" />
+          <Gift :size="28" color="#818cf8" />
         </div>
         <h3>激活码兑换</h3>
-        <p class="helper-text">输入激活码兑换余额或时间</p>
+        <p class="helper-text">请在下方输入您的充值激活码</p>
       </div>
 
       <form @submit.prevent="handleRedeem" class="redeem-form">
         <div class="input-group">
           <input
             v-model="code"
-            placeholder="KIRO-XXXX-XXXX-XXXX"
+            placeholder="XXXX-XXXX-XXXX-XXXX"
             class="code-input"
             maxlength="19"
             spellcheck="false"
+            autocomplete="off"
           />
         </div>
-        
-        <button type="submit" :disabled="loading || !code.trim()" class="submit-btn">
-          <Loader2 v-if="loading" class="w-4 h-4 animate-spin mr-2" />
+
+        <button type="submit" :disabled="loading || code.trim().length < 10" class="submit-btn">
+          <Loader2 v-if="loading" :size="18" class="animate-spin" style="margin-right:8px" />
           <span>{{ loading ? '处理中...' : '立即兑换' }}</span>
         </button>
       </form>
 
       <div v-if="result" class="feedback-msg success">
-        <Sparkles class="w-4 h-4 mr-2" />
-        <span v-if="result.type === 'balance'">
-          兑换成功！余额已增加 ¥{{ (result.amount || 0).toFixed(2) }}
-        </span>
-        <span v-else-if="result.type === 'days'">
-          兑换成功！有效期已延长 {{ result.amount }} 天
-        </span>
+        <div class="feedback-content">
+          <Sparkles :size="18" style="margin-right:12px;flex-shrink:0" />
+          <div v-if="result.type === 'balance'">
+            <strong>兑换成功！</strong>
+            <p>账户余额已增加 ¥{{ (result.amount || 0).toFixed(2) }}</p>
+          </div>
+          <div v-else-if="result.type === 'time'">
+            <strong>兑换成功！</strong>
+            <p>账户有效期已延长 {{ Math.round((result.amount || 0) / 86400) }} 天</p>
+          </div>
+          <div v-else>
+            <strong>兑换成功！</strong>
+          </div>
+        </div>
       </div>
 
       <div v-if="error" class="feedback-msg error">
-        <span>{{ error }}</span>
+        <div class="feedback-content">
+          <p>{{ error }}</p>
+        </div>
       </div>
     </div>
 
-    <!-- Purchase Guide Section -->
+    <!-- Purchase Guide -->
     <div class="guide-container">
-      <div class="guide-card">
-        <ShoppingBag class="guide-icon" />
+      <div class="guide-card glass">
+        <ShoppingBag :size="20" class="guide-icon" />
         <div class="guide-info">
           <h4>闲鱼购买</h4>
-          <p>搜索「KiroStack激活卡」获取充值卡</p>
+          <p>前往闲鱼搜索「KiroStack激活码」获取充值卡</p>
         </div>
       </div>
-      <div class="guide-card">
-        <UserCircle class="guide-icon" />
+      <div class="guide-card glass">
+        <UserCircle :size="20" class="guide-icon" />
         <div class="guide-info">
           <h4>联系管理员</h4>
           <p>通过管理员直接获取专属激活码</p>
@@ -95,49 +105,59 @@ async function handleRedeem() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.5rem;
+  gap: 2rem;
   padding: 2rem 1rem;
   min-height: 100%;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 .recharge-card {
   width: 100%;
   max-width: 480px;
-  background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  padding: 2rem;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  padding: 2.5rem;
 }
 
 .card-header {
   text-align: center;
-  margin-bottom: 2rem;
+  margin-bottom: 2.5rem;
 }
 
 .icon-wrapper {
-  width: 56px;
-  height: 56px;
-  background: rgba(99, 102, 241, 0.1);
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
+  border: 1px solid rgba(99, 102, 241, 0.2);
   border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto 1rem;
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
 }
 
 h3 {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1.5rem;
   font-weight: 700;
-  color: #fff;
+  color: #f8fafc;
   margin: 0 0 0.5rem;
 }
 
 .helper-text {
-  font-family: 'DM Sans', sans-serif;
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 0.875rem;
   margin: 0;
 }
@@ -155,13 +175,19 @@ h3 {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   padding: 0 1rem;
-  color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 1.125rem;
+  color: #f8fafc;
+  font-family: ui-monospace, monospace;
+  font-size: 1.25rem;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  transition: all 150ms ease;
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.code-input::placeholder {
+  color: #475569;
+  letter-spacing: 0.05em;
 }
 
 .code-input:focus {
@@ -173,7 +199,7 @@ h3 {
 
 .submit-btn {
   height: 48px;
-  background: #6366f1;
+  background: linear-gradient(to right, #6366f1, #4f46e5);
   border: none;
   border-radius: 8px;
   color: #fff;
@@ -183,12 +209,14 @@ h3 {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
 .submit-btn:hover:not(:disabled) {
-  background: #4f46e5;
+  background: linear-gradient(to right, #4f46e5, #4338ca);
   transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.3);
 }
 
 .submit-btn:active:not(:disabled) {
@@ -196,96 +224,97 @@ h3 {
 }
 
 .submit-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .feedback-msg {
   margin-top: 1rem;
-  padding: 0.875rem;
-  border-radius: 8px;
-  font-size: 0.875rem;
+  padding: 1rem;
+  border-radius: 10px;
+  animation: slideIn 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+.feedback-content {
   display: flex;
   align-items: center;
-  justify-content: center;
-  animation: slideDown 200ms ease;
+}
+
+.feedback-content strong {
+  display: block;
+  font-size: 0.9375rem;
+  margin-bottom: 0.125rem;
+}
+
+.feedback-content p {
+  margin: 0;
+  font-size: 0.8125rem;
+  opacity: 0.9;
 }
 
 .feedback-msg.success {
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  color: #10b981;
 }
 
 .feedback-msg.error {
   background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
   border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .guide-container {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 1rem;
+  gap: 1.5rem;
   width: 100%;
   max-width: 480px;
 }
 
 .guide-card {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 1rem;
+  border-radius: 14px;
+  padding: 1.25rem;
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
 }
 
 .guide-icon {
-  width: 20px;
-  height: 20px;
-  color: #6b7280;
+  color: #6366f1;
   flex-shrink: 0;
   margin-top: 2px;
 }
 
 .guide-info h4 {
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   font-weight: 600;
-  color: #fff;
-  margin: 0 0 0.25rem;
+  color: #f8fafc;
+  margin: 0 0 0.375rem;
 }
 
 .guide-info p {
-  font-size: 0.75rem;
-  color: #6b7280;
+  font-size: 0.8125rem;
+  color: #94a3b8;
   margin: 0;
   line-height: 1.4;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 .animate-spin {
   animation: spin 1s linear infinite;
 }
 
-.mr-2 { margin-right: 0.5rem; }
-.w-4 { width: 1rem; }
-.h-4 { height: 1rem; }
-.w-6 { width: 1.5rem; }
-.h-6 { height: 1.5rem; }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 @media (max-width: 480px) {
-  .guide-container {
-    grid-template-columns: 1fr;
-  }
+  .guide-container { grid-template-columns: 1fr; }
+  .recharge-card { padding: 1.5rem; }
 }
 </style>

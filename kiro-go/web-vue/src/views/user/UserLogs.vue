@@ -30,54 +30,51 @@ function fmtTime(ts) {
     </div>
 
     <div v-if="loading" class="loading-state">
-      <div v-for="i in 3" :key="i" class="skeleton-card shimmer"></div>
+      <div v-for="i in 4" :key="i" class="skeleton-card glass shimmer"></div>
     </div>
 
     <div v-else-if="logs.length === 0" class="empty-state">
-      <div class="empty-icon-wrapper">
-        <FileX class="w-12 h-12 text-slate-600" />
+      <div class="empty-icon-wrapper glass">
+        <FileX :size="32" color="#475569" />
       </div>
-      <h4>暂无请求记录</h4>
-      <p>开始使用 API 后，您的请求日志将在此显示</p>
+      <h4>没有查询到日志</h4>
+      <p>您的所有 API 请求记录都会在此实时更新，目前空空如也。</p>
     </div>
 
     <div v-else class="log-list">
-      <div 
-        v-for="log in logs" 
+      <div
+        v-for="log in logs"
         :key="log.request_id"
-        :class="['log-card', log.status === 'error' ? 'status-error' : 'status-success']"
+        :class="['log-card', 'glass', log.status === 'error' ? 'status-error' : 'status-success']"
       >
         <div class="log-main">
           <div class="log-info">
             <div class="model-name">
               {{ log.actual_model || log.original_model }}
             </div>
-            <div class="status-indicator">
-              <CheckCircle2 v-if="log.status !== 'error'" class="status-icon success" />
-              <XCircle v-else class="status-icon error" />
-            </div>
           </div>
           <div class="log-time">
-            <Clock class="w-3 h-3 mr-1" />
+            <Clock :size="13" style="margin-right:5px" />
             {{ log.time || fmtTime(log.timestamp * 1000) }}
           </div>
         </div>
 
         <div class="log-meta">
           <div class="meta-item">
-            <Database class="w-3.5 h-3.5" />
-            <span>Tokens: {{ ((log.input_tokens || 0) + (log.output_tokens || 0)) / 1000 }}K</span>
+            <Database :size="13" />
+            <span>{{ (((log.input_tokens || 0) + (log.output_tokens || 0)) / 1000).toFixed(1) }}K Tokens</span>
           </div>
           <div class="meta-item">
-            <Coins class="w-3.5 h-3.5" />
-            <span>Credits: {{ (log.credits || 0).toFixed(4) }}</span>
+            <Coins :size="13" />
+            <span>{{ (log.credits || 0).toFixed(4) }} Credits</span>
           </div>
           <div class="meta-item" v-if="log.duration_ms">
-            <Timer class="w-3.5 h-3.5" />
+            <Timer :size="13" />
             <span>{{ log.duration_ms }}ms</span>
           </div>
-          <div v-if="log.stop_reason" class="stop-reason-badge">
-            {{ log.stop_reason }}
+          <div class="status-tag" :class="log.status === 'error' ? 'err' : 'ok'">
+            <component :is="log.status === 'error' ? XCircle : CheckCircle2" :size="11" style="margin-right:4px" />
+            {{ log.status === 'error' ? 'ERROR' : (log.stop_reason || 'SUCCESS') }}
           </div>
         </div>
 
@@ -92,34 +89,47 @@ function fmtTime(ts) {
 <style scoped>
 .logs-page {
   padding: 1rem 0;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .page-header {
-  margin-bottom: 2rem;
+  margin-bottom: 2.5rem;
 }
 
 .title-section {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  align-items: flex-end;
+  gap: 1rem;
 }
 
 h3 {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  color: #fff;
+  color: #f8fafc;
   margin: 0;
 }
 
 .count-badge {
-  background: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
-  padding: 2px 10px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+  padding: 0.25rem 0.75rem;
   border-radius: 20px;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  margin-bottom: 2px;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .log-list {
@@ -129,91 +139,90 @@ h3 {
 }
 
 .log-card {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 1rem 1.25rem;
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
   transition: all 200ms ease;
   position: relative;
   overflow: hidden;
 }
 
 .log-card:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
-.status-success { border-left: 3px solid #22c55e; }
-.status-error { border-left: 3px solid #ef4444; }
+.status-success { border-left: 4px solid #10b981; }
+.status-error { border-left: 4px solid #ef4444; }
 
 .log-main {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.75rem;
+  margin-bottom: 1rem;
 }
 
-.log-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
+.log-info { flex: 1; }
 
 .model-name {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color: #c084fc;
+  color: #a855f7;
   font-weight: 600;
-  font-size: 0.9375rem;
+  font-size: 1rem;
 }
-
-.status-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.status-icon.success { color: #22c55e; }
-.status-icon.error { color: #ef4444; }
 
 .log-time {
   display: flex;
   align-items: center;
-  color: #6b7280;
-  font-size: 0.75rem;
+  color: #64748b;
+  font-size: 0.8125rem;
 }
 
 .log-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.25rem;
+  gap: 1.5rem;
   align-items: center;
 }
 
 .meta-item {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.5rem;
   color: #94a3b8;
   font-size: 0.8125rem;
 }
 
-.stop-reason-badge {
-  background: rgba(255, 255, 255, 0.06);
-  color: #94a3b8;
-  padding: 2px 8px;
+.status-tag {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
   border-radius: 4px;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: 0.05em;
+}
+
+.status-tag.ok {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+
+.status-tag.err {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
 }
 
 .error-detail {
-  margin-top: 0.75rem;
+  margin-top: 1rem;
   padding: 0.75rem;
-  background: rgba(239, 68, 68, 0.05);
-  border-radius: 8px;
-  color: #f87171;
-  font-size: 0.8125rem;
-  border: 1px solid rgba(239, 68, 68, 0.1);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  border-left: 2px solid #ef4444;
 }
 
 .empty-state {
@@ -226,10 +235,9 @@ h3 {
 }
 
 .empty-icon-wrapper {
-  width: 80px;
-  height: 80px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 50%;
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -246,8 +254,9 @@ h3 {
 .empty-state p {
   color: #64748b;
   font-size: 0.875rem;
-  max-width: 240px;
+  max-width: 260px;
   margin: 0;
+  line-height: 1.5;
 }
 
 .loading-state {
@@ -257,9 +266,8 @@ h3 {
 }
 
 .skeleton-card {
-  height: 80px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
+  height: 88px;
+  border-radius: 14px;
 }
 
 .shimmer {
@@ -269,10 +277,7 @@ h3 {
 
 .shimmer::after {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  top: 0; right: 0; bottom: 0; left: 0;
   transform: translateX(-100%);
   background-image: linear-gradient(
     90deg,
@@ -288,8 +293,4 @@ h3 {
 @keyframes shimmer {
   100% { transform: translateX(100%); }
 }
-
-.w-12 { width: 3rem; }
-.h-12 { height: 3rem; }
-.mr-1 { margin-right: 0.25rem; }
 </style>

@@ -1,19 +1,19 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
 import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
-import RedemptionModal from '../../components/user/RedemptionModal.vue'
 import {
-  AlertTriangle, Gift, Wallet, Clock, Activity, Database,
+  AlertTriangle, Gift, Wallet, Clock, Activity,
   Copy, Check, LayoutGrid
 } from 'lucide-vue-next'
 
+const router = useRouter()
 const auth = useUserAuth()
 const usage = ref(null)
 const pricing = ref(null)
 const loading = ref(true)
-const showRedeem = ref(false)
 const copied = ref(false)
 
 onMounted(async () => {
@@ -34,22 +34,35 @@ const isTimedPlan = computed(() => info.value.plan === 'timed' || info.value.pla
 const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid')
 const balanceValue = computed(() => Number(info.value.balance || 0))
 
-const daysRemaining = computed(() => {
-  if (!isTimedPlan.value) return '-'
-  if (!info.value.expiresAt || info.value.expiresAt === 0) return '∞'
-  return Math.max(0, Math.floor((info.value.expiresAt - Date.now() / 1000) / 86400))
+const timeRemaining = computed(() => {
+  if (!isTimedPlan.value) return { label: '-', unit: '' }
+  if (!info.value.expiresAt || info.value.expiresAt === 0) return { label: '∞', unit: '' }
+  const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
+  if (diff <= 0) return { label: '已过期', unit: '' }
+  const days = Math.floor(diff / 86400)
+  if (days >= 1) return { label: String(days), unit: '天' }
+  const hours = Math.floor(diff / 3600)
+  if (hours >= 1) return { label: String(hours), unit: '小时' }
+  const mins = Math.max(1, Math.ceil(diff / 60))
+  return { label: String(mins), unit: '分钟' }
 })
 
 const expiryDate = computed(() => {
   if (!info.value.expiresAt || info.value.expiresAt === 0) return '永久有效'
-  return new Date(info.value.expiresAt * 1000).toLocaleDateString('zh-CN')
+  const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
+  if (diff < 86400) {
+    // 不到1天，显示具体时间
+    return '到期：' + new Date(info.value.expiresAt * 1000).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' })
+  }
+  return '到期：' + new Date(info.value.expiresAt * 1000).toLocaleDateString('zh-CN')
 })
 
-const daysClass = computed(() => {
-  const d = daysRemaining.value
-  if (d === '∞') return 'ok'
-  if (d < 3) return 'danger'
-  if (d < 7) return 'warning'
+const timeClass = computed(() => {
+  if (!isTimedPlan.value || !info.value.expiresAt) return 'ok'
+  const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
+  if (diff <= 0) return 'danger'
+  if (diff < 3 * 86400) return 'danger'
+  if (diff < 7 * 86400) return 'warning'
   return 'ok'
 })
 
@@ -76,12 +89,8 @@ function copyUrl() {
   setTimeout(() => copied.value = false, 2000)
 }
 
-async function onRedeemed() {
-  showRedeem.value = false
-  try {
-    const me = await userApi('/me')
-    if (me && !me.error) auth.userInfo = me
-  } catch {}
+function goRecharge() {
+  router.push('/user/recharge')
 }
 </script>
 
@@ -90,9 +99,6 @@ async function onRedeemed() {
     <!-- Header -->
     <div class="header-section">
       <h2 class="page-title">账户概览</h2>
-      <button v-if="info.plan" @click="showRedeem = true" class="redeem-btn-top">
-        <Gift :size="14" style="margin-right:6px" />兑换激活码
-      </button>
     </div>
 
     <!-- Activation Banner -->
@@ -106,8 +112,8 @@ async function onRedeemed() {
           <p>请兑换激活码来获取余额或时间，开始使用 API 服务</p>
         </div>
       </div>
-      <button @click="showRedeem = true" class="activate-btn">
-        <Gift :size="16" style="margin-right:6px" />兑换激活码
+      <button @click="goRecharge" class="activate-btn">
+        <Gift :size="16" style="margin-right:6px" />前往充值
       </button>
     </div>
 
@@ -125,14 +131,14 @@ async function onRedeemed() {
         </div>
       </div>
 
-      <!-- Days -->
+      <!-- Time Remaining -->
       <div v-if="isTimedPlan" class="stat-card glass">
         <div class="stat-header">
-          <span class="stat-label">剩余天数</span>
+          <span class="stat-label">剩余时间</span>
           <Clock :size="18" class="stat-icon" />
         </div>
-        <div class="stat-value">{{ daysRemaining }}<small>天</small></div>
-        <div class="stat-sub" :class="daysClass">到期：{{ expiryDate }}</div>
+        <div class="stat-value">{{ timeRemaining.label }}<small v-if="timeRemaining.unit">{{ timeRemaining.unit }}</small></div>
+        <div class="stat-sub" :class="timeClass">{{ expiryDate }}</div>
       </div>
 
       <!-- Requests -->
@@ -241,7 +247,7 @@ async function onRedeemed() {
     <span>载入数据中...</span>
   </div>
 
-  <RedemptionModal :show="showRedeem" @close="showRedeem = false" @redeemed="onRedeemed" />
+
 </template>
 
 <style scoped>
@@ -271,24 +277,7 @@ async function onRedeemed() {
   color: #f8fafc;
 }
 
-.redeem-btn-top {
-  display: flex;
-  align-items: center;
-  padding: 0.5rem 1rem;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  color: #818cf8;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
 
-.redeem-btn-top:hover {
-  background: rgba(99, 102, 241, 0.2);
-  transform: translateY(-1px);
-}
 
 .glass {
   background: rgba(255, 255, 255, 0.04);
