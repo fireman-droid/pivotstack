@@ -957,7 +957,7 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 						if base < now {
 							base = now
 						}
-						cfg.ApiKeys[j].ExpiresAt = base + int64(ac.Amount)*86400
+						cfg.ApiKeys[j].ExpiresAt = base + int64(ac.Amount)
 						// Set plan and tier
 						if cfg.ApiKeys[j].Plan == "credit" || cfg.ApiKeys[j].Plan == "hybrid" {
 							cfg.ApiKeys[j].Plan = "hybrid"

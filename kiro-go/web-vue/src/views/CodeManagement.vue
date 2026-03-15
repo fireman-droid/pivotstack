@@ -11,16 +11,39 @@ const generating = ref(false)
 
 const form = ref({
   type: 'balance',
-  amount: 10,
-  customAmount: '',
+  amount: 10,        // for balance: ¥, for time: seconds (from preset)
+  customTime: { days: 0, hours: 0, minutes: 0 },
+  useCustomTime: false,
+  customBalance: '',
   tier: 'free',
   count: 1,
   note: ''
 })
 
-const amountPresets = {
-  balance: [5, 10, 50, 100, 300],
-  days: [1, 3, 7, 15, 30]
+const balancePresets = [5, 10, 50, 100, 300]
+const timePresets = [
+  { label: '1小时', seconds: 3600 },
+  { label: '6小时', seconds: 21600 },
+  { label: '1天', seconds: 86400 },
+  { label: '3天', seconds: 259200 },
+  { label: '7天', seconds: 604800 },
+  { label: '15天', seconds: 1296000 },
+  { label: '30天', seconds: 2592000 },
+]
+
+const customTimeSeconds = computed(() => {
+  const t = form.value.customTime
+  return (t.days || 0) * 86400 + (t.hours || 0) * 3600 + (t.minutes || 0) * 60
+})
+
+function switchType(type) {
+  form.value.type = type
+  form.value.useCustomTime = false
+  if (type === 'balance') {
+    form.value.amount = 10
+  } else {
+    form.value.amount = 86400 // default 1 day
+  }
 }
 
 async function loadCodes() {
@@ -32,13 +55,25 @@ async function loadCodes() {
 }
 
 async function generateCodes() {
+  let amount
+  if (form.value.type === 'balance') {
+    amount = form.value.amount === -1 ? Number(form.value.customBalance) : form.value.amount
+  } else {
+    amount = form.value.useCustomTime ? customTimeSeconds.value : form.value.amount
+  }
+
+  if (!amount || amount <= 0) {
+    toastError('请设置有效的数值')
+    return
+  }
+
   generating.value = true
   try {
     const res = await api('/codes', {
       method: 'POST',
       body: JSON.stringify({
         type: form.value.type,
-        amount: form.value.amount === -1 ? Number(form.value.customAmount) : form.value.amount,
+        amount: amount,
         tier: form.value.type === 'days' ? form.value.tier : undefined,
         count: form.value.count,
         note: form.value.note
@@ -85,9 +120,24 @@ function fmtDate(ts) {
   return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function fmtDuration(seconds) {
+  if (!seconds) return '-'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const parts = []
+  if (d) parts.push(`${d}天`)
+  if (h) parts.push(`${h}小时`)
+  if (m) parts.push(`${m}分钟`)
+  return parts.join('') || '0分钟'
+}
+
 function exportCSV() {
   const rows = [['激活码','类型','面值','状态','使用方','创建时间']]
-  codes.value.forEach(c => rows.push([c.code, c.type, c.amount, c.usedBy ? '已使用' : '未使用', c.usedBy || '-', fmtDate(c.createdAt)]))
+  codes.value.forEach(c => {
+    const val = c.type === 'balance' ? '¥' + c.amount : fmtDuration(c.amount)
+    rows.push([c.code, c.type, val, c.usedBy ? '已使用' : '未使用', c.usedBy || '-', fmtDate(c.createdAt)])
+  })
   const csv = rows.map(r => r.join(',')).join('\n')
   const a = document.createElement('a')
   a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv)
@@ -114,37 +164,77 @@ onMounted(loadCodes)
         <div class="space-y-1">
           <label class="text-xs text-[var(--text-secondary)]">类型</label>
           <div class="flex gap-2">
-            <button @click="form.type = 'balance'; form.amount = 10"
+            <button @click="switchType('balance')"
               class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
               :class="form.type === 'balance' ? 'bg-emerald-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
               💰 余额
             </button>
-            <button @click="form.type = 'days'; form.amount = 7"
+            <button @click="switchType('days')"
               class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
               :class="form.type === 'days' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              📅 天数
+              ⏱️ 时间
             </button>
           </div>
         </div>
-          <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">{{ form.type === 'balance' ? '面值 (¥)' : '天数' }}</label>
+
+        <!-- Balance presets -->
+        <div v-if="form.type === 'balance'" class="space-y-1">
+          <label class="text-xs text-[var(--text-secondary)]">面值 (¥)</label>
           <div class="flex gap-1 flex-wrap">
-            <button v-for="v in amountPresets[form.type]" :key="v" @click="form.amount = v"
+            <button v-for="v in balancePresets" :key="v" @click="form.amount = v; form.useCustomTime = false"
               class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
-              :class="form.amount === v ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              {{ form.type === 'balance' ? '¥' : '' }}{{ v }}{{ form.type === 'days' ? '天' : '' }}
+              :class="form.amount === v && !form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              ¥{{ v }}
             </button>
-            <button @click="form.amount = -1"
+            <button @click="form.amount = -1; form.useCustomTime = false"
               class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
               :class="form.amount === -1 ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
               自定义
             </button>
           </div>
-          <input v-if="form.amount === -1" v-model.number="form.customAmount" type="number" min="1" step="1"
-            :placeholder="form.type === 'balance' ? '输入金额 (¥)' : '输入天数'"
+          <input v-if="form.amount === -1" v-model.number="form.customBalance" type="number" min="1" step="0.01"
+            placeholder="输入金额 (¥)"
             class="w-full h-9 px-3 mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
         </div>
-        <!-- Tier (only for days) -->
+
+        <!-- Time presets -->
+        <div v-else class="space-y-1 md:col-span-1">
+          <label class="text-xs text-[var(--text-secondary)]">时间值</label>
+          <div class="flex gap-1 flex-wrap">
+            <button v-for="p in timePresets" :key="p.seconds"
+              @click="form.amount = p.seconds; form.useCustomTime = false"
+              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
+              :class="form.amount === p.seconds && !form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              {{ p.label }}
+            </button>
+            <button @click="form.useCustomTime = true"
+              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
+              :class="form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              自定义
+            </button>
+          </div>
+          <!-- Custom time inputs -->
+          <div v-if="form.useCustomTime" class="flex gap-2 mt-1 items-center">
+            <div class="flex items-center gap-1">
+              <input v-model.number="form.customTime.days" type="number" min="0" step="1" placeholder="0"
+                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
+              <span class="text-[10px] text-[var(--text-secondary)]">天</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <input v-model.number="form.customTime.hours" type="number" min="0" max="23" step="1" placeholder="0"
+                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
+              <span class="text-[10px] text-[var(--text-secondary)]">时</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <input v-model.number="form.customTime.minutes" type="number" min="0" max="59" step="1" placeholder="0"
+                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
+              <span class="text-[10px] text-[var(--text-secondary)]">分</span>
+            </div>
+            <span v-if="customTimeSeconds > 0" class="text-[10px] text-emerald-400 font-bold">= {{ fmtDuration(customTimeSeconds) }}</span>
+          </div>
+        </div>
+
+        <!-- Tier (only for time) -->
         <div v-if="form.type === 'days'" class="space-y-1">
           <label class="text-xs text-[var(--text-secondary)]">等级</label>
           <div class="flex gap-2">
@@ -160,6 +250,7 @@ onMounted(loadCodes)
             </button>
           </div>
         </div>
+
         <div class="space-y-1">
           <label class="text-xs text-[var(--text-secondary)]">数量 / 备注</label>
           <div class="flex gap-2">
@@ -210,14 +301,14 @@ onMounted(loadCodes)
         <div class="flex items-center gap-1">
           <Gift v-if="c.type === 'balance'" class="w-3 h-3 text-emerald-500" />
           <Clock v-else class="w-3 h-3 text-sky-500" />
-          <span class="text-xs">{{ c.type === 'balance' ? '余额' : '天数' }}</span>
+          <span class="text-xs">{{ c.type === 'balance' ? '余额' : '时间' }}</span>
           <span v-if="c.type === 'days' && c.tier" class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
             :class="c.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
             {{ c.tier }}
           </span>
         </div>
         <span class="text-xs font-bold">
-          {{ c.type === 'balance' ? '¥' + c.amount : c.amount + '天' }}
+          {{ c.type === 'balance' ? '¥' + c.amount : fmtDuration(c.amount) }}
         </span>
         <span class="text-xs">
           <span v-if="c.usedBy" class="px-2 py-0.5 rounded bg-[var(--text-secondary)]/10 text-[var(--text-secondary)]">已使用</span>
