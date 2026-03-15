@@ -371,7 +371,9 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	} else if len(currentImages) > 0 {
 		finalContent = normalizeUserContent("", true)
 	} else if len(currentToolResults) > 0 {
-		finalContent = buildToolResultsContinuation(currentToolResults)
+		// Don't duplicate tool result text into Content — it's already in ToolResults.
+		// Use a short continuation prompt so Kiro API accepts the message (Content must be non-empty).
+		finalContent = "Process the tool results above and continue."
 	} else {
 		finalContent = minimalFallbackUserContent
 	}
@@ -846,7 +848,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 				if !isLast {
 					history = append(history, KiroHistoryMessage{
 						UserInputMessage: &KiroUserInputMessage{
-							Content: buildToolResultsContinuation(currentToolResults),
+							Content: "Process the tool results above and continue.",
 							ModelID: modelID,
 							Origin:  origin,
 							UserInputMessageContext: &UserInputMessageContext{
@@ -866,7 +868,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		if len(currentImages) > 0 {
 			finalContent = normalizeUserContent("", true)
 		} else if len(currentToolResults) > 0 {
-			finalContent = buildToolResultsContinuation(currentToolResults)
+			finalContent = "Process the tool results above and continue."
 		} else {
 			finalContent = minimalFallbackUserContent
 		}
