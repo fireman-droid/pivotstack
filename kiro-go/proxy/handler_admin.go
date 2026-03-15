@@ -893,6 +893,7 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type   string  `json:"type"`   // "balance" | "days"
 		Amount float64 `json:"amount"` // CNY or days
+		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
 		Count  int     `json:"count"`  // how many codes to generate
 		Note   string  `json:"note"`
 	}
@@ -925,6 +926,9 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 			Amount:    req.Amount,
 			CreatedAt: now,
 			Note:      req.Note,
+		}
+		if req.Type == "days" && (req.Tier == "free" || req.Tier == "pro") {
+			ac.Tier = req.Tier
 		}
 		if err := config.AddActivationCode(ac); err != nil {
 			w.WriteHeader(500)

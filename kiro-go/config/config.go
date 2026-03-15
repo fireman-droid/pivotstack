@@ -94,8 +94,9 @@ type Account struct {
 type ApiKeyInfo struct {
 	ID        string           `json:"id"`
 	Key       string           `json:"key"`
-	Plan      string           `json:"plan"`      // "timed" | "credit" | "hybrid"
-	ExpiresAt int64            `json:"expiresAt"` // Unix seconds, 0 = never
+	Tier      string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
+	Plan      string           `json:"plan"`           // "timed" | "credit" | "hybrid"
+	ExpiresAt int64            `json:"expiresAt"`      // Unix seconds, 0 = never
 	Enabled   bool             `json:"enabled"`
 	Balance   float64          `json:"balance,omitempty"` // CNY balance (credit/hybrid mode)
 	Note      string           `json:"note,omitempty"`
@@ -113,6 +114,7 @@ type ActivationCode struct {
 	Code          string  `json:"code"`                    // e.g. KIRO-XXXX-XXXX-XXXX
 	Type          string  `json:"type"`                    // "balance" | "days"
 	Amount        float64 `json:"amount"`                  // balance: CNY amount; days: number of days
+	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days)
 	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
 	Used          bool    `json:"used"`
 	UsedBy        string  `json:"usedBy,omitempty"` // ApiKey ID
@@ -938,6 +940,12 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
 						cfg.ApiKeys[j].Balance += ac.Amount
+						// Set plan: if already timed → hybrid, otherwise credit
+						if cfg.ApiKeys[j].Plan == "timed" || cfg.ApiKeys[j].Plan == "hybrid" {
+							cfg.ApiKeys[j].Plan = "hybrid"
+						} else {
+							cfg.ApiKeys[j].Plan = "credit"
+						}
 						break
 					}
 				}
@@ -950,6 +958,15 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 							base = now
 						}
 						cfg.ApiKeys[j].ExpiresAt = base + int64(ac.Amount)*86400
+						// Set plan and tier
+						if cfg.ApiKeys[j].Plan == "credit" || cfg.ApiKeys[j].Plan == "hybrid" {
+							cfg.ApiKeys[j].Plan = "hybrid"
+						} else {
+							cfg.ApiKeys[j].Plan = "timed"
+						}
+						if ac.Tier != "" {
+							cfg.ApiKeys[j].Tier = ac.Tier
+						}
 						break
 					}
 				}

@@ -90,6 +90,18 @@ func MapModel(model string) string {
 	return mapped
 }
 
+// DetermineUserTier applies user-tier restrictions before pool selection.
+// free → forced free pool + claude-sonnet-4.5
+// pro or empty → delegates to DeterminePoolTier
+func DetermineUserTier(model, userTier string) (tier string, effectiveModel string) {
+	switch strings.ToLower(userTier) {
+	case "free":
+		return "free", "claude-sonnet-4.5"
+	default: // "pro" or empty
+		return DeterminePoolTier(model), model
+	}
+}
+
 // DeterminePoolTier 根据请求模型判断应使用的号池
 // 4.6 系列 → "pro"，其他所有 → "free"
 func DeterminePoolTier(model string) string {

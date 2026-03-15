@@ -12,6 +12,8 @@ const generating = ref(false)
 const form = ref({
   type: 'balance',
   amount: 10,
+  customAmount: '',
+  tier: 'free',
   count: 1,
   note: ''
 })
@@ -34,7 +36,13 @@ async function generateCodes() {
   try {
     const res = await api('/codes', {
       method: 'POST',
-      body: JSON.stringify(form.value)
+      body: JSON.stringify({
+        type: form.value.type,
+        amount: form.value.amount === -1 ? Number(form.value.customAmount) : form.value.amount,
+        tier: form.value.type === 'days' ? form.value.tier : undefined,
+        count: form.value.count,
+        note: form.value.note
+      })
     })
     if (res.ok) {
       const data = await res.json()
@@ -118,13 +126,37 @@ onMounted(loadCodes)
             </button>
           </div>
         </div>
-        <div class="space-y-1">
+          <div class="space-y-1">
           <label class="text-xs text-[var(--text-secondary)]">{{ form.type === 'balance' ? '面值 (¥)' : '天数' }}</label>
           <div class="flex gap-1 flex-wrap">
             <button v-for="v in amountPresets[form.type]" :key="v" @click="form.amount = v"
               class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
               :class="form.amount === v ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
               {{ form.type === 'balance' ? '¥' : '' }}{{ v }}{{ form.type === 'days' ? '天' : '' }}
+            </button>
+            <button @click="form.amount = -1"
+              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
+              :class="form.amount === -1 ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              自定义
+            </button>
+          </div>
+          <input v-if="form.amount === -1" v-model.number="form.customAmount" type="number" min="1" step="1"
+            :placeholder="form.type === 'balance' ? '输入金额 (¥)' : '输入天数'"
+            class="w-full h-9 px-3 mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
+        </div>
+        <!-- Tier (only for days) -->
+        <div v-if="form.type === 'days'" class="space-y-1">
+          <label class="text-xs text-[var(--text-secondary)]">等级</label>
+          <div class="flex gap-2">
+            <button @click="form.tier = 'free'"
+              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
+              :class="form.tier === 'free' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              🔒 Free（仅 4.5）
+            </button>
+            <button @click="form.tier = 'pro'"
+              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
+              :class="form.tier === 'pro' ? 'bg-amber-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
+              👑 Pro（全模型）
             </button>
           </div>
         </div>
@@ -179,6 +211,10 @@ onMounted(loadCodes)
           <Gift v-if="c.type === 'balance'" class="w-3 h-3 text-emerald-500" />
           <Clock v-else class="w-3 h-3 text-sky-500" />
           <span class="text-xs">{{ c.type === 'balance' ? '余额' : '天数' }}</span>
+          <span v-if="c.type === 'days' && c.tier" class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+            :class="c.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
+            {{ c.tier }}
+          </span>
         </div>
         <span class="text-xs font-bold">
           {{ c.type === 'balance' ? '¥' + c.amount : c.amount + '天' }}
