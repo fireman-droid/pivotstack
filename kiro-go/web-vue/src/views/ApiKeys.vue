@@ -21,7 +21,7 @@ const keyLogs = ref({})
 const keyLogsLoading = ref({})
 
 // Create form
-const form = ref({ tier: 'normal', durationDays: 30, customDate: '', note: '' })
+const form = ref({ tier: 'normal', plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' })
 const durationPresets = [
   { label: '1天', days: 1 },
   { label: '3天', days: 3 },
@@ -51,14 +51,14 @@ async function createKey() {
   try {
     const res = await api('/apikeys', {
       method: 'POST',
-      body: JSON.stringify({ tier: form.value.tier, expiresAt, note: form.value.note })
+      body: JSON.stringify({ tier: form.value.tier, plan: form.value.plan, expiresAt, balance: form.value.balance, note: form.value.note })
     })
     if (res.ok) {
       const newKey = await res.json()
       keys.value.unshift(newKey)
       showCreate.value = false
       showKeyId.value = newKey.id
-      form.value = { tier: 'normal', durationDays: 30, customDate: '', note: '' }
+      form.value = { tier: 'normal', plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' }
       success('API Key 已创建')
     }
   } catch { toastError('创建失败') }
@@ -241,8 +241,30 @@ onMounted(loadKeys)
               </div>
             </div>
 
-            <!-- Duration -->
+            <!-- Plan -->
             <div class="space-y-2">
+              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">计费模式</label>
+              <div class="grid grid-cols-3 gap-2">
+                <button @click="form.plan = 'timed'"
+                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
+                  :class="form.plan === 'timed' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
+                  ⏱ 时间制
+                </button>
+                <button @click="form.plan = 'credit'"
+                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
+                  :class="form.plan === 'credit' ? 'bg-emerald-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
+                  💰 计量制
+                </button>
+                <button @click="form.plan = 'hybrid'"
+                  class="px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
+                  :class="form.plan === 'hybrid' ? 'bg-purple-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
+                  🔀 混合制
+                </button>
+              </div>
+            </div>
+
+            <!-- Duration (for timed/hybrid) -->
+            <div v-if="form.plan !== 'credit'" class="space-y-2">
               <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">有效期</label>
               <div class="flex flex-wrap gap-2">
                 <button v-for="p in durationPresets" :key="p.days" @click="form.durationDays = p.days"
@@ -253,6 +275,13 @@ onMounted(loadKeys)
               </div>
               <input v-if="form.durationDays === -1" v-model="form.customDate" type="datetime-local"
                 class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)] mt-2" />
+            </div>
+
+            <!-- Balance (for credit/hybrid) -->
+            <div v-if="form.plan !== 'timed'" class="space-y-2">
+              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">初始余额 (¥)</label>
+              <input v-model.number="form.balance" type="number" step="0.01" min="0" placeholder="0.00"
+                class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
             </div>
 
             <!-- Note -->
@@ -293,6 +322,14 @@ onMounted(loadKeys)
               <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
                 :class="k.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
                 {{ k.tier }}
+              </span>
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                :class="{ 'bg-sky-500/10 text-sky-400': k.plan === 'timed', 'bg-emerald-500/10 text-emerald-400': k.plan === 'credit', 'bg-purple-500/10 text-purple-400': k.plan === 'hybrid' }">
+                {{ k.plan === 'timed' ? '时间制' : k.plan === 'credit' ? '计量制' : k.plan === 'hybrid' ? '混合制' : k.plan }}
+              </span>
+              <span v-if="k.plan !== 'timed' && k.balance !== undefined" class="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                :class="k.balance < 1 ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'">
+                ¥{{ (k.balance || 0).toFixed(2) }}
               </span>
               <span v-if="!k.enabled" class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[9px] font-bold">禁用</span>
             </div>
@@ -356,6 +393,10 @@ onMounted(loadKeys)
             <div class="p-3 bg-[var(--card)] rounded-xl">
               <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Credits</div>
               <div class="text-sm font-black text-emerald-500">{{ (k.credits || 0).toFixed(2) }}</div>
+            </div>
+            <div v-if="k.plan !== 'timed'" class="p-3 bg-[var(--card)] rounded-xl">
+              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">余额</div>
+              <div class="text-sm font-black" :class="k.balance < 1 ? 'text-rose-500' : 'text-emerald-500'">¥{{ (k.balance || 0).toFixed(2) }}</div>
             </div>
             <div class="p-3 bg-[var(--card)] rounded-xl">
               <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">创建时间</div>

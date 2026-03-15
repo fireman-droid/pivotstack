@@ -5,7 +5,8 @@ import { useAuthStore } from '../stores/auth'
 import WorldSwitcher from './WorldSwitcher.vue'
 import {
   LayoutDashboard, Key, FileText, Users, Settings,
-  LogOut, Menu, X, ChevronRight, Shield, TrendingUp, KeyRound
+  LogOut, Menu, X, ChevronRight, Shield, TrendingUp, KeyRound,
+  DollarSign, Gift, ShieldAlert
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -19,6 +20,9 @@ const navItems = [
   { name: 'API 令牌', path: '/api', icon: Key },
   { name: '使用日志', path: '/logs', icon: FileText },
   { name: '定价分析', path: '/pricing', icon: TrendingUp },
+  { name: '定价配置', path: '/pricing-config', icon: DollarSign },
+  { name: '激活码', path: '/codes', icon: Gift },
+  { name: '滥用监控', path: '/abuse', icon: ShieldAlert },
   { name: '账号管理', path: '/accounts', icon: Users },
   { name: '个人设置', path: '/settings', icon: Settings },
 ]
