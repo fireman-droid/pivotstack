@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	crand "crypto/rand"
 	"encoding/json"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
@@ -116,6 +117,25 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.handleSSEStats(w, r)
 	case path == "/pricing-analysis" && r.Method == "GET":
 		h.apiPricingAnalysis(w, r)
+
+	// ==================== Billing Management ====================
+	case path == "/pricing" && r.Method == "GET":
+		h.apiGetPricing(w, r)
+	case path == "/pricing" && r.Method == "PUT":
+		h.apiUpdatePricing(w, r)
+	case path == "/codes" && r.Method == "GET":
+		h.apiGetCodes(w, r)
+	case path == "/codes" && r.Method == "POST":
+		h.apiCreateCodes(w, r)
+	case strings.HasPrefix(path, "/codes/") && r.Method == "DELETE":
+		code := strings.TrimPrefix(path, "/codes/")
+		h.apiDeleteCode(w, r, code)
+	case path == "/abuse" && r.Method == "GET":
+		h.apiGetAbuse(w, r)
+	case strings.HasPrefix(path, "/abuse/") && strings.HasSuffix(path, "/clear") && r.Method == "POST":
+		keyID := strings.TrimSuffix(strings.TrimPrefix(path, "/abuse/"), "/clear")
+		h.apiClearAbuse(w, r, keyID)
+
 	default:
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
@@ -735,9 +755,11 @@ func (h *Handler) apiGetApiKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Tier      string `json:"tier"`
-		ExpiresAt int64  `json:"expiresAt"`
-		Note      string `json:"note"`
+		Tier      string  `json:"tier"`
+		Plan      string  `json:"plan"`
+		ExpiresAt int64   `json:"expiresAt"`
+		Balance   float64 `json:"balance"`
+		Note      string  `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -747,12 +769,16 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 	if req.Tier != "normal" && req.Tier != "pro" {
 		req.Tier = "normal"
 	}
+	if req.Plan != "credit" && req.Plan != "hybrid" {
+		req.Plan = "timed"
+	}
 	key := config.ApiKeyInfo{
 		ID:        config.GenerateMachineId(),
 		Key:       config.GenerateApiKeyString(),
 		Tier:      req.Tier,
-		Plan:      "timed",
+		Plan:      req.Plan,
 		ExpiresAt: req.ExpiresAt,
+		Balance:   req.Balance,
 		Enabled:   true,
 		Note:      req.Note,
 		CreatedAt: time.Now().Unix(),
@@ -767,10 +793,12 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Tier      *string `json:"tier"`
-		ExpiresAt *int64  `json:"expiresAt"`
-		Enabled   *bool   `json:"enabled"`
-		Note      *string `json:"note"`
+		Tier      *string  `json:"tier"`
+		Plan      *string  `json:"plan"`
+		ExpiresAt *int64   `json:"expiresAt"`
+		Enabled   *bool    `json:"enabled"`
+		Balance   *float64 `json:"balance"`
+		Note      *string  `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -793,11 +821,17 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	if req.Tier != nil {
 		existing.Tier = *req.Tier
 	}
+	if req.Plan != nil {
+		existing.Plan = *req.Plan
+	}
 	if req.ExpiresAt != nil {
 		existing.ExpiresAt = *req.ExpiresAt
 	}
 	if req.Enabled != nil {
 		existing.Enabled = *req.Enabled
+	}
+	if req.Balance != nil {
+		existing.Balance = *req.Balance
 	}
 	if req.Note != nil {
 		existing.Note = *req.Note
@@ -835,4 +869,130 @@ func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, r *http.Request, keyID
 		filtered[i], filtered[j] = filtered[j], filtered[i]
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"logs": filtered})
+}
+
+// ==================== Billing Admin APIs ====================
+
+// GET /admin/api/pricing
+func (h *Handler) apiGetPricing(w http.ResponseWriter, r *http.Request) {
+	pricing := config.GetPricing()
+	json.NewEncoder(w).Encode(pricing)
+}
+
+// PUT /admin/api/pricing
+func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
+	var pricing config.PricingConfig
+	if err := json.NewDecoder(r.Body).Decode(&pricing); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdatePricing(pricing); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// GET /admin/api/codes
+func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
+	codes := config.GetActivationCodes()
+	if codes == nil {
+		codes = []config.ActivationCode{}
+	}
+	json.NewEncoder(w).Encode(codes)
+}
+
+// POST /admin/api/codes - batch create activation codes
+func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type   string  `json:"type"`   // "balance" | "days"
+		Amount float64 `json:"amount"` // CNY or days
+		Count  int     `json:"count"`  // how many codes to generate
+		Note   string  `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.Type != "balance" && req.Type != "days" {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "type must be 'balance' or 'days'"})
+		return
+	}
+	if req.Amount <= 0 {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "amount must be positive"})
+		return
+	}
+	if req.Count <= 0 || req.Count > 100 {
+		req.Count = 1
+	}
+
+	var codes []string
+	now := time.Now().Unix()
+	for i := 0; i < req.Count; i++ {
+		code := generateActivationCode()
+		ac := config.ActivationCode{
+			Code:      code,
+			Type:      req.Type,
+			Amount:    req.Amount,
+			CreatedAt: now,
+			Note:      req.Note,
+		}
+		if err := config.AddActivationCode(ac); err != nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		codes = append(codes, code)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"codes":   codes,
+		"count":   len(codes),
+	})
+}
+
+// DELETE /admin/api/codes/:code
+func (h *Handler) apiDeleteCode(w http.ResponseWriter, r *http.Request, code string) {
+	if err := config.DeleteActivationCode(code); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// GET /admin/api/abuse
+func (h *Handler) apiGetAbuse(w http.ResponseWriter, r *http.Request) {
+	flagged := GetFlaggedKeys()
+	if flagged == nil {
+		flagged = []map[string]interface{}{}
+	}
+	json.NewEncoder(w).Encode(flagged)
+}
+
+// POST /admin/api/abuse/:keyId/clear
+func (h *Handler) apiClearAbuse(w http.ResponseWriter, r *http.Request, keyID string) {
+	ClearFlag(keyID)
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// generateActivationCode creates a code like KIRO-XXXX-XXXX-XXXX
+func generateActivationCode() string {
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1
+	seg := func() string {
+		b := make([]byte, 4)
+		randBytes := make([]byte, 4)
+		crand.Read(randBytes)
+		for i := range b {
+			b[i] = chars[int(randBytes[i])%len(chars)]
+		}
+		return string(b)
+	}
+	return "KIRO-" + seg() + "-" + seg() + "-" + seg()
 }

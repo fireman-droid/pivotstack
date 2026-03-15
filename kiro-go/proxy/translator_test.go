@@ -93,8 +93,11 @@ func TestOpenAIToKiroPreservesStructuredAssistantAndToolContent(t *testing.T) {
 	}
 
 	cur := payload.ConversationState.CurrentMessage.UserInputMessage
-	if cur.Content != "tool-result-structured" {
-		t.Fatalf("expected tool-result continuation content, got %q", cur.Content)
+	if cur.Content == "tool-result-structured" {
+		t.Fatalf("expected tool-result continuation content to NOT be raw tool text, got %q", cur.Content)
+	}
+	if cur.Content != "Process the tool results above and continue." {
+		t.Fatalf("expected placeholder content for tool results, got %q", cur.Content)
 	}
 	if cur.UserInputMessageContext == nil || len(cur.UserInputMessageContext.ToolResults) != 1 {
 		t.Fatalf("expected one tool result in current context")

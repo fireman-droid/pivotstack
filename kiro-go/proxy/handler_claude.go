@@ -83,6 +83,21 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	if uc != nil {
 		userTier = uc.KeyTier
 	}
+
+	// Abuse prevention: check rate/concurrency limits
+	if uc != nil && uc.KeyID != "" {
+		ip := r.RemoteAddr
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			ip = strings.Split(fwd, ",")[0]
+		}
+		allowed, reason := OnRequestStart(uc.KeyID, strings.TrimSpace(ip))
+		if !allowed {
+			h.sendClaudeError(w, 429, "rate_limit_error", "Request blocked: "+reason)
+			return
+		}
+		defer OnRequestEnd(uc.KeyID)
+	}
+
 	tier, effectiveModel := DetermineUserTier(req.Model, userTier)
 	req.Model = effectiveModel
 
@@ -539,6 +554,13 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
+	// Billing: deduct balance for credit/hybrid plans
+	if costCNY, billErr := TryDeductBalance(uc, model, inputTokens, outputTokens); billErr != nil {
+		fmt.Printf("[Billing] WARN: deduction failed for key %s: %s\n", uc.KeyID, billErr.Error())
+	} else if costCNY > 0 {
+		_ = costCNY // logged inside TryDeductBalance
+	}
+
 	// 发送 message_delta
 	stopReason := "end_turn"
 	if len(toolUses) > 0 {
@@ -642,6 +664,13 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
+
+	// Billing: deduct balance for credit/hybrid plans
+	if costCNY, billErr := TryDeductBalance(uc, model, inputTokens, outputTokens); billErr != nil {
+		fmt.Printf("[Billing] WARN: deduction failed for key %s: %s\n", uc.KeyID, billErr.Error())
+	} else if costCNY > 0 {
+		_ = costCNY
+	}
 
 	stopReason := "end_turn"
 	if len(toolUses) > 0 {

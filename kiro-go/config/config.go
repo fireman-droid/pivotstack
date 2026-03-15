@@ -94,30 +94,59 @@ type Account struct {
 type ApiKeyInfo struct {
 	ID        string           `json:"id"`
 	Key       string           `json:"key"`
-	Tier      string           `json:"tier"`             // "normal" | "pro"
-	Plan      string           `json:"plan"`             // "timed"
-	ExpiresAt int64            `json:"expiresAt"`        // Unix seconds, 0 = never
+	Tier      string           `json:"tier"`      // "normal" | "pro"
+	Plan      string           `json:"plan"`      // "timed" | "credit" | "hybrid"
+	ExpiresAt int64            `json:"expiresAt"` // Unix seconds, 0 = never
 	Enabled   bool             `json:"enabled"`
+	Balance   float64          `json:"balance,omitempty"` // CNY balance (credit/hybrid mode)
 	Note      string           `json:"note,omitempty"`
 	CreatedAt int64            `json:"createdAt"`
 	LastUsed  int64            `json:"lastUsed,omitempty"`
 	Requests  int64            `json:"requests"`
 	Errors    int64            `json:"errors"`
 	Tokens    int64            `json:"tokens"`
-	Credits   float64          `json:"credits"`
+	Credits   float64          `json:"credits"` // cumulative credits consumed
 	Models    map[string]int64 `json:"models,omitempty"`
+}
+
+// ActivationCode represents a redeemable code for balance or time extension.
+type ActivationCode struct {
+	Code      string  `json:"code"`   // e.g. KIRO-XXXX-XXXX-XXXX
+	Type      string  `json:"type"`   // "balance" | "days"
+	Amount    float64 `json:"amount"` // balance: CNY amount; days: number of days
+	Used      bool    `json:"used"`
+	UsedBy    string  `json:"usedBy,omitempty"` // ApiKey ID
+	UsedAt    int64   `json:"usedAt,omitempty"`
+	CreatedAt int64   `json:"createdAt"`
+	Note      string  `json:"note,omitempty"`
+}
+
+// ModelPricing defines per-model pricing in CNY.
+type ModelPricing struct {
+	InputPricePerM  float64 `json:"inputPricePerM"`  // CNY per million input tokens
+	OutputPricePerM float64 `json:"outputPricePerM"` // CNY per million output tokens
+	Multiplier      float64 `json:"multiplier"`      // relative multiplier for display
+}
+
+// PricingConfig holds pricing for all models.
+type PricingConfig struct {
+	Models        map[string]ModelPricing `json:"models"`
+	DefaultInput  float64                 `json:"defaultInput"`  // CNY per million input tokens
+	DefaultOutput float64                 `json:"defaultOutput"` // CNY per million output tokens
 }
 
 // Config represents the global application configuration.
 type Config struct {
 	// Server settings
-	Password      string    `json:"password"`         // Admin panel password
-	Port          int       `json:"port"`             // HTTP server port (default: 8080)
-	Host          string    `json:"host"`             // HTTP server bind address (default: 0.0.0.0)
-	ApiKey        string       `json:"apiKey,omitempty"` // Legacy single key (auto-migrated)
-	RequireApiKey bool         `json:"requireApiKey"`    // Whether to enforce API key validation
-	ApiKeys       []ApiKeyInfo `json:"apiKeys,omitempty"`
-	Accounts      []Account    `json:"accounts"`
+	Password        string           `json:"password"`         // Admin panel password
+	Port            int              `json:"port"`             // HTTP server port (default: 8080)
+	Host            string           `json:"host"`             // HTTP server bind address (default: 0.0.0.0)
+	ApiKey          string           `json:"apiKey,omitempty"` // Legacy single key (auto-migrated)
+	RequireApiKey   bool             `json:"requireApiKey"`    // Whether to enforce API key validation
+	ApiKeys         []ApiKeyInfo     `json:"apiKeys,omitempty"`
+	Accounts        []Account        `json:"accounts"`
+	ActivationCodes []ActivationCode `json:"activationCodes,omitempty"`
+	Pricing         PricingConfig    `json:"pricing,omitempty"`
 
 	// Thinking mode configuration for extended reasoning output
 	ThinkingSuffix       string `json:"thinkingSuffix,omitempty"`       // Model suffix to trigger thinking mode (default: "-thinking")
@@ -739,4 +768,205 @@ func UpdatePreferredEndpoint(endpoint string) error {
 	defer cfgLock.Unlock()
 	cfg.PreferredEndpoint = endpoint
 	return Save()
+}
+
+// ==================== Pricing ====================
+
+// GetPricing returns the pricing configuration with defaults.
+func GetPricing() PricingConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	p := cfg.Pricing
+	if p.Models == nil {
+		p.Models = map[string]ModelPricing{
+			"claude-sonnet-4.5": {InputPricePerM: 0.30, OutputPricePerM: 3.50, Multiplier: 0.1},
+			"claude-sonnet-4.6": {InputPricePerM: 0.50, OutputPricePerM: 5.00, Multiplier: 1.0},
+			"claude-opus-4.6":   {InputPricePerM: 1.00, OutputPricePerM: 7.00, Multiplier: 1.0},
+		}
+	}
+	if p.DefaultInput == 0 {
+		p.DefaultInput = 0.50
+	}
+	if p.DefaultOutput == 0 {
+		p.DefaultOutput = 5.00
+	}
+	return p
+}
+
+// UpdatePricing updates the pricing configuration.
+func UpdatePricing(p PricingConfig) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.Pricing = p
+	return Save()
+}
+
+// ==================== ApiKey Billing ====================
+
+// FindApiKeyByID returns a pointer to ApiKeyInfo by ID.
+func FindApiKeyByID(id string) *ApiKeyInfo {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	for _, k := range cfg.ApiKeys {
+		if k.ID == id {
+			c := k
+			if c.Models != nil {
+				c.Models = copyModelCounts(c.Models)
+			}
+			return &c
+		}
+	}
+	return nil
+}
+
+// DeductKeyBalance atomically deducts amount from an API key's balance.
+// Returns (success, remaining balance).
+func DeductKeyBalance(keyID string, amount float64) (bool, float64) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			if cfg.ApiKeys[i].Balance < amount {
+				return false, cfg.ApiKeys[i].Balance
+			}
+			cfg.ApiKeys[i].Balance -= amount
+			remaining := cfg.ApiKeys[i].Balance
+			Save()
+			return true, remaining
+		}
+	}
+	return false, 0
+}
+
+// AddKeyBalance adds balance to an API key.
+func AddKeyBalance(keyID string, amount float64) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			cfg.ApiKeys[i].Balance += amount
+			return Save()
+		}
+	}
+	return fmt.Errorf("api key not found: %s", keyID)
+}
+
+// ExtendKeyExpiry extends expiration by N days. If current expiry is past, extends from now.
+func ExtendKeyExpiry(keyID string, days int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			base := cfg.ApiKeys[i].ExpiresAt
+			now := time.Now().Unix()
+			if base < now {
+				base = now
+			}
+			cfg.ApiKeys[i].ExpiresAt = base + int64(days)*86400
+			return Save()
+		}
+	}
+	return fmt.Errorf("api key not found: %s", keyID)
+}
+
+// ValidateKeyAccess checks if an API key is valid for making requests.
+// Returns ("", nil) on success, or (errorType, error) on failure.
+func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
+	if !info.Enabled {
+		return "key_disabled", fmt.Errorf("api key is disabled")
+	}
+	switch info.Plan {
+	case "timed":
+		if info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
+			return "key_expired", fmt.Errorf("api key expired")
+		}
+	case "credit":
+		if info.Balance <= 0 {
+			return "insufficient_balance", fmt.Errorf("insufficient balance")
+		}
+	case "hybrid":
+		if info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
+			return "key_expired", fmt.Errorf("api key expired")
+		}
+		if info.Balance <= 0 {
+			return "insufficient_balance", fmt.Errorf("insufficient balance")
+		}
+	}
+	return "", nil
+}
+
+// ==================== Activation Codes ====================
+
+// GetActivationCodes returns all activation codes.
+func GetActivationCodes() []ActivationCode {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	codes := make([]ActivationCode, len(cfg.ActivationCodes))
+	copy(codes, cfg.ActivationCodes)
+	return codes
+}
+
+// AddActivationCode adds a new activation code.
+func AddActivationCode(code ActivationCode) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.ActivationCodes = append(cfg.ActivationCodes, code)
+	return Save()
+}
+
+// RedeemActivationCode tries to redeem a code for the given ApiKey ID.
+func RedeemActivationCode(codeStr, keyID string) (string, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, ac := range cfg.ActivationCodes {
+		if ac.Code == codeStr {
+			if ac.Used {
+				return "", fmt.Errorf("activation code already used")
+			}
+			cfg.ActivationCodes[i].Used = true
+			cfg.ActivationCodes[i].UsedBy = keyID
+			cfg.ActivationCodes[i].UsedAt = time.Now().Unix()
+
+			switch ac.Type {
+			case "balance":
+				for j, k := range cfg.ApiKeys {
+					if k.ID == keyID {
+						cfg.ApiKeys[j].Balance += ac.Amount
+						break
+					}
+				}
+			case "days":
+				for j, k := range cfg.ApiKeys {
+					if k.ID == keyID {
+						base := cfg.ApiKeys[j].ExpiresAt
+						now := time.Now().Unix()
+						if base < now {
+							base = now
+						}
+						cfg.ApiKeys[j].ExpiresAt = base + int64(ac.Amount)*86400
+						break
+					}
+				}
+			default:
+				return "", fmt.Errorf("unknown activation code type: %s", ac.Type)
+			}
+
+			Save()
+			return ac.Type, nil
+		}
+	}
+	return "", fmt.Errorf("activation code not found")
+}
+
+// DeleteActivationCode deletes an activation code by its code string.
+func DeleteActivationCode(codeStr string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, ac := range cfg.ActivationCodes {
+		if ac.Code == codeStr {
+			cfg.ActivationCodes = append(cfg.ActivationCodes[:i], cfg.ActivationCodes[i+1:]...)
+			return Save()
+		}
+	}
+	return nil
 }

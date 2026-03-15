@@ -10,6 +10,20 @@ const routes = [
   { path: '/api', name: 'ApiInfo', component: () => import('../views/ApiInfo.vue'), meta: { auth: true } },
   { path: '/logs', name: 'Logs', component: () => import('../views/Logs.vue'), meta: { auth: true } },
   { path: '/pricing', name: 'Pricing', component: () => import('../views/PricingAnalysis.vue'), meta: { auth: true } },
+
+  // User portal routes
+  { path: '/user/login', name: 'UserLogin', component: () => import('../views/user/UserLogin.vue') },
+  {
+    path: '/user',
+    component: () => import('../views/user/UserLayout.vue'),
+    meta: { userAuth: true },
+    children: [
+      { path: '', redirect: '/user/dashboard' },
+      { path: 'dashboard', name: 'UserDashboard', component: () => import('../views/user/UserDashboard.vue') },
+      { path: 'recharge', name: 'UserRecharge', component: () => import('../views/user/UserRecharge.vue') },
+      { path: 'logs', name: 'UserLogs', component: () => import('../views/user/UserLogs.vue') },
+    ]
+  },
 ]
 
 const router = createRouter({
@@ -21,9 +35,15 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  // Admin auth guard
   if (to.meta.auth) {
     const auth = useAuthStore()
     if (!auth.password) return '/login'
+  }
+  // User auth guard
+  if (to.meta.userAuth || to.matched.some(r => r.meta.userAuth)) {
+    const apiKey = localStorage.getItem('user_api_key')
+    if (!apiKey) return '/user/login'
   }
 })
 

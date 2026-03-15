@@ -283,11 +283,10 @@ func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 	if info == nil {
 		return nil, fmt.Errorf("invalid api key")
 	}
-	if !info.Enabled {
-		return nil, fmt.Errorf("api key disabled")
-	}
-	if info.Plan == "timed" && info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
-		return nil, fmt.Errorf("api key expired")
+
+	// Unified plan validation (timed / credit / hybrid)
+	if errType, err := config.ValidateKeyAccess(info); err != nil {
+		return nil, fmt.Errorf("%s: %s", errType, err.Error())
 	}
 
 	return &UserContext{KeyID: info.ID, KeyTier: info.Tier}, nil
@@ -346,6 +345,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasPrefix(path, "/admin/api/"):
 		h.handleAdminAPI(w, r)
+
+	case strings.HasPrefix(path, "/user/api/"):
+		h.handleUserAPI(w, r)
 
 	case path == "/admin" || path == "/admin/" || strings.HasPrefix(path, "/admin/"):
 		// Serve Vue frontend (SPA fallback)
