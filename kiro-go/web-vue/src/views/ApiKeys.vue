@@ -121,11 +121,14 @@ function timeRemaining(expiresAt) {
   const diff = expiresAt - Date.now() / 1000
   if (diff <= 0) return { text: '已过期', class: 'danger' }
   const days = Math.floor(diff / 86400)
-  if (days >= 1) return { text: `${days}天`, class: days < 3 ? 'warning' : 'ok' }
-  const hours = Math.floor(diff / 3600)
-  if (hours >= 1) return { text: `${hours}小时`, class: 'warning' }
-  const mins = Math.max(1, Math.ceil(diff / 60))
-  return { text: `${mins}分钟`, class: 'danger' }
+  const hours = Math.floor((diff % 86400) / 3600)
+  const mins = Math.max(1, Math.ceil((diff % 3600) / 60))
+  let text = ''
+  if (days > 0) text += `${days}天`
+  if (hours > 0) text += `${hours}小时`
+  if (days === 0 && mins > 0) text += `${mins}分钟`
+  const cls = days < 3 ? (days < 1 ? 'danger' : 'warning') : 'ok'
+  return { text: text || '1分钟', class: cls }
 }
 
 function subscriptionInfo(k) {
@@ -150,7 +153,7 @@ function expiresAtDisplay(ts) {
 function addTime(amount) {
   const now = Math.floor(Date.now() / 1000)
   const base = editForm.expiresAt > now ? editForm.expiresAt : now
-  editForm.expiresAt = base + amount
+  editForm.expiresAt = Math.max(now, base + amount)
 }
 
 const filteredKeys = computed(() => {
@@ -318,7 +321,8 @@ onMounted(loadKeys)
                 <button @click="addTime(3 * 86400)" class="time-btn">+3天</button>
                 <button @click="addTime(7 * 86400)" class="time-btn">+7天</button>
                 <button @click="addTime(30 * 86400)" class="time-btn">+30天</button>
-                <button @click="editForm.expiresAt = 0" class="time-btn danger">清除（永不过期）</button>
+                <button @click="editForm.expiresAt = Math.floor(Date.now()/1000)" class="time-btn danger">重置为0</button>
+                <button @click="editForm.expiresAt = 0" class="time-btn danger">永不过期</button>
               </div>
             </div>
           </div>
@@ -353,11 +357,8 @@ onMounted(loadKeys)
               </div>
             </div>
 
-            <div class="mt-3 flex gap-2">
-              <button @click.stop="startEdit(k)" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[var(--primary)] bg-[var(--primary)]/10 rounded-lg hover:bg-[var(--primary)]/20 transition-colors">
-                <Pencil class="w-3 h-3" /> 编辑
-              </button>
-            </div>
+
+
           </div>
         </div>
       </div>

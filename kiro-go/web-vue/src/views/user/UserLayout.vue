@@ -16,38 +16,44 @@ const navItems = [
 
 const isActivated = computed(() => !!auth.plan)
 const balanceValue = computed(() => Number(auth.balance || 0))
+const isCreditPlan = computed(() => auth.plan === 'credit' || auth.plan === 'hybrid')
+const isTimedPlan = computed(() => auth.plan === 'timed' || auth.plan === 'hybrid')
 
 const balanceDisplay = computed(() => {
-  if (!isActivated.value) return '未激活'
-  if (auth.plan === 'timed') {
-    // 显示剩余时间
-    const exp = auth.userInfo?.expiresAt || 0
-    if (!exp) return '永久'
-    const diff = Math.max(0, exp - Date.now() / 1000)
-    if (diff <= 0) return '已过期'
-    if (diff >= 86400) return Math.floor(diff / 86400) + '天'
-    if (diff >= 3600) return Math.floor(diff / 3600) + '小时'
-    return Math.max(1, Math.ceil(diff / 60)) + '分钟'
-  }
+  if (!isCreditPlan.value) return null
   return `¥${balanceValue.value.toFixed(2)}`
 })
 
 const balanceBadgeClass = computed(() => {
-  if (!isActivated.value) return 'inactive'
-  if (auth.plan === 'timed') return 'timed'
   if (balanceValue.value < 1) return 'low'
   return 'ok'
 })
 
-const planLabel = computed(() => {
-  if (!isActivated.value) return '未激活'
-  const labels = { timed: '时间制', credit: '计量制', hybrid: '混合制' }
-  return labels[auth.plan] || auth.plan
+const timeDisplay = computed(() => {
+  if (!isTimedPlan.value) return null
+  const exp = auth.userInfo?.expiresAt || 0
+  if (!exp) return '永久'
+  const diff = Math.max(0, exp - Date.now() / 1000)
+  if (diff <= 0) return '已过期'
+  const d = Math.floor(diff / 86400)
+  const h = Math.floor((diff % 86400) / 3600)
+  const m = Math.max(1, Math.ceil((diff % 3600) / 60))
+  let t = ''
+  if (d > 0) t += d + '天'
+  if (h > 0) t += h + '时'
+  if (d === 0 && m > 0) t += m + '分'
+  return t || '1分'
 })
 
-const planTagClass = computed(() => {
-  const map = { timed: 'blue', credit: 'green', hybrid: 'purple' }
-  return map[auth.plan] || 'gray'
+const timeBadgeClass = computed(() => {
+  if (!isTimedPlan.value) return 'timed'
+  const exp = auth.userInfo?.expiresAt || 0
+  if (!exp) return 'timed'
+  const diff = Math.max(0, exp - Date.now() / 1000)
+  if (diff <= 0) return 'expired'
+  if (diff < 3 * 86400) return 'urgent'
+  if (diff < 7 * 86400) return 'warning'
+  return 'timed'
 })
 
 function handleLogout() {
@@ -83,8 +89,12 @@ onMounted(() => {
         </nav>
       </div>
       <div class="header-right">
-        <div :class="['balance-badge', balanceBadgeClass]">
+        <div v-if="!isActivated" class="balance-badge inactive">未激活</div>
+        <div v-if="balanceDisplay" :class="['balance-badge', balanceBadgeClass]">
           {{ balanceDisplay }}
+        </div>
+        <div v-if="timeDisplay" :class="['time-badge', timeBadgeClass]">
+          {{ timeDisplay }}
         </div>
         <button class="logout-btn" @click="handleLogout" title="退出登录">
           <LogOut :size="16" />
@@ -226,13 +236,39 @@ onMounted(() => {
   animation: pulse 2s ease-in-out infinite;
 }
 
-.balance-badge.timed {
+.balance-badge.inactive {
+  background: rgba(100, 116, 139, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.time-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.time-badge.timed {
   background: rgba(99, 102, 241, 0.12);
   color: #818cf8;
   border: 1px solid rgba(99, 102, 241, 0.2);
 }
 
-.balance-badge.inactive {
+.time-badge.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.time-badge.urgent {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.time-badge.expired {
   background: rgba(100, 116, 139, 0.12);
   color: #94a3b8;
   border: 1px solid rgba(100, 116, 139, 0.2);
@@ -241,33 +277,6 @@ onMounted(() => {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
-}
-
-.plan-tag {
-  padding: 0.2rem 0.6rem;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.plan-tag.green {
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-}
-
-.plan-tag.blue {
-  background: rgba(99, 102, 241, 0.1);
-  color: #818cf8;
-}
-
-.plan-tag.purple {
-  background: rgba(168, 85, 247, 0.1);
-  color: #c084fc;
-}
-
-.plan-tag.gray {
-  background: rgba(100, 116, 139, 0.1);
-  color: #94a3b8;
 }
 
 .logout-btn {

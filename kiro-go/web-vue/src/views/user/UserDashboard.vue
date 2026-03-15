@@ -40,11 +40,13 @@ const timeRemaining = computed(() => {
   const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
   if (diff <= 0) return { label: '已过期', unit: '' }
   const days = Math.floor(diff / 86400)
-  if (days >= 1) return { label: String(days), unit: '天' }
-  const hours = Math.floor(diff / 3600)
-  if (hours >= 1) return { label: String(hours), unit: '小时' }
-  const mins = Math.max(1, Math.ceil(diff / 60))
-  return { label: String(mins), unit: '分钟' }
+  const hours = Math.floor((diff % 86400) / 3600)
+  const mins = Math.max(1, Math.ceil((diff % 3600) / 60))
+  let text = ''
+  if (days > 0) text += `${days}天`
+  if (hours > 0) text += `${hours}小时`
+  if (days === 0 && mins > 0) text += `${mins}分钟`
+  return { label: text || '1分钟', unit: '' }
 })
 
 const expiryDate = computed(() => {
