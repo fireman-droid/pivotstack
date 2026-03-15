@@ -25,7 +25,7 @@ const planLabel = computed(() => {
 
 function handleLogout() {
   auth.logout()
-  router.replace('/user/login')
+  router.replace('/login')
 }
 
 onMounted(() => {
@@ -55,9 +55,7 @@ onMounted(() => {
           {{ balanceDisplay }}
         </div>
         <div class="plan-tag">{{ planLabel }}</div>
-        <button class="logout-btn" @click="handleLogout" title="退出登录">
-          ↩
-        </button>
+        <button class="logout-btn" @click="handleLogout" title="退出登录">退出</button>
       </div>
     </header>
 
