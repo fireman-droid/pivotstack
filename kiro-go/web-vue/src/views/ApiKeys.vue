@@ -1,12 +1,11 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { formatNum } from '../utils/format'
 import {
   Plus, Trash2, Copy, Eye, EyeOff, Key,
-  Clock, ToggleLeft, ToggleRight, Pencil, Search,
-  Activity, FileText, ChevronDown, X, Check, Ban
+  ToggleLeft, ToggleRight, Pencil, Search,
+  ChevronDown, X, Check, Save, Clock, Wallet
 } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
@@ -17,10 +16,9 @@ const showCreate = ref(false)
 const showKeyId = ref(null)
 const expandedId = ref(null)
 const searchQuery = ref('')
-const keyLogs = ref({})
-const keyLogsLoading = ref({})
+const editingId = ref(null)
+const editForm = reactive({ note: '', balance: 0, expiresAt: 0 })
 
-// Create form
 const form = ref({ note: '' })
 
 async function loadKeys() {
@@ -60,7 +58,7 @@ async function toggleKey(k) {
 }
 
 async function deleteKey(k) {
-  if (!confirm(`确认删除 Key "${k.note || k.id.slice(0, 8)}"？`)) return
+  if (!confirm(`确认删除 Key "${k.note || k.id.slice(0, 8)}"？此操作不可撤销。`)) return
   try {
     await api(`/apikeys/${k.id}`, { method: 'DELETE' })
     keys.value = keys.value.filter(x => x.id !== k.id)
@@ -68,28 +66,39 @@ async function deleteKey(k) {
   } catch { toastError('删除失败') }
 }
 
+function startEdit(k) {
+  editingId.value = k.id
+  editForm.note = k.note || ''
+  editForm.balance = k.balance || 0
+  editForm.expiresAt = k.expiresAt || 0
+}
 
+function cancelEdit() {
+  editingId.value = null
+}
 
-async function loadKeyLogs(keyId) {
-  if (keyLogs.value[keyId]) return
-  keyLogsLoading.value[keyId] = true
+async function saveEdit(k) {
   try {
-    const res = await api(`/apikeys/${keyId}/logs`)
-    if (res.ok) {
-      const d = await res.json()
-      keyLogs.value[keyId] = d.logs || []
+    const body = {
+      note: editForm.note,
+      balance: Number(editForm.balance),
+      expiresAt: Number(editForm.expiresAt),
     }
-  } catch {}
-  keyLogsLoading.value[keyId] = false
+    const res = await api(`/apikeys/${k.id}`, {
+      method: 'PUT', body: JSON.stringify(body)
+    })
+    if (res.ok) {
+      k.note = editForm.note
+      k.balance = body.balance
+      k.expiresAt = body.expiresAt
+      editingId.value = null
+      success('已保存')
+    }
+  } catch { toastError('保存失败') }
 }
 
 function toggleExpand(k) {
-  if (expandedId.value === k.id) {
-    expandedId.value = null
-  } else {
-    expandedId.value = k.id
-    loadKeyLogs(k.id)
-  }
+  expandedId.value = expandedId.value === k.id ? null : k.id
 }
 
 function copyText(text) {
@@ -104,15 +113,44 @@ function maskKey(key) {
 
 function formatDate(ts) {
   if (!ts) return '-'
-  return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return new Date(ts * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function expiryStatus(k) {
-  if (!k.expiresAt) return { text: '永不过期', color: 'emerald' }
-  const diff = k.expiresAt - Date.now() / 1000
-  if (diff <= 0) return { text: '已过期', color: 'rose' }
-  if (diff < 86400) return { text: Math.floor(diff / 3600) + 'h', color: 'amber' }
-  return { text: Math.floor(diff / 86400) + '天', color: 'sky' }
+function timeRemaining(expiresAt) {
+  if (!expiresAt) return { text: '永不过期', class: 'ok' }
+  const diff = expiresAt - Date.now() / 1000
+  if (diff <= 0) return { text: '已过期', class: 'danger' }
+  const days = Math.floor(diff / 86400)
+  if (days >= 1) return { text: `${days}天`, class: days < 3 ? 'warning' : 'ok' }
+  const hours = Math.floor(diff / 3600)
+  if (hours >= 1) return { text: `${hours}小时`, class: 'warning' }
+  const mins = Math.max(1, Math.ceil(diff / 60))
+  return { text: `${mins}分钟`, class: 'danger' }
+}
+
+function subscriptionInfo(k) {
+  const parts = []
+  if (k.expiresAt) {
+    const tr = timeRemaining(k.expiresAt)
+    parts.push({ label: '剩余', value: tr.text, class: tr.class })
+  }
+  if (k.balance !== undefined && k.balance !== null) {
+    const cls = k.balance < 1 ? 'danger' : 'ok'
+    parts.push({ label: '余额', value: `¥${k.balance.toFixed(2)}`, class: cls })
+  }
+  return parts
+}
+
+// 编辑 expiresAt 辅助
+function expiresAtDisplay(ts) {
+  if (!ts) return '未设置'
+  return new Date(ts * 1000).toLocaleString('zh-CN')
+}
+
+function addTime(amount) {
+  const now = Math.floor(Date.now() / 1000)
+  const base = editForm.expiresAt > now ? editForm.expiresAt : now
+  editForm.expiresAt = base + amount
 }
 
 const filteredKeys = computed(() => {
@@ -125,56 +163,24 @@ const filteredKeys = computed(() => {
   )
 })
 
-const stats = computed(() => {
-  const all = keys.value
-  return {
-    total: all.length,
-    active: all.filter(k => k.enabled).length,
-    timed: all.filter(k => k.plan === 'timed').length,
-    credit: all.filter(k => k.plan === 'credit' || k.plan === 'hybrid').length,
-    totalReqs: all.reduce((s, k) => s + (k.requests || 0), 0),
-    totalCredits: all.reduce((s, k) => s + (k.credits || 0), 0),
-  }
-})
-
 onMounted(loadKeys)
 </script>
 
 <template>
-  <div class="space-y-6 max-w-[1600px] mx-auto pb-20">
+  <div class="space-y-5 max-w-[1400px] mx-auto pb-20">
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div class="space-y-1">
         <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">API Key 管理</h1>
         <p class="text-sm text-[var(--text-secondary)] font-medium flex items-center gap-2">
           <Key class="w-3.5 h-3.5 text-[var(--primary)]" />
-          商业密钥发放 · 共 {{ stats.total }} 个 · {{ stats.active }} 个活跃
+          共 {{ keys.length }} 个 · {{ keys.filter(k => k.enabled).length }} 个活跃
         </p>
       </div>
       <button @click="showCreate = true"
         class="flex items-center gap-2 px-5 py-2.5 bg-[var(--primary)] text-white rounded-xl text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">
         <Plus class="w-4 h-4" /> 创建 Key
       </button>
-    </div>
-
-    <!-- Stats Row -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">时间制</div>
-        <div class="text-xl font-black text-sky-500">{{ stats.timed }}</div>
-      </div>
-      <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">计量制</div>
-        <div class="text-xl font-black text-emerald-500">{{ stats.credit }}</div>
-      </div>
-      <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">总请求</div>
-        <div class="text-xl font-black text-[var(--text)]">{{ formatNum(stats.totalReqs) }}</div>
-      </div>
-      <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">总 Credits</div>
-        <div class="text-xl font-black text-emerald-500">{{ stats.totalCredits.toFixed(1) }}</div>
-      </div>
     </div>
 
     <!-- Search -->
@@ -197,9 +203,8 @@ onMounted(loadKeys)
             <p class="text-xs text-[var(--text-secondary)] leading-relaxed">
               创建后需通过兑换激活码来充值时间或余额，才能开始使用。
             </p>
-            <!-- Note -->
             <div class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注</label>
+              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注（用户名）</label>
               <input v-model="form.note" placeholder="用户名 / 用途说明"
                 class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
             </div>
@@ -229,14 +234,6 @@ onMounted(loadKeys)
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-sm font-bold text-[var(--text)] truncate">{{ k.note || 'Unnamed Key' }}</span>
-              <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
-                :class="{ 'bg-sky-500/10 text-sky-400': k.plan === 'timed', 'bg-emerald-500/10 text-emerald-400': k.plan === 'credit', 'bg-purple-500/10 text-purple-400': k.plan === 'hybrid' }">
-                {{ k.plan === 'timed' ? '时间制' : k.plan === 'credit' ? '计量制' : k.plan === 'hybrid' ? '混合制' : k.plan }}
-              </span>
-              <span v-if="k.plan !== 'timed' && k.balance !== undefined" class="px-1.5 py-0.5 rounded text-[9px] font-bold"
-                :class="k.balance < 1 ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'">
-                ¥{{ (k.balance || 0).toFixed(2) }}
-              </span>
               <span v-if="!k.enabled" class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[9px] font-bold">禁用</span>
             </div>
             <div class="flex items-center gap-3 text-[10px] text-[var(--text-secondary)]">
@@ -251,20 +248,19 @@ onMounted(loadKeys)
             </div>
           </div>
 
-          <!-- Stats -->
-          <div class="hidden md:flex items-center gap-6 text-xs shrink-0">
-            <div class="text-center">
-              <div class="font-bold text-[var(--text)]">{{ formatNum(k.requests || 0) }}</div>
-              <div class="text-[9px] text-[var(--text-secondary)]">请求</div>
-            </div>
-            <div class="text-center">
-              <div class="font-bold text-[var(--text)]">{{ formatNum(k.tokens || 0) }}</div>
-              <div class="text-[9px] text-[var(--text-secondary)]">Token</div>
-            </div>
-            <div class="text-center">
-              <div class="font-bold" :class="`text-${expiryStatus(k).color}-500`">{{ expiryStatus(k).text }}</div>
-              <div class="text-[9px] text-[var(--text-secondary)]">到期</div>
-            </div>
+          <!-- Subscription Info -->
+          <div class="hidden md:flex items-center gap-4 shrink-0">
+            <template v-for="(item, idx) in subscriptionInfo(k)" :key="idx">
+              <div class="text-center min-w-[60px]">
+                <div class="text-xs font-bold"
+                  :class="{
+                    'text-emerald-500': item.class === 'ok',
+                    'text-amber-500': item.class === 'warning',
+                    'text-rose-500': item.class === 'danger'
+                  }">{{ item.value }}</div>
+                <div class="text-[9px] text-[var(--text-secondary)]">{{ item.label }}</div>
+              </div>
+            </template>
           </div>
 
           <!-- Actions -->
@@ -273,70 +269,94 @@ onMounted(loadKeys)
               <ToggleRight v-if="k.enabled" class="w-4 h-4 text-emerald-500" />
               <ToggleLeft v-else class="w-4 h-4 text-[var(--text-secondary)]" />
             </button>
-            <button @click.stop="deleteKey(k)" class="p-2 rounded-lg hover:bg-rose-500/10 transition-colors">
+            <button @click.stop="startEdit(k); expandedId = k.id" class="p-2 rounded-lg hover:bg-[var(--bg)] transition-colors" title="编辑">
+              <Pencil class="w-4 h-4 text-[var(--text-secondary)]" />
+            </button>
+            <button @click.stop="deleteKey(k)" class="p-2 rounded-lg hover:bg-rose-500/10 transition-colors" title="删除">
               <Trash2 class="w-4 h-4 text-rose-500" />
             </button>
             <ChevronDown class="w-4 h-4 text-[var(--text-secondary)] transition-transform" :class="{ 'rotate-180': expandedId === k.id }" />
           </div>
         </div>
 
-        <!-- Expanded Detail -->
+        <!-- Expanded Detail / Edit -->
         <div v-if="expandedId === k.id" class="border-t border-[var(--border)]">
-          <!-- Quick Stats -->
-          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 p-5 bg-[var(--bg)]/50">
-            <div class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求数</div>
-              <div class="text-sm font-black">{{ (k.requests || 0).toLocaleString() }}</div>
-            </div>
-            <div class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">错误数</div>
-              <div class="text-sm font-black text-rose-500">{{ (k.errors || 0).toLocaleString() }}</div>
-            </div>
-            <div class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Token</div>
-              <div class="text-sm font-black">{{ formatNum(k.tokens || 0) }}</div>
-            </div>
-            <div class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Credits</div>
-              <div class="text-sm font-black text-emerald-500">{{ (k.credits || 0).toFixed(2) }}</div>
-            </div>
-            <div v-if="k.plan !== 'timed'" class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">余额</div>
-              <div class="text-sm font-black" :class="k.balance < 1 ? 'text-rose-500' : 'text-emerald-500'">¥{{ (k.balance || 0).toFixed(2) }}</div>
-            </div>
-            <div class="p-3 bg-[var(--card)] rounded-xl">
-              <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">创建时间</div>
-              <div class="text-sm font-black">{{ formatDate(k.createdAt) }}</div>
-            </div>
-          </div>
-
-          <!-- Model Usage -->
-          <div v-if="k.models && Object.keys(k.models).length" class="px-5 py-3 border-t border-[var(--border)]">
-            <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-2">模型使用分布</div>
-            <div class="flex flex-wrap gap-2">
-              <span v-for="(count, model) in k.models" :key="model"
-                class="px-2 py-1 bg-[var(--bg)] rounded-lg text-[10px] font-bold">
-                {{ model }} <span class="text-[var(--primary)]">{{ count }}</span>
-              </span>
-            </div>
-          </div>
-
-
-          <!-- Recent Logs -->
-          <div class="px-5 py-3 border-t border-[var(--border)]">
-            <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-2">最近调用</div>
-            <div v-if="keyLogsLoading[k.id]" class="text-xs text-[var(--text-secondary)] py-2">加载中...</div>
-            <div v-else-if="!keyLogs[k.id]?.length" class="text-xs text-[var(--text-secondary)] py-2">暂无记录</div>
-            <div v-else class="space-y-1 max-h-48 overflow-y-auto">
-              <div v-for="(log, li) in keyLogs[k.id].slice(0, 20)" :key="li"
-                class="flex items-center gap-3 py-1.5 text-[10px]">
-                <span class="font-mono text-[var(--text-secondary)] w-24 shrink-0">{{ log.time }}</span>
-                <span :class="log.status === 'error' ? 'text-rose-500' : 'text-emerald-500'" class="w-8 font-bold shrink-0">
-                  {{ log.status === 'error' ? '失败' : '成功' }}
-                </span>
-                <span class="font-bold text-[var(--primary)] truncate">{{ log.actual_model }}</span>
-                <span class="ml-auto text-[var(--text-secondary)] shrink-0">{{ (log.total_tokens || 0).toLocaleString() }} tok</span>
+          <!-- Edit Mode -->
+          <div v-if="editingId === k.id" class="p-5 space-y-4 bg-[var(--bg)]/50">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-[var(--primary)]">✏️ 编辑信息</span>
+              <div class="flex gap-2">
+                <button @click="cancelEdit" class="px-3 py-1.5 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text)] rounded-lg hover:bg-[var(--card)]">取消</button>
+                <button @click="saveEdit(k)" class="px-3 py-1.5 text-xs font-bold text-white bg-[var(--primary)] rounded-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-1">
+                  <Save class="w-3 h-3" /> 保存
+                </button>
               </div>
+            </div>
+
+            <!-- Note -->
+            <div class="space-y-1">
+              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注</label>
+              <input v-model="editForm.note" class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
+            </div>
+
+            <!-- Balance -->
+            <div class="space-y-1">
+              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">余额 (¥)</label>
+              <input v-model.number="editForm.balance" type="number" step="0.01"
+                class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
+            </div>
+
+            <!-- ExpiresAt -->
+            <div class="space-y-2">
+              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">到期时间</label>
+              <div class="text-xs text-[var(--text-secondary)] mb-1">
+                当前：{{ editForm.expiresAt ? expiresAtDisplay(editForm.expiresAt) : '未设置（永不过期）' }}
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button @click="addTime(3600)" class="time-btn">+1小时</button>
+                <button @click="addTime(86400)" class="time-btn">+1天</button>
+                <button @click="addTime(3 * 86400)" class="time-btn">+3天</button>
+                <button @click="addTime(7 * 86400)" class="time-btn">+7天</button>
+                <button @click="addTime(30 * 86400)" class="time-btn">+30天</button>
+                <button @click="editForm.expiresAt = 0" class="time-btn danger">清除（永不过期）</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- View Mode -->
+          <div v-else class="p-5 bg-[var(--bg)]/50">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div class="info-cell">
+                <div class="info-label">余额</div>
+                <div class="info-value" :class="(k.balance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
+                  ¥{{ (k.balance || 0).toFixed(2) }}
+                </div>
+              </div>
+              <div class="info-cell">
+                <div class="info-label">到期时间</div>
+                <div class="info-value" :class="{
+                  'text-emerald-500': timeRemaining(k.expiresAt).class === 'ok',
+                  'text-amber-500': timeRemaining(k.expiresAt).class === 'warning',
+                  'text-rose-500': timeRemaining(k.expiresAt).class === 'danger'
+                }">
+                  {{ timeRemaining(k.expiresAt).text }}
+                </div>
+                <div v-if="k.expiresAt" class="text-[9px] text-[var(--text-secondary)] mt-0.5">{{ formatDate(k.expiresAt) }}</div>
+              </div>
+              <div class="info-cell">
+                <div class="info-label">创建时间</div>
+                <div class="info-value">{{ formatDate(k.createdAt) }}</div>
+              </div>
+              <div class="info-cell">
+                <div class="info-label">最后使用</div>
+                <div class="info-value">{{ k.lastUsed ? formatDate(k.lastUsed) : '从未' }}</div>
+              </div>
+            </div>
+
+            <div class="mt-3 flex gap-2">
+              <button @click.stop="startEdit(k)" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[var(--primary)] bg-[var(--primary)]/10 rounded-lg hover:bg-[var(--primary)]/20 transition-colors">
+                <Pencil class="w-3 h-3" /> 编辑
+              </button>
             </div>
           </div>
         </div>
@@ -351,3 +371,47 @@ onMounted(loadKeys)
     </div>
   </div>
 </template>
+
+<style scoped>
+.time-btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.time-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+}
+.time-btn.danger {
+  color: #ef4444;
+}
+.time-btn.danger:hover {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.info-cell {
+  padding: 0.75rem;
+  background: var(--card);
+  border-radius: 10px;
+}
+.info-label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+.info-value {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+</style>
