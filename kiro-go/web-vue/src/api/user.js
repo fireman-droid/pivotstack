@@ -2,7 +2,7 @@ const BASE = '/user/api'
 
 export async function userApi(path, opts = {}) {
   const { method = 'GET', body } = opts
-  const apiKey = localStorage.getItem('user_api_key') || ''
+  const apiKey = localStorage.getItem('user_api_key') || sessionStorage.getItem('user_api_key') || ''
   const headers = { 'Authorization': `Bearer ${apiKey}` }
   if (body) headers['Content-Type'] = 'application/json'
   const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined })
