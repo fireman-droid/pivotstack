@@ -260,12 +260,8 @@ func (h *Handler) refreshAllAccounts() {
 }
 
 // resolveApiKey resolves the API key from the request and returns a UserContext.
-// Returns (nil, nil) when API key validation is disabled.
+// When API key validation is disabled, still tries to extract KeyID for log association.
 func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
-	if !config.IsApiKeyRequired() {
-		return &UserContext{KeyTier: "pro"}, nil
-	}
-
 	authHeader := r.Header.Get("Authorization")
 	apiKeyHeader := r.Header.Get("X-Api-Key")
 
@@ -274,6 +270,18 @@ func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 		providedKey = strings.TrimPrefix(authHeader, "Bearer ")
 	} else if apiKeyHeader != "" {
 		providedKey = apiKeyHeader
+	}
+
+	if !config.IsApiKeyRequired() {
+		// API key validation disabled, but still try to associate logs with user
+		uc := &UserContext{KeyTier: "pro"}
+		if providedKey != "" {
+			if info := config.FindApiKey(providedKey); info != nil {
+				uc.KeyID = info.ID
+				uc.KeyTier = info.Tier
+			}
+		}
+		return uc, nil
 	}
 
 	if providedKey == "" {
