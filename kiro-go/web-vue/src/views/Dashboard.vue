@@ -143,7 +143,7 @@ let sseSource = null
 let pollTimer = null
 
 function connectStatsSSE() {
-  const password = document.cookie.match(/admin_password=([^;]+)/)?.[1] || ''
+  const password = localStorage.getItem('admin_password') || ''
   const url = `${location.origin}/admin/api/sse/stats?password=${encodeURIComponent(password)}`
   sseSource = new EventSource(url)
   
@@ -155,13 +155,13 @@ function connectStatsSSE() {
   })
   
   sseSource.onerror = () => {
-    // SSE 断开，回退到 HTTP 轮询
     sseSource.close()
     sseSource = null
+    // 立即加载一次，不等 5 秒
+    loadStats()
     if (!pollTimer) {
       pollTimer = setInterval(loadStats, 5000)
     }
-    // 5 秒后尝试重连 SSE
     setTimeout(() => {
       if (!sseSource) {
         if (pollTimer) {
