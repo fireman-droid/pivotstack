@@ -14,8 +14,8 @@ const routes = [
   { path: '/codes', name: 'CodeManagement', component: () => import('../views/CodeManagement.vue'), meta: { auth: true } },
   { path: '/abuse', name: 'AbuseMonitor', component: () => import('../views/AbuseMonitor.vue'), meta: { auth: true } },
 
-  // User portal routes
-  { path: '/user/login', name: 'UserLogin', component: () => import('../views/user/UserLogin.vue') },
+
+  // User portal routes (auth via API key)
   {
     path: '/user',
     component: () => import('../views/user/UserLayout.vue'),
