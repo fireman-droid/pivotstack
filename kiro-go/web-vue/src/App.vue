@@ -1,19 +1,23 @@
 <script setup>
 import { RouterView, useRoute } from 'vue-router'
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppLayout from './components/AppLayout.vue'
 import Toast from './components/ui/Toast.vue'
 import WorldTransition from './components/WorldTransition.vue'
 import { useWorldTheme } from './stores/worldTheme'
 
 const route = useRoute()
+const router = useRouter()
 const theme = useWorldTheme()
+const ready = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
   document.documentElement.setAttribute('data-world', theme.currentWorld)
+  await router.isReady()
+  ready.value = true
 })
 
-// 管理端页面需要 AppLayout 包裹（排除 login 和 user 页面）
 const needsAdminLayout = computed(() => {
   const path = route.path
   return path !== '/login' && !path.startsWith('/user')
@@ -46,12 +50,13 @@ const needsAdminLayout = computed(() => {
 
     <WorldTransition :currentWorld="theme.currentWorld" />
 
-    <!-- 管理端页面用 AppLayout 包裹 -->
-    <AppLayout v-if="needsAdminLayout">
-      <RouterView />
-    </AppLayout>
-    <!-- 登录页 / 用户端页面 直接渲染 -->
-    <RouterView v-else />
+    <!-- 等 Router 就绪后再渲染，防止闪烁 -->
+    <template v-if="ready">
+      <AppLayout v-if="needsAdminLayout">
+        <RouterView />
+      </AppLayout>
+      <RouterView v-else />
+    </template>
 
     <Toast />
   </div>
