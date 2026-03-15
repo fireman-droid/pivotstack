@@ -1,17 +1,78 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { Plus, Trash2, Copy, Gift, Clock, Download } from 'lucide-vue-next'
+import { Plus, Trash2, Copy, Gift, Clock, Download, Search, Filter, CheckSquare, Square, RefreshCw, X } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
 const codes = ref([])
 const loading = ref(true)
 const generating = ref(false)
+const showCreatePanel = ref(false)
 
+// ===== 搜索 & 筛选 =====
+const searchQuery = ref('')
+const filterType = ref('all') // all | balance | time | days
+const filterStatus = ref('all') // all | unused | used
+
+const filteredCodes = computed(() => {
+  let list = codes.value
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase()
+    list = list.filter(c =>
+      c.code.toLowerCase().includes(q) ||
+      (c.note && c.note.toLowerCase().includes(q)) ||
+      (c.usedBy && c.usedBy.toLowerCase().includes(q))
+    )
+  }
+  if (filterType.value !== 'all') {
+    if (filterType.value === 'time') {
+      list = list.filter(c => c.type === 'time' || c.type === 'days')
+    } else {
+      list = list.filter(c => c.type === filterType.value)
+    }
+  }
+  if (filterStatus.value === 'unused') list = list.filter(c => !c.usedBy)
+  if (filterStatus.value === 'used') list = list.filter(c => c.usedBy)
+  return list
+})
+
+// ===== 分页 =====
+const pageSize = ref(20)
+const currentPage = ref(1)
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredCodes.value.length / pageSize.value)))
+const pagedCodes = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredCodes.value.slice(start, start + pageSize.value)
+})
+watch([searchQuery, filterType, filterStatus], () => { currentPage.value = 1 })
+
+// ===== 批量选择 =====
+const selectedCodes = ref(new Set())
+const isAllSelected = computed(() =>
+  pagedCodes.value.length > 0 && pagedCodes.value.every(c => selectedCodes.value.has(c.code))
+)
+
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    pagedCodes.value.forEach(c => selectedCodes.value.delete(c.code))
+  } else {
+    pagedCodes.value.forEach(c => selectedCodes.value.add(c.code))
+  }
+}
+
+function toggleSelect(code) {
+  if (selectedCodes.value.has(code)) {
+    selectedCodes.value.delete(code)
+  } else {
+    selectedCodes.value.add(code)
+  }
+}
+
+// ===== 创建表单 =====
 const form = ref({
   type: 'balance',
-  amount: 10,        // for balance: ¥, for time: seconds (from preset)
+  amount: 10,
   customTime: { days: 0, hours: 0, minutes: 0 },
   useCustomTime: false,
   customBalance: '',
@@ -39,14 +100,12 @@ const customTimeSeconds = computed(() => {
 function switchType(type) {
   form.value.type = type
   form.value.useCustomTime = false
-  if (type === 'balance') {
-    form.value.amount = 10
-  } else {
-    form.value.amount = 86400 // default 1 day
-  }
+  form.value.amount = type === 'balance' ? 10 : 86400
 }
 
+// ===== API 操作 =====
 async function loadCodes() {
+  loading.value = true
   try {
     const res = await api('/codes')
     if (res.ok) codes.value = await res.json()
@@ -61,11 +120,7 @@ async function generateCodes() {
   } else {
     amount = form.value.useCustomTime ? customTimeSeconds.value : form.value.amount
   }
-
-  if (!amount || amount <= 0) {
-    toastError('请设置有效的数值')
-    return
-  }
+  if (!amount || amount <= 0) return toastError('请设置有效的数值')
 
   generating.value = true
   try {
@@ -73,15 +128,16 @@ async function generateCodes() {
       method: 'POST',
       body: JSON.stringify({
         type: form.value.type,
-        amount: amount,
-        tier: form.value.type === 'days' ? form.value.tier : undefined,
+        amount,
+        tier: form.value.type === 'time' ? form.value.tier : undefined,
         count: form.value.count,
         note: form.value.note
       })
     })
     if (res.ok) {
       const data = await res.json()
-      success(`生成 ${data.count} 个激活码`)
+      success(`✅ 成功生成 ${data.count} 个激活码`)
+      showCreatePanel.value = false
       loadCodes()
     }
   } catch { toastError('生成失败') }
@@ -89,12 +145,33 @@ async function generateCodes() {
 }
 
 async function deleteCode(code) {
-  if (!confirm(`确认作废激活码 ${code}？`)) return
   try {
     await api(`/codes/${code}`, { method: 'DELETE' })
     codes.value = codes.value.filter(c => c.code !== code)
+    selectedCodes.value.delete(code)
     success('已作废')
   } catch { toastError('操作失败') }
+}
+
+async function batchDelete() {
+  const selected = [...selectedCodes.value]
+  const unusedSelected = selected.filter(code => {
+    const c = codes.value.find(x => x.code === code)
+    return c && !c.usedBy
+  })
+  if (!unusedSelected.length) return toastError('没有可作废的未使用激活码')
+  if (!confirm(`确认批量作废 ${unusedSelected.length} 个激活码？`)) return
+
+  let ok = 0, fail = 0
+  for (const code of unusedSelected) {
+    try {
+      await api(`/codes/${code}`, { method: 'DELETE' })
+      codes.value = codes.value.filter(c => c.code !== code)
+      selectedCodes.value.delete(code)
+      ok++
+    } catch { fail++ }
+  }
+  success(`已作废 ${ok} 个${fail > 0 ? `，${fail} 个失败` : ''}`)
 }
 
 function copyCode(code) {
@@ -102,22 +179,36 @@ function copyCode(code) {
   success('已复制')
 }
 
+function copySelected() {
+  const list = [...selectedCodes.value].join('\n')
+  if (!list) return toastError('未选择任何激活码')
+  navigator.clipboard?.writeText(list)
+  success(`已复制 ${selectedCodes.value.size} 个激活码`)
+}
+
 function copyAllUnused() {
-  const unused = codes.value.filter(c => !c.usedBy).map(c => c.code).join('\n')
-  if (!unused) return toastError('没有可复制的未使用激活码')
+  const unused = filteredCodes.value.filter(c => !c.usedBy).map(c => c.code).join('\n')
+  if (!unused) return toastError('没有未使用激活码')
   navigator.clipboard?.writeText(unused)
   success(`已复制 ${unused.split('\n').length} 个激活码`)
 }
 
+// ===== 统计 =====
 const stats = computed(() => ({
   total: codes.value.length,
   unused: codes.value.filter(c => !c.usedBy).length,
   used: codes.value.filter(c => c.usedBy).length,
+  balanceCodes: codes.value.filter(c => c.type === 'balance' && !c.usedBy).length,
+  timeCodes: codes.value.filter(c => (c.type === 'time' || c.type === 'days') && !c.usedBy).length,
 }))
 
+// ===== 格式化 =====
 function fmtDate(ts) {
   if (!ts) return '-'
-  return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return new Date(ts * 1000).toLocaleDateString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  })
 }
 
 function fmtDuration(seconds) {
@@ -127,204 +218,381 @@ function fmtDuration(seconds) {
   const m = Math.floor((seconds % 3600) / 60)
   const parts = []
   if (d) parts.push(`${d}天`)
-  if (h) parts.push(`${h}小时`)
-  if (m) parts.push(`${m}分钟`)
-  return parts.join('') || '0分钟'
+  if (h) parts.push(`${h}时`)
+  if (m) parts.push(`${m}分`)
+  return parts.join('') || '0分'
+}
+
+function fmtAmount(c) {
+  if (c.type === 'balance') return `¥${c.amount}`
+  return fmtDuration(c.amount)
 }
 
 function exportCSV() {
-  const rows = [['激活码','类型','面值','状态','使用方','创建时间']]
-  codes.value.forEach(c => {
-    const val = c.type === 'balance' ? '¥' + c.amount : fmtDuration(c.amount)
-    rows.push([c.code, c.type, val, c.usedBy ? '已使用' : '未使用', c.usedBy || '-', fmtDate(c.createdAt)])
+  const rows = [['激活码','类型','面值','等级','状态','使用方','备注','创建时间']]
+  filteredCodes.value.forEach(c => {
+    rows.push([
+      c.code, c.type === 'balance' ? '余额' : '时间',
+      fmtAmount(c), c.tier || '-',
+      c.usedBy ? '已使用' : '未使用', c.usedBy || '-',
+      c.note || '-', fmtDate(c.createdAt)
+    ])
   })
   const csv = rows.map(r => r.join(',')).join('\n')
   const a = document.createElement('a')
   a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv)
-  a.download = 'activation_codes.csv'
+  a.download = `activation_codes_${new Date().toISOString().slice(0,10)}.csv`
   a.click()
+  success('已导出 CSV')
 }
 
 onMounted(loadCodes)
 </script>
 
 <template>
-  <div class="space-y-6 max-w-[1400px] mx-auto pb-20">
-    <div class="space-y-1">
-      <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">激活码管理</h1>
-      <p class="text-sm text-[var(--text-secondary)]">
-        共 {{ stats.total }} 个 · {{ stats.unused }} 未使用 · {{ stats.used }} 已使用
-      </p>
-    </div>
+  <div class="space-y-5 max-w-[1400px] mx-auto pb-20">
 
-    <!-- Generate Form -->
-    <div class="modern-card p-5 space-y-4">
-      <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">批量生成</div>
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-        <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">类型</label>
-          <div class="flex gap-2">
-            <button @click="switchType('balance')"
-              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-              :class="form.type === 'balance' ? 'bg-emerald-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              💰 余额
-            </button>
-            <button @click="switchType('days')"
-              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-              :class="form.type === 'days' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              ⏱️ 时间
-            </button>
-          </div>
+    <!-- 顶部标题 + 统计 -->
+    <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">激活码管理</h1>
+        <div class="flex items-center gap-4 mt-2 text-xs font-bold">
+          <span class="text-[var(--text-secondary)]">共 <span class="text-[var(--text)]">{{ stats.total }}</span> 个</span>
+          <span class="text-emerald-400">{{ stats.unused }} 可用</span>
+          <span class="text-[var(--text-secondary)]/60">{{ stats.used }} 已使用</span>
+          <span class="text-[var(--text-secondary)]/40">|</span>
+          <span class="text-emerald-400/80">💰{{ stats.balanceCodes }}</span>
+          <span class="text-sky-400/80">⏱️{{ stats.timeCodes }}</span>
         </div>
-
-        <!-- Balance presets -->
-        <div v-if="form.type === 'balance'" class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">面值 (¥)</label>
-          <div class="flex gap-1 flex-wrap">
-            <button v-for="v in balancePresets" :key="v" @click="form.amount = v; form.useCustomTime = false"
-              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
-              :class="form.amount === v && !form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              ¥{{ v }}
-            </button>
-            <button @click="form.amount = -1; form.useCustomTime = false"
-              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
-              :class="form.amount === -1 ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              自定义
-            </button>
-          </div>
-          <input v-if="form.amount === -1" v-model.number="form.customBalance" type="number" min="1" step="0.01"
-            placeholder="输入金额 (¥)"
-            class="w-full h-9 px-3 mt-1 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-        </div>
-
-        <!-- Time presets -->
-        <div v-else class="space-y-1 md:col-span-1">
-          <label class="text-xs text-[var(--text-secondary)]">时间值</label>
-          <div class="flex gap-1 flex-wrap">
-            <button v-for="p in timePresets" :key="p.seconds"
-              @click="form.amount = p.seconds; form.useCustomTime = false"
-              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
-              :class="form.amount === p.seconds && !form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              {{ p.label }}
-            </button>
-            <button @click="form.useCustomTime = true"
-              class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all"
-              :class="form.useCustomTime ? 'bg-[var(--primary)] text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              自定义
-            </button>
-          </div>
-          <!-- Custom time inputs -->
-          <div v-if="form.useCustomTime" class="flex gap-2 mt-1 items-center">
-            <div class="flex items-center gap-1">
-              <input v-model.number="form.customTime.days" type="number" min="0" step="1" placeholder="0"
-                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
-              <span class="text-[10px] text-[var(--text-secondary)]">天</span>
-            </div>
-            <div class="flex items-center gap-1">
-              <input v-model.number="form.customTime.hours" type="number" min="0" max="23" step="1" placeholder="0"
-                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
-              <span class="text-[10px] text-[var(--text-secondary)]">时</span>
-            </div>
-            <div class="flex items-center gap-1">
-              <input v-model.number="form.customTime.minutes" type="number" min="0" max="59" step="1" placeholder="0"
-                class="w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center" />
-              <span class="text-[10px] text-[var(--text-secondary)]">分</span>
-            </div>
-            <span v-if="customTimeSeconds > 0" class="text-[10px] text-emerald-400 font-bold">= {{ fmtDuration(customTimeSeconds) }}</span>
-          </div>
-        </div>
-
-        <!-- Tier (only for time) -->
-        <div v-if="form.type === 'days'" class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">等级</label>
-          <div class="flex gap-2">
-            <button @click="form.tier = 'free'"
-              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-              :class="form.tier === 'free' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              🔒 Free（仅 4.5）
-            </button>
-            <button @click="form.tier = 'pro'"
-              class="flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all text-center"
-              :class="form.tier === 'pro' ? 'bg-amber-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)]'">
-              👑 Pro（全模型）
-            </button>
-          </div>
-        </div>
-
-        <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">数量 / 备注</label>
-          <div class="flex gap-2">
-            <input v-model.number="form.count" type="number" min="1" max="100"
-              class="w-16 h-9 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-            <input v-model="form.note" placeholder="备注"
-              class="flex-1 h-9 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-          </div>
-        </div>
-        <button @click="generateCodes" :disabled="generating"
-          class="flex items-center justify-center gap-2 px-5 py-2.5 bg-[var(--primary)] text-white rounded-xl text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] transition-all">
-          <Plus class="w-4 h-4" />
-          {{ generating ? '生成中...' : '生成' }}
+      </div>
+      <div class="flex gap-2">
+        <button @click="loadCodes" class="toolbar-btn" title="刷新">
+          <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': loading }" />
+        </button>
+        <button @click="exportCSV" class="toolbar-btn" title="导出 CSV">
+          <Download class="w-3.5 h-3.5" /> 导出
+        </button>
+        <button @click="showCreatePanel = !showCreatePanel"
+          class="px-4 py-2 bg-[var(--primary)] text-white rounded-xl text-xs font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] transition-all flex items-center gap-1.5">
+          <Plus class="w-4 h-4" /> 创建激活码
         </button>
       </div>
     </div>
 
-    <!-- Actions -->
-    <div class="flex gap-2">
-      <button @click="copyAllUnused" class="px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold hover:border-[var(--primary)] transition-all">
-        📋 复制所有未使用码
-      </button>
-      <button @click="exportCSV" class="flex items-center gap-1.5 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold hover:border-[var(--primary)] transition-all">
-        <Download class="w-3.5 h-3.5" /> 导出 CSV
-      </button>
+    <!-- 创建面板（折叠） -->
+    <Transition name="slide">
+      <div v-if="showCreatePanel" class="modern-card p-6 space-y-5 border-l-4 border-l-[var(--primary)]">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-bold text-[var(--text)]">创建新激活码</div>
+          <button @click="showCreatePanel = false" class="p-1 rounded-lg hover:bg-[var(--bg)] transition-colors">
+            <X class="w-4 h-4 text-[var(--text-secondary)]" />
+          </button>
+        </div>
+
+        <!-- 步骤式表单 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+
+          <!-- 1. 类型 -->
+          <div class="space-y-2">
+            <label class="form-label">① 类型</label>
+            <div class="flex gap-2">
+              <button @click="switchType('balance')"
+                class="type-btn" :class="form.type === 'balance' ? 'type-btn-active-green' : ''">
+                💰 余额卡
+              </button>
+              <button @click="switchType('time')"
+                class="type-btn" :class="form.type === 'time' ? 'type-btn-active-blue' : ''">
+                ⏱️ 时间卡
+              </button>
+            </div>
+          </div>
+
+          <!-- 2. 面值/时长 -->
+          <div class="space-y-2">
+            <label class="form-label">② {{ form.type === 'balance' ? '面值' : '时长' }}</label>
+
+            <!-- 余额预设 -->
+            <template v-if="form.type === 'balance'">
+              <div class="flex gap-1.5 flex-wrap">
+                <button v-for="v in balancePresets" :key="v" @click="form.amount = v"
+                  class="preset-btn" :class="form.amount === v ? 'preset-btn-active' : ''">
+                  ¥{{ v }}
+                </button>
+                <button @click="form.amount = -1" class="preset-btn" :class="form.amount === -1 ? 'preset-btn-active' : ''">
+                  自定义
+                </button>
+              </div>
+              <input v-if="form.amount === -1" v-model.number="form.customBalance" type="number" min="0.01" step="0.01"
+                placeholder="输入金额" class="form-input" />
+            </template>
+
+            <!-- 时间预设 -->
+            <template v-else>
+              <div class="flex gap-1.5 flex-wrap">
+                <button v-for="p in timePresets" :key="p.seconds"
+                  @click="form.amount = p.seconds; form.useCustomTime = false"
+                  class="preset-btn" :class="form.amount === p.seconds && !form.useCustomTime ? 'preset-btn-active' : ''">
+                  {{ p.label }}
+                </button>
+                <button @click="form.useCustomTime = true"
+                  class="preset-btn" :class="form.useCustomTime ? 'preset-btn-active' : ''">
+                  自定义
+                </button>
+              </div>
+              <div v-if="form.useCustomTime" class="flex gap-2 items-center">
+                <div class="flex items-center gap-1">
+                  <input v-model.number="form.customTime.days" type="number" min="0" class="form-input-mini" placeholder="0" />
+                  <span class="text-[10px] text-[var(--text-secondary)]">天</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <input v-model.number="form.customTime.hours" type="number" min="0" max="23" class="form-input-mini" placeholder="0" />
+                  <span class="text-[10px] text-[var(--text-secondary)]">时</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <input v-model.number="form.customTime.minutes" type="number" min="0" max="59" class="form-input-mini" placeholder="0" />
+                  <span class="text-[10px] text-[var(--text-secondary)]">分</span>
+                </div>
+                <span v-if="customTimeSeconds > 0" class="text-[10px] text-emerald-400 font-bold whitespace-nowrap">= {{ fmtDuration(customTimeSeconds) }}</span>
+              </div>
+            </template>
+          </div>
+
+          <!-- 3. 等级（仅时间卡） -->
+          <div class="space-y-2">
+            <label class="form-label">③ {{ form.type === 'time' ? '等级' : '数量 & 备注' }}</label>
+            <template v-if="form.type === 'time'">
+              <div class="flex gap-2">
+                <button @click="form.tier = 'free'" class="type-btn" :class="form.tier === 'free' ? 'type-btn-active-blue' : ''">
+                  🔒 Free
+                </button>
+                <button @click="form.tier = 'pro'" class="type-btn" :class="form.tier === 'pro' ? 'type-btn-active-amber' : ''">
+                  👑 Pro
+                </button>
+              </div>
+              <div class="text-[10px] text-[var(--text-secondary)] mt-1">
+                {{ form.tier === 'free' ? 'Free = 仅 Sonnet 4.5' : 'Pro = 全模型' }}
+              </div>
+            </template>
+            <template v-else>
+              <div class="flex gap-2">
+                <input v-model.number="form.count" type="number" min="1" max="100" placeholder="数量" class="form-input w-20" />
+                <input v-model="form.note" placeholder="备注（可选）" class="form-input flex-1" />
+              </div>
+            </template>
+          </div>
+
+          <!-- 4. 数量 & 生成 -->
+          <div class="space-y-2">
+            <label class="form-label">④ {{ form.type === 'time' ? '数量 & 生成' : '生成' }}</label>
+            <template v-if="form.type === 'time'">
+              <div class="flex gap-2">
+                <input v-model.number="form.count" type="number" min="1" max="100" placeholder="数量" class="form-input w-20" />
+                <input v-model="form.note" placeholder="备注" class="form-input flex-1" />
+              </div>
+            </template>
+            <button @click="generateCodes" :disabled="generating"
+              class="w-full h-10 rounded-xl bg-[var(--primary)] text-white text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.01] transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+              <Plus v-if="!generating" class="w-4 h-4" />
+              <RefreshCw v-else class="w-4 h-4 animate-spin" />
+              {{ generating ? '生成中...' : `生成 ${form.count} 个` }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 搜索 & 筛选 & 批量操作 -->
+    <div class="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+      <div class="flex gap-2 items-center flex-wrap">
+        <!-- 搜索 -->
+        <div class="relative">
+          <Search class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]" />
+          <input v-model="searchQuery" placeholder="搜索激活码 / 备注 / 使用方..."
+            class="h-9 pl-9 pr-3 w-60 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs outline-none focus:border-[var(--primary)] transition-colors" />
+        </div>
+        <!-- 类型筛选 -->
+        <div class="flex gap-1">
+          <button @click="filterType = 'all'" class="filter-btn" :class="filterType === 'all' ? 'filter-btn-active' : ''">全部</button>
+          <button @click="filterType = 'balance'" class="filter-btn" :class="filterType === 'balance' ? 'filter-btn-active' : ''">💰 余额</button>
+          <button @click="filterType = 'time'" class="filter-btn" :class="filterType === 'time' ? 'filter-btn-active' : ''">⏱️ 时间</button>
+        </div>
+        <!-- 状态筛选 -->
+        <div class="flex gap-1">
+          <button @click="filterStatus = 'all'" class="filter-btn" :class="filterStatus === 'all' ? 'filter-btn-active' : ''">全部</button>
+          <button @click="filterStatus = 'unused'" class="filter-btn" :class="filterStatus === 'unused' ? 'filter-btn-active' : ''">可用</button>
+          <button @click="filterStatus = 'used'" class="filter-btn" :class="filterStatus === 'used' ? 'filter-btn-active' : ''">已使用</button>
+        </div>
+      </div>
+
+      <!-- 批量操作 -->
+      <div v-if="selectedCodes.size > 0" class="flex gap-2 items-center">
+        <span class="text-xs font-bold text-[var(--primary)]">已选 {{ selectedCodes.size }} 项</span>
+        <button @click="copySelected" class="toolbar-btn">
+          <Copy class="w-3.5 h-3.5" /> 复制
+        </button>
+        <button @click="batchDelete" class="toolbar-btn text-rose-400 hover:bg-rose-500/10 border-rose-500/20">
+          <Trash2 class="w-3.5 h-3.5" /> 批量作废
+        </button>
+        <button @click="selectedCodes.clear()" class="toolbar-btn">
+          <X class="w-3.5 h-3.5" /> 取消
+        </button>
+      </div>
+      <div v-else class="flex gap-2">
+        <button @click="copyAllUnused" class="toolbar-btn">
+          <Copy class="w-3.5 h-3.5" /> 复制全部未使用
+        </button>
+      </div>
     </div>
 
-    <!-- Code List -->
+    <!-- 列表 -->
     <div class="modern-card overflow-hidden">
-      <div class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] border-b border-[var(--border)]">
+      <!-- 表头 -->
+      <div class="grid grid-cols-[32px_2fr_80px_100px_70px_100px_1fr_60px] gap-2 px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] border-b border-[var(--border)] bg-[var(--bg)]/30">
+        <div class="flex items-center justify-center cursor-pointer" @click="toggleSelectAll">
+          <CheckSquare v-if="isAllSelected" class="w-3.5 h-3.5 text-[var(--primary)]" />
+          <Square v-else class="w-3.5 h-3.5" />
+        </div>
         <span>激活码</span>
         <span>类型</span>
         <span>面值</span>
         <span>状态</span>
         <span>创建时间</span>
-        <span class="w-16">操作</span>
+        <span>备注</span>
+        <span class="text-right">操作</span>
       </div>
 
-      <div v-for="c in codes" :key="c.code"
-        class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 px-5 py-3 items-center text-sm border-b border-[var(--border)]/50 hover:bg-[var(--bg)]/50 transition-colors"
-        :class="{ 'opacity-50': c.usedBy }">
-        <div class="flex items-center gap-2">
-          <span class="font-mono font-bold text-[var(--primary)] text-xs">{{ c.code }}</span>
-          <button @click="copyCode(c.code)" class="p-1 hover:bg-[var(--bg)] rounded">
+      <!-- 数据行 -->
+      <div v-for="c in pagedCodes" :key="c.code"
+        class="grid grid-cols-[32px_2fr_80px_100px_70px_100px_1fr_60px] gap-2 px-4 py-2.5 items-center text-sm border-b border-[var(--border)]/30 hover:bg-[var(--bg)]/40 transition-colors cursor-pointer"
+        :class="{ 'opacity-40': c.usedBy, 'bg-[var(--primary)]/5': selectedCodes.has(c.code) }"
+        @click="toggleSelect(c.code)">
+
+        <div class="flex items-center justify-center">
+          <CheckSquare v-if="selectedCodes.has(c.code)" class="w-3.5 h-3.5 text-[var(--primary)]" />
+          <Square v-else class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+        </div>
+
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="font-mono font-bold text-[var(--primary)] text-xs truncate">{{ c.code }}</span>
+          <button @click.stop="copyCode(c.code)" class="p-0.5 hover:bg-[var(--bg)] rounded shrink-0">
             <Copy class="w-3 h-3 text-[var(--text-secondary)]" />
           </button>
         </div>
+
         <div class="flex items-center gap-1">
-          <Gift v-if="c.type === 'balance'" class="w-3 h-3 text-emerald-500" />
-          <Clock v-else class="w-3 h-3 text-sky-500" />
-          <span class="text-xs">{{ c.type === 'balance' ? '余额' : '时间' }}</span>
-          <span v-if="c.type === 'days' && c.tier" class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+          <Gift v-if="c.type === 'balance'" class="w-3 h-3 text-emerald-500 shrink-0" />
+          <Clock v-else class="w-3 h-3 text-sky-500 shrink-0" />
+          <span class="text-[11px]">{{ c.type === 'balance' ? '余额' : '时间' }}</span>
+          <span v-if="(c.type === 'days' || c.type === 'time') && c.tier" class="px-1 py-0.5 rounded text-[8px] font-bold uppercase"
             :class="c.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
             {{ c.tier }}
           </span>
         </div>
-        <span class="text-xs font-bold">
-          {{ c.type === 'balance' ? '¥' + c.amount : fmtDuration(c.amount) }}
-        </span>
+
+        <span class="text-xs font-bold">{{ fmtAmount(c) }}</span>
+
         <span class="text-xs">
-          <span v-if="c.usedBy" class="px-2 py-0.5 rounded bg-[var(--text-secondary)]/10 text-[var(--text-secondary)]">已使用</span>
-          <span v-else class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-bold">可用</span>
+          <span v-if="c.usedBy" class="px-1.5 py-0.5 rounded bg-[var(--text-secondary)]/10 text-[var(--text-secondary)] text-[10px]">已使用</span>
+          <span v-else class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-bold text-[10px]">可用</span>
         </span>
-        <span class="text-[11px] text-[var(--text-secondary)]">{{ fmtDate(c.createdAt) }}</span>
-        <div class="w-16 flex justify-end">
-          <button v-if="!c.usedBy" @click="deleteCode(c.code)" class="p-1.5 rounded-lg hover:bg-rose-500/10">
-            <Trash2 class="w-3.5 h-3.5 text-rose-500" />
+
+        <span class="text-[10px] text-[var(--text-secondary)]">{{ fmtDate(c.createdAt) }}</span>
+
+        <span class="text-[10px] text-[var(--text-secondary)] truncate">{{ c.note || '-' }}</span>
+
+        <div class="flex justify-end">
+          <button v-if="!c.usedBy" @click.stop="deleteCode(c.code)" class="p-1.5 rounded-lg hover:bg-rose-500/10" title="作废">
+            <Trash2 class="w-3 h-3 text-rose-500" />
           </button>
         </div>
       </div>
 
-      <div v-if="!codes.length" class="text-center py-12 text-sm text-[var(--text-secondary)]">
-        暂无激活码
+      <!-- 空状态 -->
+      <div v-if="!pagedCodes.length && !loading" class="text-center py-16">
+        <div class="text-3xl mb-3">📭</div>
+        <div class="text-sm font-bold text-[var(--text-secondary)]">
+          {{ searchQuery || filterType !== 'all' || filterStatus !== 'all' ? '没有匹配的激活码' : '暂无激活码' }}
+        </div>
+        <div class="text-xs text-[var(--text-secondary)]/50 mt-1">
+          {{ searchQuery ? '尝试修改搜索条件' : '点击上方「创建激活码」开始' }}
+        </div>
+      </div>
+
+      <!-- 加载中 -->
+      <div v-if="loading" class="text-center py-12 text-sm text-[var(--text-secondary)]">加载中...</div>
+    </div>
+
+    <!-- 分页 -->
+    <div v-if="totalPages > 1" class="flex items-center justify-between">
+      <span class="text-xs text-[var(--text-secondary)]">
+        显示 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, filteredCodes.length) }} / 共 {{ filteredCodes.length }} 条
+      </span>
+      <div class="flex gap-1">
+        <button @click="currentPage = Math.max(1, currentPage - 1)" :disabled="currentPage === 1"
+          class="page-btn">‹</button>
+        <template v-for="p in totalPages" :key="p">
+          <button v-if="p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1"
+            @click="currentPage = p" class="page-btn" :class="p === currentPage ? 'page-btn-active' : ''">
+            {{ p }}
+          </button>
+          <span v-else-if="Math.abs(p - currentPage) === 2" class="text-[var(--text-secondary)] text-xs px-1">…</span>
+        </template>
+        <button @click="currentPage = Math.min(totalPages, currentPage + 1)" :disabled="currentPage === totalPages"
+          class="page-btn">›</button>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 工具栏按钮 */
+.toolbar-btn {
+  @apply flex items-center gap-1.5 px-3 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold hover:border-[var(--primary)]/30 transition-all;
+}
+
+/* 表单标签 */
+.form-label {
+  @apply block text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)];
+}
+
+/* 表单输入 */
+.form-input {
+  @apply h-9 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] transition-colors;
+}
+.form-input-mini {
+  @apply w-14 h-9 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] text-center;
+}
+
+/* 类型按钮 */
+.type-btn {
+  @apply flex-1 px-3 py-2.5 rounded-xl text-xs font-bold transition-all text-center bg-[var(--bg)] text-[var(--text-secondary)] border border-transparent hover:border-[var(--border)];
+}
+.type-btn-active-green { @apply bg-emerald-500/15 text-emerald-400 border-emerald-500/30 !important; }
+.type-btn-active-blue { @apply bg-sky-500/15 text-sky-400 border-sky-500/30 !important; }
+.type-btn-active-amber { @apply bg-amber-500/15 text-amber-400 border-amber-500/30 !important; }
+
+/* 预设按钮 */
+.preset-btn {
+  @apply px-3 py-1.5 rounded-lg text-xs font-bold transition-all bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)];
+}
+.preset-btn-active { @apply bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30 !important; }
+
+/* 筛选按钮 */
+.filter-btn {
+  @apply px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all text-[var(--text-secondary)] hover:text-[var(--text)];
+}
+.filter-btn-active { @apply bg-[var(--primary)]/10 text-[var(--primary)] !important; }
+
+/* 分页按钮 */
+.page-btn {
+  @apply w-8 h-8 rounded-lg text-xs font-bold flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg)] transition-colors disabled:opacity-30;
+}
+.page-btn-active { @apply bg-[var(--primary)]/15 text-[var(--primary)] !important; }
+
+/* 过渡动画 */
+.slide-enter-active, .slide-leave-active { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.slide-enter-from { opacity: 0; max-height: 0; transform: translateY(-10px); }
+.slide-enter-to { opacity: 1; max-height: 500px; }
+.slide-leave-from { opacity: 1; max-height: 500px; }
+.slide-leave-to { opacity: 0; max-height: 0; transform: translateY(-10px); }
+</style>

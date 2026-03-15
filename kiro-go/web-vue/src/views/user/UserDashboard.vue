@@ -25,7 +25,12 @@ onMounted(async () => {
 
 const info = computed(() => auth.userInfo || {})
 
+const isActivated = computed(() => !!info.value.plan)
+const isTimedPlan = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
+const balanceValue = computed(() => Number(info.value.balance || 0))
+
 const daysRemaining = computed(() => {
+  if (!isTimedPlan.value) return '-'
   if (!info.value.expiresAt || info.value.expiresAt === 0) return '∞'
   const days = Math.max(0, Math.floor((info.value.expiresAt - Date.now()/1000) / 86400))
   return days
@@ -83,15 +88,17 @@ async function onRedeemed() {
       <div class="stat-card">
         <div class="stat-label">当前余额</div>
         <div class="stat-value balance">
-          <template v-if="info.plan === 'timed'">时间制</template>
-          <template v-else>¥{{ (info.balance || 0).toFixed(2) }}</template>
+          <template v-if="!isActivated">未激活</template>
+          <template v-else-if="info.plan === 'timed'">—</template>
+          <template v-else>¥{{ balanceValue.toFixed(2) }}</template>
         </div>
-        <div class="stat-sub" v-if="info.plan !== 'timed'" :style="{ color: info.balance < 1 ? '#ff6b6b' : '#22c55e' }">
-          {{ info.balance < 1 ? '⚠️ 余额不足' : '✅ 正常' }}
+        <div class="stat-sub" v-if="isActivated && (info.plan === 'credit' || info.plan === 'hybrid')"
+          :style="{ color: balanceValue < 1 ? '#ff6b6b' : '#22c55e' }">
+          {{ balanceValue < 1 ? '⚠️ 余额不足' : '✅ 正常' }}
         </div>
       </div>
 
-      <div class="stat-card">
+      <div class="stat-card" v-if="isTimedPlan">
         <div class="stat-label">剩余天数</div>
         <div class="stat-value">{{ daysRemaining }}</div>
         <div class="stat-sub" v-if="info.expiresAt > 0">
@@ -202,10 +209,12 @@ async function onRedeemed() {
   justify-content: space-between;
   background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(241,39,17,0.08));
   border: 1px solid rgba(245,158,11,0.15);
+  border-left: 4px solid #f5af19;
   border-radius: 14px;
   padding: 1.2rem 1.5rem;
   gap: 1rem;
   flex-wrap: wrap;
+  box-shadow: 0 12px 30px rgba(245,158,11,0.12);
 }
 .activate-text { display: flex; align-items: center; gap: 1rem; }
 .activate-icon { font-size: 1.8rem; }

@@ -26,7 +26,9 @@ function fmtTime(ts) {
     <div v-if="loading" class="loading">加载中...</div>
 
     <div v-else-if="logs.length === 0" class="empty">
-      暂无请求记录
+      <div class="empty-icon">📭</div>
+      <div class="empty-title">暂无请求记录</div>
+      <div class="empty-desc">开始使用 API 后，您的请求日志将在此显示</div>
     </div>
 
     <div v-else class="log-list">
@@ -126,4 +128,8 @@ function fmtTime(ts) {
   padding: 3rem;
   color: rgba(255,255,255,0.3);
 }
+
+.empty-icon { font-size: 2.5rem; margin-bottom: 0.8rem; }
+.empty-title { font-size: 1rem; font-weight: 600; color: rgba(255,255,255,0.5); margin-bottom: 0.4rem; }
+.empty-desc { font-size: 0.8rem; color: rgba(255,255,255,0.25); }
 </style>

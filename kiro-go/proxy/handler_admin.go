@@ -902,9 +902,9 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
-	if req.Type != "balance" && req.Type != "days" {
+	if req.Type != "balance" && req.Type != "days" && req.Type != "time" {
 		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "type must be 'balance' or 'days'"})
+		json.NewEncoder(w).Encode(map[string]string{"error": "type must be 'balance', 'days', or 'time'"})
 		return
 	}
 	if req.Amount <= 0 {
@@ -927,7 +927,7 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: now,
 			Note:      req.Note,
 		}
-		if req.Type == "days" && (req.Tier == "free" || req.Tier == "pro") {
+		if (req.Type == "days" || req.Type == "time") && (req.Tier == "free" || req.Tier == "pro") {
 			ac.Tier = req.Tier
 		}
 		if err := config.AddActivationCode(ac); err != nil {

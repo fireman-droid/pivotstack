@@ -13,19 +13,24 @@ const navItems = [
   { path: '/user/logs', label: '日志', icon: '📋' },
 ]
 
+const isActivated = computed(() => !!auth.plan)
+const balanceValue = computed(() => Number(auth.balance || 0))
+
 const balanceDisplay = computed(() => {
+  if (!isActivated.value) return '未激活'
   if (auth.plan === 'timed') return '时间制'
-  return `¥${auth.balance.toFixed(2)}`
+  return `¥${balanceValue.value.toFixed(2)}`
 })
 
 const planLabel = computed(() => {
+  if (!isActivated.value) return '未激活'
   const labels = { timed: '时间制', credit: '计量制', hybrid: '混合制' }
   return labels[auth.plan] || auth.plan
 })
 
 function handleLogout() {
   auth.logout()
-  router.replace('/login')
+  router.replace('/user/login')
 }
 
 onMounted(() => {
@@ -51,7 +56,7 @@ onMounted(() => {
         </nav>
       </div>
       <div class="header-right">
-        <div class="balance-badge" :class="{ low: auth.balance < 1 && auth.plan !== 'timed' }">
+        <div class="balance-badge" :class="{ low: isActivated && auth.plan !== 'timed' && balanceValue < 1, inactive: !isActivated }">
           {{ balanceDisplay }}
         </div>
         <div class="plan-tag">{{ planLabel }}</div>
@@ -160,6 +165,11 @@ onMounted(() => {
   background: rgba(255,107,107,0.15);
   color: #ff6b6b;
   animation: pulse 2s ease-in-out infinite;
+}
+
+.balance-badge.inactive {
+  background: rgba(107,114,128,0.15);
+  color: #9ca3af;
 }
 
 @keyframes pulse {

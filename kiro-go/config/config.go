@@ -949,7 +949,7 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 						break
 					}
 				}
-			case "days":
+			case "days", "time":
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
 						base := cfg.ApiKeys[j].ExpiresAt

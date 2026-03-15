@@ -15,6 +15,7 @@ const routes = [
   { path: '/abuse', name: 'AbuseMonitor', component: () => import('../views/AbuseMonitor.vue'), meta: { auth: true } },
 
 
+  { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },
   // User portal routes (auth via API key)
   {
     path: '/user',
