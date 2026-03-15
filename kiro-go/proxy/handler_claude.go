@@ -77,12 +77,8 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	maxRetries := 3
 	var lastErr error
 
-	// 用户层 tier 决策（必须在 GetNextByTier 之前）
+	// 用池选择（按模型决定）
 	uc := getUserContext(r.Context())
-	userTier := ""
-	if uc != nil {
-		userTier = uc.KeyTier
-	}
 
 	// Abuse prevention: check rate/concurrency limits
 	if uc != nil && uc.KeyID != "" {
@@ -98,8 +94,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		defer OnRequestEnd(uc.KeyID)
 	}
 
-	tier, effectiveModel := DetermineUserTier(req.Model, userTier)
-	req.Model = effectiveModel
+	tier := DeterminePoolTier(req.Model)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号

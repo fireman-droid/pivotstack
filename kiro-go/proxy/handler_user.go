@@ -55,7 +55,6 @@ func (h *Handler) resolveUserKey(r *http.Request) *config.ApiKeyInfo {
 func (h *Handler) handleUserMe(w http.ResponseWriter, info *config.ApiKeyInfo) {
 	resp := map[string]interface{}{
 		"id":        info.ID,
-		"tier":      info.Tier,
 		"plan":      info.Plan,
 		"balance":   info.Balance,
 		"credits":   info.Credits,

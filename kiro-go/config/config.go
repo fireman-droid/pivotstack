@@ -94,7 +94,6 @@ type Account struct {
 type ApiKeyInfo struct {
 	ID        string           `json:"id"`
 	Key       string           `json:"key"`
-	Tier      string           `json:"tier"`      // "normal" | "pro"
 	Plan      string           `json:"plan"`      // "timed" | "credit" | "hybrid"
 	ExpiresAt int64            `json:"expiresAt"` // Unix seconds, 0 = never
 	Enabled   bool             `json:"enabled"`
@@ -245,7 +244,7 @@ func Load() error {
 	migrated := false
 	if len(c.ApiKeys) == 0 && c.ApiKey != "" {
 		c.ApiKeys = []ApiKeyInfo{{
-			ID: GenerateMachineId(), Key: c.ApiKey, Tier: "pro", Plan: "timed",
+			ID: GenerateMachineId(), Key: c.ApiKey, Plan: "timed",
 			ExpiresAt: 0, Enabled: true, Note: "migrated", CreatedAt: time.Now().Unix(),
 		}}
 		c.ApiKey = ""

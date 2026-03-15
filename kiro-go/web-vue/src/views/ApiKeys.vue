@@ -4,7 +4,7 @@ import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import { formatNum } from '../utils/format'
 import {
-  Plus, Trash2, Copy, Eye, EyeOff, Key, Shield, Crown,
+  Plus, Trash2, Copy, Eye, EyeOff, Key,
   Clock, ToggleLeft, ToggleRight, Pencil, Search,
   Activity, FileText, ChevronDown, X, Check, Ban
 } from 'lucide-vue-next'
@@ -21,7 +21,7 @@ const keyLogs = ref({})
 const keyLogsLoading = ref({})
 
 // Create form
-const form = ref({ tier: 'normal', plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' })
+const form = ref({ plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' })
 const durationPresets = [
   { label: '1天', days: 1 },
   { label: '3天', days: 3 },
@@ -51,14 +51,14 @@ async function createKey() {
   try {
     const res = await api('/apikeys', {
       method: 'POST',
-      body: JSON.stringify({ tier: form.value.tier, plan: form.value.plan, expiresAt, balance: form.value.balance, note: form.value.note })
+      body: JSON.stringify({ plan: form.value.plan, expiresAt, balance: form.value.balance, note: form.value.note })
     })
     if (res.ok) {
       const newKey = await res.json()
       keys.value.unshift(newKey)
       showCreate.value = false
       showKeyId.value = newKey.id
-      form.value = { tier: 'normal', plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' }
+      form.value = { plan: 'timed', durationDays: 30, customDate: '', balance: 0, note: '' }
       success('API Key 已创建')
     }
   } catch { toastError('创建失败') }
@@ -83,13 +83,7 @@ async function deleteKey(k) {
   } catch { toastError('删除失败') }
 }
 
-async function updateTier(k, tier) {
-  try {
-    await api(`/apikeys/${k.id}`, { method: 'PUT', body: JSON.stringify({ tier }) })
-    k.tier = tier
-    success('等级已更新')
-  } catch { toastError('更新失败') }
-}
+
 
 async function loadKeyLogs(keyId) {
   if (keyLogs.value[keyId]) return
@@ -142,7 +136,6 @@ const filteredKeys = computed(() => {
   return keys.value.filter(k =>
     k.note?.toLowerCase().includes(q) ||
     k.key?.toLowerCase().includes(q) ||
-    k.tier?.toLowerCase().includes(q) ||
     k.id?.toLowerCase().includes(q)
   )
 })
@@ -152,8 +145,8 @@ const stats = computed(() => {
   return {
     total: all.length,
     active: all.filter(k => k.enabled).length,
-    normal: all.filter(k => k.tier === 'normal').length,
-    pro: all.filter(k => k.tier === 'pro').length,
+    timed: all.filter(k => k.plan === 'timed').length,
+    credit: all.filter(k => k.plan === 'credit' || k.plan === 'hybrid').length,
     totalReqs: all.reduce((s, k) => s + (k.requests || 0), 0),
     totalCredits: all.reduce((s, k) => s + (k.credits || 0), 0),
   }
@@ -182,12 +175,12 @@ onMounted(loadKeys)
     <!-- Stats Row -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
       <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">普通卡</div>
-        <div class="text-xl font-black text-[var(--text)]">{{ stats.normal }}</div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">时间制</div>
+        <div class="text-xl font-black text-sky-500">{{ stats.timed }}</div>
       </div>
       <div class="modern-card p-4">
-        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">Pro 卡</div>
-        <div class="text-xl font-black text-amber-500">{{ stats.pro }}</div>
+        <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">计量制</div>
+        <div class="text-xl font-black text-emerald-500">{{ stats.credit }}</div>
       </div>
       <div class="modern-card p-4">
         <div class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-1">总请求</div>
@@ -216,31 +209,6 @@ onMounted(loadKeys)
             <button @click="showCreate = false" class="p-1 hover:bg-[var(--bg)] rounded-lg"><X class="w-4 h-4" /></button>
           </div>
           <div class="p-6 space-y-5">
-            <!-- Tier -->
-            <div class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">等级</label>
-              <div class="grid grid-cols-2 gap-3">
-                <button @click="form.tier = 'normal'"
-                  class="p-4 rounded-xl border-2 text-left transition-all"
-                  :class="form.tier === 'normal' ? 'border-[var(--primary)] bg-[var(--primary)]/5' : 'border-[var(--border)] hover:border-[var(--primary)]/30'">
-                  <div class="flex items-center gap-2 mb-1">
-                    <Shield class="w-4 h-4 text-sky-500" />
-                    <span class="text-sm font-bold">普通卡</span>
-                  </div>
-                  <p class="text-[10px] text-[var(--text-secondary)]">仅限 Claude 4.5 Sonnet</p>
-                </button>
-                <button @click="form.tier = 'pro'"
-                  class="p-4 rounded-xl border-2 text-left transition-all"
-                  :class="form.tier === 'pro' ? 'border-amber-500 bg-amber-500/5' : 'border-[var(--border)] hover:border-amber-500/30'">
-                  <div class="flex items-center gap-2 mb-1">
-                    <Crown class="w-4 h-4 text-amber-500" />
-                    <span class="text-sm font-bold">Pro 卡</span>
-                  </div>
-                  <p class="text-[10px] text-[var(--text-secondary)]">全部模型可用</p>
-                </button>
-              </div>
-            </div>
-
             <!-- Plan -->
             <div class="space-y-2">
               <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">计费模式</label>
@@ -305,13 +273,10 @@ onMounted(loadKeys)
         :class="{ 'opacity-50': !k.enabled }">
         <!-- Main Row -->
         <div class="p-5 flex items-center gap-4 cursor-pointer" @click="toggleExpand(k)">
-          <!-- Tier Badge -->
+          <!-- Icon -->
           <div class="shrink-0">
-            <div v-if="k.tier === 'pro'" class="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-              <Crown class="w-5 h-5 text-amber-500" />
-            </div>
-            <div v-else class="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center">
-              <Shield class="w-5 h-5 text-sky-500" />
+            <div class="w-10 h-10 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center">
+              <Key class="w-5 h-5 text-[var(--primary)]" />
             </div>
           </div>
 
@@ -319,10 +284,6 @@ onMounted(loadKeys)
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-sm font-bold text-[var(--text)] truncate">{{ k.note || 'Unnamed Key' }}</span>
-              <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
-                :class="k.tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
-                {{ k.tier }}
-              </span>
               <span class="px-1.5 py-0.5 rounded text-[9px] font-bold"
                 :class="{ 'bg-sky-500/10 text-sky-400': k.plan === 'timed', 'bg-emerald-500/10 text-emerald-400': k.plan === 'credit', 'bg-purple-500/10 text-purple-400': k.plan === 'hybrid' }">
                 {{ k.plan === 'timed' ? '时间制' : k.plan === 'credit' ? '计量制' : k.plan === 'hybrid' ? '混合制' : k.plan }}
@@ -415,20 +376,6 @@ onMounted(loadKeys)
             </div>
           </div>
 
-          <!-- Tier Switch -->
-          <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-3">
-            <span class="text-[10px] font-bold text-[var(--text-secondary)]">切换等级:</span>
-            <button @click="updateTier(k, 'normal')"
-              class="px-3 py-1 rounded-lg text-[10px] font-bold transition-all"
-              :class="k.tier === 'normal' ? 'bg-sky-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-              普通
-            </button>
-            <button @click="updateTier(k, 'pro')"
-              class="px-3 py-1 rounded-lg text-[10px] font-bold transition-all"
-              :class="k.tier === 'pro' ? 'bg-amber-500 text-white' : 'bg-[var(--bg)] text-[var(--text-secondary)] hover:text-[var(--text)]'">
-              Pro
-            </button>
-          </div>
 
           <!-- Recent Logs -->
           <div class="px-5 py-3 border-t border-[var(--border)]">

@@ -756,7 +756,6 @@ func (h *Handler) apiGetApiKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Tier      string  `json:"tier"`
 		Plan      string  `json:"plan"`
 		ExpiresAt int64   `json:"expiresAt"`
 		Balance   float64 `json:"balance"`
@@ -767,16 +766,12 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
-	if req.Tier != "normal" && req.Tier != "pro" {
-		req.Tier = "normal"
-	}
 	if req.Plan != "credit" && req.Plan != "hybrid" {
 		req.Plan = "timed"
 	}
 	key := config.ApiKeyInfo{
 		ID:        config.GenerateMachineId(),
 		Key:       config.GenerateApiKeyString(),
-		Tier:      req.Tier,
 		Plan:      req.Plan,
 		ExpiresAt: req.ExpiresAt,
 		Balance:   req.Balance,
@@ -794,7 +789,6 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Tier      *string  `json:"tier"`
 		Plan      *string  `json:"plan"`
 		ExpiresAt *int64   `json:"expiresAt"`
 		Enabled   *bool    `json:"enabled"`
@@ -818,9 +812,6 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "API key not found"})
 		return
-	}
-	if req.Tier != nil {
-		existing.Tier = *req.Tier
 	}
 	if req.Plan != nil {
 		existing.Plan = *req.Plan

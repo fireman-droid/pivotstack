@@ -484,7 +484,6 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 	}
 	if uc != nil {
 		entry.ApiKeyID = uc.KeyID
-		entry.ApiKeyTier = uc.KeyTier
 	}
 	h.callLogsMu.Lock()
 	h.callLogs = append(h.callLogs, entry)
@@ -540,7 +539,6 @@ func (h *Handler) addCallLogErrorWithKey(apiType, originalModel, actualModel, ac
 	}
 	if uc != nil {
 		entry.ApiKeyID = uc.KeyID
-		entry.ApiKeyTier = uc.KeyTier
 	}
 	h.callLogsMu.Lock()
 	h.callLogs = append(h.callLogs, entry)

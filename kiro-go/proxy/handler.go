@@ -67,8 +67,7 @@ const userCtxKey contextKeyType = "userCtx"
 
 // UserContext holds per-request API key context.
 type UserContext struct {
-	KeyID   string
-	KeyTier string // "normal" | "pro"
+	KeyID string
 }
 
 func withUserContext(r *http.Request, uc *UserContext) *http.Request {
@@ -95,7 +94,6 @@ type CallLog struct {
 	ActualModel     string  `json:"actual_model"`
 	Account         string  `json:"account"`
 	ApiKeyID        string  `json:"api_key_id,omitempty"`
-	ApiKeyTier      string  `json:"api_key_tier,omitempty"`
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	TotalTokens     int     `json:"total_tokens"`
@@ -262,7 +260,7 @@ func (h *Handler) refreshAllAccounts() {
 // Returns (nil, nil) when API key validation is disabled.
 func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 	if !config.IsApiKeyRequired() {
-		return &UserContext{KeyTier: "pro"}, nil
+		return &UserContext{}, nil
 	}
 
 	authHeader := r.Header.Get("Authorization")
@@ -289,7 +287,7 @@ func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 		return nil, fmt.Errorf("%s: %s", errType, err.Error())
 	}
 
-	return &UserContext{KeyID: info.ID, KeyTier: info.Tier}, nil
+	return &UserContext{KeyID: info.ID}, nil
 }
 
 // ServeHTTP 路由分发

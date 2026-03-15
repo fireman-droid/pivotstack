@@ -212,7 +212,7 @@ onUnmounted(() => {
         >
           <option value="all">全部 Key</option>
           <option v-for="k in apiKeys" :key="k.id" :value="k.id">
-            {{ k.note || k.key?.slice(0, 10) + '...' }} ({{ k.tier }})
+            {{ k.note || k.key?.slice(0, 10) + '...' }}
           </option>
         </select>
       </div>
@@ -373,10 +373,6 @@ onUnmounted(() => {
                       <Key class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
                       <span class="text-[10px] font-bold text-[var(--text-secondary)]">API Key:</span>
                       <span class="text-[10px] font-bold font-mono text-[var(--text)]">{{ log.api_key_id.slice(0, 8) }}...</span>
-                      <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
-                        :class="log.api_key_tier === 'pro' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500'">
-                        {{ log.api_key_tier || '-' }}
-                      </span>
                     </div>
                   </div>
                 </td>
