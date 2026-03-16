@@ -1050,7 +1050,7 @@ func (h *Handler) apiCleanupCodes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type   string  `json:"type"`   // "balance" | "days"
-		Amount float64 `json:"amount"` // USD face value (for balance) or days
+		Amount float64 `json:"amount"` // CNY (for balance) or seconds (for days/time)
 		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
 		Count  int     `json:"count"`  // how many codes to generate
 		Note   string  `json:"note"`

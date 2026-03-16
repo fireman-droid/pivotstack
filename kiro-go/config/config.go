@@ -1034,7 +1034,7 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 	}
 	now := time.Now().Unix()
 	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
-	hasBalance := info.Balance > 0
+	hasBalance := info.Balance > 0 || info.GiftBalance > 0
 	hasCreditPlan := info.Plan == "credit"
 
 	if !hasDayCard && !hasBalance && !hasCreditPlan {
@@ -1054,7 +1054,7 @@ func ValidateKeyAccessForModel(info *ApiKeyInfo, modelPool string) (string, erro
 	}
 	now := time.Now().Unix()
 	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
-	hasBalance := info.Balance > 0
+	hasBalance := info.Balance > 0 || info.GiftBalance > 0
 
 	switch modelPool {
 	case "free":
