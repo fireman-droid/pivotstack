@@ -98,7 +98,7 @@ type ApiKeyInfo struct {
 	Plan      string           `json:"plan"`           // "timed" | "credit" | "hybrid"
 	ExpiresAt int64            `json:"expiresAt"`      // Unix seconds, 0 = never
 	Enabled   bool             `json:"enabled"`
-	Balance   float64          `json:"balance,omitempty"` // CNY balance (credit/hybrid mode)
+	Balance   float64          `json:"balance,omitempty"` // USD balance (face value, credit/hybrid mode)
 	Note      string           `json:"note,omitempty"`
 	CreatedAt int64            `json:"createdAt"`
 	LastUsed  int64            `json:"lastUsed,omitempty"`
@@ -113,7 +113,7 @@ type ApiKeyInfo struct {
 type ActivationCode struct {
 	Code          string  `json:"code"`                    // e.g. KIRO-XXXX-XXXX-XXXX
 	Type          string  `json:"type"`                    // "balance" | "days"
-	Amount        float64 `json:"amount"`                  // balance: CNY amount; days: number of days
+	Amount        float64 `json:"amount"`                  // balance: USD face value; days: number of days
 	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days)
 	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
 	Used          bool    `json:"used"`
@@ -123,19 +123,144 @@ type ActivationCode struct {
 	Note          string  `json:"note,omitempty"`
 }
 
-// ModelPricing defines per-model pricing in CNY.
-type ModelPricing struct {
-	InputPricePerM  float64 `json:"inputPricePerM"`  // CNY per million input tokens
-	OutputPricePerM float64 `json:"outputPricePerM"` // CNY per million output tokens
-	Multiplier      float64 `json:"multiplier"`      // relative multiplier for display
+// CostEntry represents a single account purchase record.
+type CostEntry struct {
+	ID        string  `json:"id"`                  // unique ID
+	Count     int     `json:"count"`               // number of accounts
+	CostCNY   float64 `json:"costCNY"`             // total cost in CNY
+	Credits   float64 `json:"credits,omitempty"`   // credits per account (PRO only, FREE fixed 550)
+	CreatedAt int64   `json:"createdAt,omitempty"` // unix timestamp
 }
 
-// PricingConfig holds pricing for all models.
+const FreeAccountCredits = 550.0 // fixed credits per FREE account
+const CNYPerUSDFace = 0.05       // $1 face value = ¥0.05 real CNY
+
+// PricingConfig holds credit-based pricing.
 type PricingConfig struct {
-	Models         map[string]ModelPricing `json:"models"`
-	DefaultInput   float64                 `json:"defaultInput"`   // CNY per million input tokens
-	DefaultOutput  float64                 `json:"defaultOutput"`  // CNY per million output tokens
-	MinRequestCost float64                 `json:"minRequestCost"` // minimum cost per request in CNY
+	FreePoolPriceUSD float64 `json:"freePoolPriceUSD"` // face-value USD per credit for FREE pool (default: 0.40)
+	ProPoolPriceUSD  float64 `json:"proPoolPriceUSD"`  // face-value USD per credit for PRO pool (default: 2.00)
+
+	ProCostEntries  []CostEntry `json:"proCostEntries,omitempty"`
+	FreeCostEntries []CostEntry `json:"freeCostEntries,omitempty"`
+
+	// Deprecated fields kept for backward compat
+	PurchasePriceCNY      float64 `json:"purchasePriceCNY,omitempty"`
+	ProAccountPriceCNY    float64 `json:"proAccountPriceCNY,omitempty"`
+	ProAccountCredits     float64 `json:"proAccountCredits,omitempty"`
+	FreeAccountBatchPrice float64 `json:"freeAccountBatchPrice,omitempty"`
+	FreeAccountBatchCount int     `json:"freeAccountBatchCount,omitempty"`
+	FreeAccountCredits    float64 `json:"freeAccountCredits,omitempty"`
+}
+
+// ProCostPerCredit returns the admin's cost per credit for PRO accounts (in CNY).
+func (p PricingConfig) ProCostPerCredit() float64 {
+	var totalCost float64
+	var totalCredits float64
+	for _, e := range p.ProCostEntries {
+		totalCost += e.CostCNY
+		totalCredits += float64(e.Count) * e.Credits
+	}
+	if totalCredits > 0 {
+		return totalCost / totalCredits
+	}
+	// fallback to old fields
+	if p.ProAccountCredits > 0 && p.ProAccountPriceCNY > 0 {
+		return p.ProAccountPriceCNY / p.ProAccountCredits
+	}
+	if p.PurchasePriceCNY > 0 {
+		return p.PurchasePriceCNY
+	}
+	return 0.04
+}
+
+// FreeCostPerCredit returns the admin's cost per credit for FREE accounts (in CNY).
+func (p PricingConfig) FreeCostPerCredit() float64 {
+	var totalCost float64
+	var totalCredits float64
+	for _, e := range p.FreeCostEntries {
+		totalCost += e.CostCNY
+		totalCredits += float64(e.Count) * FreeAccountCredits
+	}
+	if totalCredits > 0 {
+		return totalCost / totalCredits
+	}
+	// fallback
+	if p.FreeAccountBatchCount > 0 && p.FreeAccountCredits > 0 && p.FreeAccountBatchPrice > 0 {
+		return p.FreeAccountBatchPrice / (float64(p.FreeAccountBatchCount) * p.FreeAccountCredits)
+	}
+	return 0.0002
+}
+
+// ProTotalCost returns total investment in PRO accounts (CNY).
+func (p PricingConfig) ProTotalCost() float64 {
+	var total float64
+	for _, e := range p.ProCostEntries {
+		total += e.CostCNY
+	}
+	return total
+}
+
+// FreeTotalCost returns total investment in FREE accounts (CNY).
+func (p PricingConfig) FreeTotalCost() float64 {
+	var total float64
+	for _, e := range p.FreeCostEntries {
+		total += e.CostCNY
+	}
+	return total
+}
+
+// GetPricing returns the pricing configuration with defaults.
+func GetPricing() PricingConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	p := cfg.Pricing
+	if p.FreePoolPriceUSD == 0 {
+		p.FreePoolPriceUSD = 0.40
+	}
+	if p.ProPoolPriceUSD == 0 {
+		p.ProPoolPriceUSD = 2.00
+	}
+	return p
+}
+
+// AddCostEntry adds a cost entry to PRO or FREE list.
+func AddCostEntry(pool string, entry CostEntry) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if entry.ID == "" {
+		entry.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	if entry.CreatedAt == 0 {
+		entry.CreatedAt = time.Now().Unix()
+	}
+	if pool == "pro" {
+		cfg.Pricing.ProCostEntries = append(cfg.Pricing.ProCostEntries, entry)
+	} else {
+		cfg.Pricing.FreeCostEntries = append(cfg.Pricing.FreeCostEntries, entry)
+	}
+	return Save()
+}
+
+// RemoveCostEntry removes a cost entry by ID.
+func RemoveCostEntry(pool, id string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if pool == "pro" {
+		for i, e := range cfg.Pricing.ProCostEntries {
+			if e.ID == id {
+				cfg.Pricing.ProCostEntries = append(cfg.Pricing.ProCostEntries[:i], cfg.Pricing.ProCostEntries[i+1:]...)
+				return Save()
+			}
+		}
+	} else {
+		for i, e := range cfg.Pricing.FreeCostEntries {
+			if e.ID == id {
+				cfg.Pricing.FreeCostEntries = append(cfg.Pricing.FreeCostEntries[:i], cfg.Pricing.FreeCostEntries[i+1:]...)
+				return Save()
+			}
+		}
+	}
+	return fmt.Errorf("entry not found: %s", id)
 }
 
 // Config represents the global application configuration.
@@ -786,27 +911,6 @@ func UpdatePreferredEndpoint(endpoint string) error {
 
 // ==================== Pricing ====================
 
-// GetPricing returns the pricing configuration with defaults.
-func GetPricing() PricingConfig {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-	p := cfg.Pricing
-	if p.Models == nil {
-		p.Models = map[string]ModelPricing{
-			"claude-sonnet-4.5": {InputPricePerM: 0.30, OutputPricePerM: 3.50, Multiplier: 0.1},
-			"claude-sonnet-4.6": {InputPricePerM: 0.50, OutputPricePerM: 5.00, Multiplier: 1.0},
-			"claude-opus-4.6":   {InputPricePerM: 1.00, OutputPricePerM: 7.00, Multiplier: 1.0},
-		}
-	}
-	if p.DefaultInput == 0 {
-		p.DefaultInput = 0.50
-	}
-	if p.DefaultOutput == 0 {
-		p.DefaultOutput = 5.00
-	}
-	return p
-}
-
 // UpdatePricing updates the pricing configuration.
 func UpdatePricing(p PricingConfig) error {
 	cfgLock.Lock()
@@ -883,32 +987,56 @@ func ExtendKeyExpiry(keyID string, days int) error {
 	return fmt.Errorf("api key not found: %s", keyID)
 }
 
-// ValidateKeyAccess checks if an API key is valid for making requests.
-// Returns ("", nil) on success, or (errorType, error) on failure.
+// ValidateKeyAccess checks if an API key has any active plan or balance.
+// This is the initial gate check — model-level access is checked by ValidateKeyAccessForModel.
 func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 	if !info.Enabled {
 		return "key_disabled", fmt.Errorf("api key is disabled")
 	}
-	switch info.Plan {
-	case "timed":
-		if info.ExpiresAt > 0 && time.Now().Unix() > info.ExpiresAt {
-			return "key_expired", fmt.Errorf("api key expired")
+	now := time.Now().Unix()
+	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
+	hasBalance := info.Balance > 0
+	hasCreditPlan := info.Plan == "credit"
+
+	if !hasDayCard && !hasBalance && !hasCreditPlan {
+		if info.Plan == "" {
+			return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
 		}
-	case "credit":
-		if info.Balance <= 0 {
-			return "insufficient_balance", fmt.Errorf("insufficient balance")
-		}
-	case "hybrid":
-		// 优先检查时间卡：时间有效就放行，不看余额
-		timeValid := info.ExpiresAt == 0 || time.Now().Unix() <= info.ExpiresAt
-		balanceValid := info.Balance > 0
-		if !timeValid && !balanceValid {
-			return "key_expired", fmt.Errorf("api key expired and insufficient balance")
-		}
-	default:
-		return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
+		return "key_expired", fmt.Errorf("api key expired and insufficient balance")
 	}
 	return "", nil
+}
+
+// ValidateKeyAccessForModel checks if a key can access a model in the given pool.
+// Returns action: "free" (no charge), "deduct" (charge balance), or error.
+func ValidateKeyAccessForModel(info *ApiKeyInfo, modelPool string) (string, error) {
+	if info == nil || !info.Enabled {
+		return "", fmt.Errorf("api key disabled")
+	}
+	now := time.Now().Unix()
+	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
+	hasBalance := info.Balance > 0
+
+	switch modelPool {
+	case "free":
+		if hasDayCard {
+			return "free", nil // day card covers free pool models
+		}
+		if hasBalance {
+			return "deduct", nil
+		}
+		return "", fmt.Errorf("no active plan or balance")
+	case "pro":
+		if hasDayCard && info.Tier == "pro" {
+			return "free", nil // pro day card covers all models
+		}
+		// free day card + balance OR pure balance → deduct
+		if hasBalance {
+			return "deduct", nil
+		}
+		return "", fmt.Errorf("pro models require pro day-card or balance")
+	}
+	return "", fmt.Errorf("unknown pool: %s", modelPool)
 }
 
 // ==================== Activation Codes ====================
@@ -950,7 +1078,7 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			case "balance":
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
-						cfg.ApiKeys[j].Balance += ac.Amount
+						cfg.ApiKeys[j].Balance += ac.Amount / CNYPerUSDFace // ¥ → $ face value
 						// Set plan: if already timed → hybrid, otherwise credit
 						if cfg.ApiKeys[j].Plan == "timed" || cfg.ApiKeys[j].Plan == "hybrid" {
 							cfg.ApiKeys[j].Plan = "hybrid"

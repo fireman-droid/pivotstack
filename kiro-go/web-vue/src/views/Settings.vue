@@ -14,7 +14,10 @@ import {
   Save,
   Fingerprint,
   ChevronRight,
-  Info
+  Info,
+  Trash2,
+  FileX,
+  DollarSign
 } from 'lucide-vue-next'
 
 const { success, error } = useToast()
@@ -100,6 +103,32 @@ async function resetStats() {
   await api('/stats/reset', { method: 'POST' })
   success('统计已重置')
   setTimeout(() => location.reload(), 1000)
+}
+
+async function clearLogs() {
+  if (!confirm('确定清空所有调用日志？\n\n• API Key 和用户余额不受影响\n• 此操作不可恢复')) return
+  const res = await api('/logs', { method: 'DELETE' })
+  if (res.ok) {
+    success('调用日志已清空')
+  } else {
+    error('清空日志失败')
+  }
+}
+
+async function resetPricing() {
+  if (!confirm('确定重置采购记录？\n\n• 将清空所有 PRO/FREE 号采购记录\n• 售价配置不受影响\n• 此操作不可恢复')) return
+  // Get current pricing, clear cost entries, save back
+  const getRes = await api('/pricing')
+  if (!getRes.ok) { error('获取配置失败'); return }
+  const pricing = await getRes.json()
+  pricing.proCostEntries = []
+  pricing.freeCostEntries = []
+  const res = await api('/pricing', { method: 'PUT', body: JSON.stringify(pricing) })
+  if (res.ok) {
+    success('采购记录已清空，请重新添加真实记录')
+  } else {
+    error('重置失败')
+  }
 }
 </script>
 
@@ -222,7 +251,36 @@ async function resetStats() {
         <div class="p-2 rounded-lg bg-rose-500/10 text-rose-500 animate-pulse"><ShieldAlert class="w-5 h-5" /></div>
         <h2 class="text-sm font-black uppercase tracking-[0.2em] text-rose-500">危险操作区</h2>
       </div>
+
+      <!-- 清空调用日志 -->
+      <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
+        <div class="flex items-start gap-4">
+          <div class="p-3 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-500"><FileX class="w-5 h-5" /></div>
+          <div>
+            <h4 class="text-sm font-black text-[var(--text)]">清空调用日志</h4>
+            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">清除所有历史 API 调用记录。API Key 和用户余额不受影响。</p>
+          </div>
+        </div>
+        <button @click="clearLogs" class="px-6 py-3 bg-amber-500 text-white rounded-xl font-black text-xs hover:bg-amber-600 transition-all shadow-xl shadow-amber-500/20 active:scale-95 whitespace-nowrap">
+          清空日志
+        </button>
+      </div>
+
+      <!-- 重置采购记录 -->
+      <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
+        <div class="flex items-start gap-4">
+          <div class="p-3 rounded-full bg-orange-50 dark:bg-orange-900/20 text-orange-500"><DollarSign class="w-5 h-5" /></div>
+          <div>
+            <h4 class="text-sm font-black text-[var(--text)]">重置采购记录</h4>
+            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">清空所有 PRO/FREE 号采购成本记录。售价配置不受影响，清空后需重新添加。</p>
+          </div>
+        </div>
+        <button @click="resetPricing" class="px-6 py-3 bg-orange-500 text-white rounded-xl font-black text-xs hover:bg-orange-600 transition-all shadow-xl shadow-orange-500/20 active:scale-95 whitespace-nowrap">
+          重置采购记录
+        </button>
+      </div>
       
+      <!-- 重置全局统计 -->
       <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
         <div class="flex items-start gap-4">
           <div class="p-3 rounded-full bg-rose-50 dark:bg-rose-900/20 text-rose-500"><Cpu class="w-5 h-5" /></div>

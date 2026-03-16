@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import {
@@ -18,18 +19,29 @@ import {
 } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
+const route = useRoute()
+const router = useRouter()
 const logs = ref([])
 const loading = ref(false)
 const searchQuery = ref('')
 const expandedIndex = ref(-1)
-const statusFilter = ref('all')
-const keyFilter = ref('all')
+const statusFilter = ref(route.query.status || 'all')
+const keyFilter = ref(route.query.key || 'all')
 const apiKeys = ref([])
 const sseConnected = ref(false)
-const currentPage = ref(1)
+const currentPage = ref(parseInt(route.query.page) || 1)
 const totalLogs = ref(0)
 const pageSize = ref(50)
 let eventSource = null
+
+// Persist filters to URL
+watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
+  const q = {}
+  if (s !== 'all') q.status = s
+  if (k !== 'all') q.key = k
+  if (p > 1) q.page = p
+  router.replace({ query: q }).catch(() => {})
+})
 
 // 通过 SSE 实时接收日志
 function connectSSE() {
@@ -235,7 +247,7 @@ onUnmounted(() => {
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">状态</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">模型</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">账号</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">Token</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">Credit</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">耗时</th>
               <th class="px-6 py-4 w-10"></th>
             </tr>
@@ -292,9 +304,9 @@ onUnmounted(() => {
                 <td class="px-6 py-4 text-right">
                   <div class="flex items-center justify-end gap-1">
                     <Cpu class="w-3 h-3 text-amber-500" />
-                    <span class="text-xs font-bold">{{ log.total_tokens?.toLocaleString() || '-' }}</span>
+                    <span class="text-xs font-bold">{{ log.credits?.toFixed(4) || '0' }}</span>
                   </div>
-                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.input_tokens || 0 }} / {{ log.output_tokens || 0 }}</div>
+                  <div class="text-[9px] text-[var(--text-secondary)]">${{ (log.cost_usd || 0).toFixed(4) }}</div>
                 </td>
 
                 <td class="px-6 py-4 text-right">

@@ -21,7 +21,7 @@ const isTimedPlan = computed(() => auth.plan === 'timed' || auth.plan === 'hybri
 
 const balanceDisplay = computed(() => {
   if (!isCreditPlan.value) return null
-  return `¥${balanceValue.value.toFixed(2)}`
+  return `$${balanceValue.value.toFixed(2)}`
 })
 
 const balanceBadgeClass = computed(() => {

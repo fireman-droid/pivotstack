@@ -2,18 +2,24 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { Save, Plus, Trash2 } from 'lucide-vue-next'
+import { Save } from 'lucide-vue-next'
 
 const { success, error: toastError } = useToast()
-const pricing = ref({ defaultInputPrice: 0.3, defaultOutputPrice: 3.5, minRequestCost: 0.001, models: {} })
+const pricing = ref({ freePoolPriceUSD: 0.04, proPoolPriceUSD: 0.20, purchasePriceCNY: 0.04 })
 const loading = ref(true)
 const saving = ref(false)
-const newModel = ref('')
 
 async function loadPricing() {
   try {
     const res = await api('/pricing')
-    if (res.ok) pricing.value = await res.json()
+    if (res.ok) {
+      const data = await res.json()
+      pricing.value = {
+        freePoolPriceUSD: data.freePoolPriceUSD || 0.04,
+        proPoolPriceUSD: data.proPoolPriceUSD || 0.20,
+        purchasePriceCNY: data.purchasePriceCNY || 0.04,
+      }
+    }
   } catch { toastError('加载定价失败') }
   loading.value = false
 }
@@ -27,28 +33,15 @@ async function savePricing() {
   saving.value = false
 }
 
-function addModel() {
-  const name = newModel.value.trim()
-  if (!name) return
-  if (pricing.value.models && pricing.value.models[name]) return toastError('模型已存在')
-  if (!pricing.value.models) pricing.value.models = {}
-  pricing.value.models[name] = { inputPricePerM: 0.3, outputPricePerM: 3.5, multiplier: 1.0 }
-  newModel.value = ''
-}
-
-function removeModel(name) {
-  delete pricing.value.models[name]
-}
-
 onMounted(loadPricing)
 </script>
 
 <template>
-  <div class="space-y-6 max-w-[1200px] mx-auto pb-20">
+  <div class="space-y-6 max-w-[800px] mx-auto pb-20">
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">定价配置</h1>
-        <p class="text-sm text-[var(--text-secondary)]">设置各模型的计费价格（元/百万Token）</p>
+        <p class="text-sm text-[var(--text-secondary)]">Credit 计费单价（按池设置）</p>
       </div>
       <button @click="savePricing" :disabled="saving"
         class="flex items-center gap-2 px-5 py-2.5 bg-[var(--primary)] text-white rounded-xl text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">
@@ -57,67 +50,42 @@ onMounted(loadPricing)
       </button>
     </div>
 
-    <!-- Default Pricing -->
-    <div class="modern-card p-5 space-y-4">
-      <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">默认定价</div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="modern-card p-5 space-y-5">
+      <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">售价设置（用户扣费单价）</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">默认输入价 (¥/M tokens)</label>
-          <input v-model.number="pricing.defaultInputPrice" type="number" step="0.01"
+          <label class="text-xs text-[var(--text-secondary)]">FREE 池单价 ($/credit)</label>
+          <div class="text-[10px] text-[var(--text-secondary)] opacity-60">sonnet-4.5 使用此价格</div>
+          <input v-model.number="pricing.freePoolPriceUSD" type="number" step="0.01"
             class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
         </div>
         <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">默认输出价 (¥/M tokens)</label>
-          <input v-model.number="pricing.defaultOutputPrice" type="number" step="0.01"
-            class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
-        </div>
-        <div class="space-y-1">
-          <label class="text-xs text-[var(--text-secondary)]">最低请求费用 (¥)</label>
-          <input v-model.number="pricing.minRequestCost" type="number" step="0.0001"
+          <label class="text-xs text-[var(--text-secondary)]">PRO 池单价 ($/credit)</label>
+          <div class="text-[10px] text-[var(--text-secondary)] opacity-60">sonnet-4.6, opus-4.6 使用此价格</div>
+          <input v-model.number="pricing.proPoolPriceUSD" type="number" step="0.01"
             class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
         </div>
       </div>
     </div>
 
-    <!-- Model Pricing Table -->
-    <div class="modern-card p-5 space-y-4">
-      <div class="flex items-center justify-between">
-        <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">模型定价</div>
-        <div class="flex items-center gap-2">
-          <input v-model="newModel" placeholder="模型名称" @keyup.enter="addModel"
-            class="h-8 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)] w-48" />
-          <button @click="addModel" class="p-1.5 bg-[var(--primary)] rounded-lg hover:scale-105 transition-transform">
-            <Plus class="w-4 h-4 text-white" />
-          </button>
-        </div>
+    <div class="modern-card p-5 space-y-5">
+      <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">成本设置（进货价）</div>
+      <div class="space-y-1" style="max-width: 300px">
+        <label class="text-xs text-[var(--text-secondary)]">PRO 账号进货价 (¥/credit)</label>
+        <div class="text-[10px] text-[var(--text-secondary)] opacity-60">用于利润计算，PRO号实际Credit成本</div>
+        <input v-model.number="pricing.purchasePriceCNY" type="number" step="0.001"
+          class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
       </div>
+    </div>
 
-      <div v-if="pricing.models && Object.keys(pricing.models).length" class="space-y-2">
-        <!-- Header -->
-        <div class="grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">
-          <span>模型名称</span>
-          <span>输入价 (¥/M)</span>
-          <span>输出价 (¥/M)</span>
-          <span>倍率</span>
-          <span class="w-8"></span>
-        </div>
-        <!-- Rows -->
-        <div v-for="(cfg, model) in pricing.models" :key="model"
-          class="grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 px-4 py-2 items-center bg-[var(--bg)]/50 rounded-xl">
-          <span class="text-sm font-mono font-bold text-[var(--primary)]">{{ model }}</span>
-          <input v-model.number="cfg.inputPricePerM" type="number" step="0.01"
-            class="h-8 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-          <input v-model.number="cfg.outputPricePerM" type="number" step="0.01"
-            class="h-8 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-          <input v-model.number="cfg.multiplier" type="number" step="0.1"
-            class="h-8 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-[var(--primary)]" />
-          <button @click="removeModel(model)" class="p-1.5 rounded-lg hover:bg-rose-500/10">
-            <Trash2 class="w-3.5 h-3.5 text-rose-500" />
-          </button>
-        </div>
-      </div>
-      <div v-else class="text-center py-8 text-sm text-[var(--text-secondary)]">
-        暂无模型定价，将使用默认价格
+    <!-- Quick Reference -->
+    <div class="modern-card p-5">
+      <div class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)] mb-3">快速参考</div>
+      <div class="text-xs text-[var(--text-secondary)] space-y-1">
+        <p>· 1 Kiro credit = $2 面值</p>
+        <p>· FREE 池默认 $0.04/credit → 用户消耗1个credit花费 $0.04</p>
+        <p>· PRO 池默认 $0.20/credit → 用户消耗1个credit花费 $0.20</p>
+        <p>· 进货成本默认 ¥0.04/credit → 利润 = 售价收入 - 进货成本</p>
       </div>
     </div>
   </div>

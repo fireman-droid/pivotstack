@@ -126,6 +126,12 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetPricing(w, r)
 	case path == "/pricing" && r.Method == "PUT":
 		h.apiUpdatePricing(w, r)
+	case path == "/profit" && r.Method == "GET":
+		h.apiGetProfit(w, r)
+	case path == "/cost-entry" && r.Method == "POST":
+		h.apiAddCostEntry(w, r)
+	case path == "/cost-entry" && r.Method == "DELETE":
+		h.apiRemoveCostEntry(w, r)
 	case path == "/codes" && r.Method == "GET":
 		h.apiGetCodes(w, r)
 	case path == "/codes" && r.Method == "POST":
@@ -679,9 +685,21 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 	proPrediction := h.proCreditPredictor.Predict(proTotal - proUsed)
 	freePrediction := h.freeCreditPredictor.Predict(freeTotal - freeUsed)
 
-	// 成本计算（1 Credit = 0.04 元）
-	costPerCredit := 0.04
-	totalCostCNY := totalCreditsAll * costPerCredit
+	// 成本计算：按池子区分成本
+	pricing := config.GetPricing()
+	var proCreditsAll, freeCreditsAll float64
+	for _, log := range logs {
+		if log.Status == "error" {
+			continue
+		}
+		pool := ResolveModelPool(log.ActualModel)
+		if pool == "pro" {
+			proCreditsAll += log.Credits
+		} else {
+			freeCreditsAll += log.Credits
+		}
+	}
+	totalCostCNY := proCreditsAll*pricing.ProCostPerCredit() + freeCreditsAll*pricing.FreeCostPerCredit()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"summary": map[string]interface{}{
@@ -710,7 +728,7 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 				return 0
 			}(),
 			"totalCostCNY":     totalCostCNY,
-			"costPerCreditCNY": costPerCredit,
+			"costPerCreditCNY": map[string]float64{"pro": pricing.ProCostPerCredit(), "free": pricing.FreeCostPerCredit()},
 		},
 		"modelBreakdown": modelMap,
 		"poolStatus": map[string]interface{}{
@@ -877,11 +895,80 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-	AuditLog("pricing_update", "admin", fmt.Sprintf("models=%d defaultIn=%.2f defaultOut=%.2f", len(pricing.Models), pricing.DefaultInput, pricing.DefaultOutput))
+	AuditLog("pricing_update", "admin", fmt.Sprintf("freePool=$%.2f proPool=$%.2f purchaseCNY=¥%.4f", pricing.FreePoolPriceUSD, pricing.ProPoolPriceUSD, pricing.PurchasePriceCNY))
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// GET /admin/api/codes
+// GET /admin/api/profit
+func (h *Handler) apiGetProfit(w http.ResponseWriter, r *http.Request) {
+	h.callLogsMu.RLock()
+	var totalUSDConsumed float64
+	var proCreditConsumed float64
+	var freeCreditConsumed float64
+	for _, log := range h.callLogs {
+		pool := ResolveModelPool(log.ActualModel)
+		costUSD := CreditsToCostUSD(log.Credits, pool)
+		totalUSDConsumed += costUSD
+		if pool == "pro" {
+			proCreditConsumed += log.Credits
+		} else {
+			freeCreditConsumed += log.Credits
+		}
+	}
+	h.callLogsMu.RUnlock()
+
+	profit := CalcAdminProfit(totalUSDConsumed, proCreditConsumed, freeCreditConsumed)
+	writeJSON(w, 200, profit)
+}
+
+// POST /admin/api/cost-entry
+func (h *Handler) apiAddCostEntry(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Pool  string           `json:"pool"` // "pro" or "free"
+		Entry config.CostEntry `json:"entry"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if req.Pool != "pro" && req.Pool != "free" {
+		writeJSON(w, 400, map[string]string{"error": "pool must be 'pro' or 'free'"})
+		return
+	}
+	if req.Entry.Count <= 0 || req.Entry.CostCNY <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "count and costCNY must be > 0"})
+		return
+	}
+	if req.Pool == "pro" && req.Entry.Credits <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "credits must be > 0 for PRO"})
+		return
+	}
+	if err := config.AddCostEntry(req.Pool, req.Entry); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	AuditLog("cost_entry_add", "admin", fmt.Sprintf("pool=%s count=%d cost=¥%.2f", req.Pool, req.Entry.Count, req.Entry.CostCNY))
+	writeJSON(w, 200, map[string]bool{"success": true})
+}
+
+// DELETE /admin/api/cost-entry
+func (h *Handler) apiRemoveCostEntry(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Pool string `json:"pool"`
+		ID   string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if err := config.RemoveCostEntry(req.Pool, req.ID); err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+	AuditLog("cost_entry_remove", "admin", fmt.Sprintf("pool=%s id=%s", req.Pool, req.ID))
+	writeJSON(w, 200, map[string]bool{"success": true})
+}
+
 func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
 	codes := config.GetActivationCodes()
 	if codes == nil {
@@ -894,7 +981,7 @@ func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type   string  `json:"type"`   // "balance" | "days"
-		Amount float64 `json:"amount"` // CNY or days
+		Amount float64 `json:"amount"` // USD face value (for balance) or days
 		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
 		Count  int     `json:"count"`  // how many codes to generate
 		Note   string  `json:"note"`

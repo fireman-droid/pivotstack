@@ -525,6 +525,7 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 		OutputTokens:    outputTokens,
 		TotalTokens:     inputTokens + outputTokens,
 		Credits:         credits,
+		CostUSD:         CreditsToCostUSD(credits, ResolveModelPool(actualModel)),
 		Stream:          stream,
 		Status:          "success",
 		Subscription:    tier,

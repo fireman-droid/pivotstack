@@ -136,7 +136,7 @@ function goRecharge() {
           <span class="stat-label">当前余额</span>
           <Wallet :size="18" class="stat-icon" />
         </div>
-        <div class="stat-value balance">¥{{ balanceValue.toFixed(2) }}</div>
+        <div class="stat-value balance">${{ balanceValue.toFixed(2) }}</div>
         <div class="stat-sub" :style="{ color: balanceValue < 1 ? '#ef4444' : '#22c55e' }">
           {{ balanceValue < 1 ? '⚠ 余额不足' : '✓ 账户正常' }}
         </div>
@@ -228,24 +228,27 @@ function goRecharge() {
     </div>
 
     <!-- Pricing -->
-    <div class="section glass pricing-section" v-if="pricing && pricing.models">
-      <h3 class="section-title">实时定价表</h3>
+    <div class="section glass pricing-section" v-if="pricing">
+      <h3 class="section-title">计费标准</h3>
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th>模型名称</th>
-              <th class="text-right">输入 (¥/M)</th>
-              <th class="text-right">输出 (¥/M)</th>
-              <th class="text-right">费率倍率</th>
+              <th>账号池</th>
+              <th class="text-right">单价 ($/credit)</th>
+              <th class="text-right">支持模型</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(p, model) in pricing.models" :key="model">
-              <td class="model-name">{{ model }}</td>
-              <td class="text-right">¥{{ p.inputPricePerM }}</td>
-              <td class="text-right">¥{{ p.outputPricePerM }}</td>
-              <td class="text-right">×{{ p.multiplier }}</td>
+            <tr>
+              <td class="model-name">FREE 池</td>
+              <td class="text-right">${{ pricing.freePoolPriceUSD || 0.04 }}</td>
+              <td class="text-right">sonnet-4.5</td>
+            </tr>
+            <tr>
+              <td class="model-name">PRO 池</td>
+              <td class="text-right">${{ pricing.proPoolPriceUSD || 0.20 }}</td>
+              <td class="text-right">sonnet-4.6, opus-4.6</td>
             </tr>
           </tbody>
         </table>

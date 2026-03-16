@@ -18,6 +18,14 @@ function fmtTime(ts) {
   if (!ts) return '-'
   return new Date(ts).toLocaleString('zh-CN', { hour12: false })
 }
+
+function creditToUSD(credits, model) {
+  if (!credits) return '0.00'
+  const m = (model || '').toLowerCase()
+  const isProPool = m.includes('opus') || (m.includes('sonnet') && (m.includes('4.6') || m.includes('4-6')))
+  const pricePerCredit = isProPool ? 0.20 : 0.04
+  return (credits * pricePerCredit).toFixed(4)
+}
 </script>
 
 <template>
@@ -66,7 +74,7 @@ function fmtTime(ts) {
           </div>
           <div class="meta-item">
             <Coins :size="13" />
-            <span>{{ (log.credits || 0).toFixed(4) }} Credits</span>
+            <span>${{ log.cost_usd ? log.cost_usd.toFixed(4) : creditToUSD(log.credits, log.actual_model || log.original_model) }}</span>
           </div>
           <div class="meta-item" v-if="log.duration_ms">
             <Timer :size="13" />

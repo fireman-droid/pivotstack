@@ -10,7 +10,7 @@ const routes = [
   { path: '/api', name: 'ApiInfo', component: () => import('../views/ApiInfo.vue'), meta: { auth: true } },
   { path: '/logs', name: 'Logs', component: () => import('../views/Logs.vue'), meta: { auth: true } },
   { path: '/pricing', name: 'Pricing', component: () => import('../views/PricingAnalysis.vue'), meta: { auth: true } },
-  { path: '/pricing-config', name: 'PricingConfig', component: () => import('../views/PricingConfig.vue'), meta: { auth: true } },
+  { path: '/pricing-config', redirect: '/pricing' },
   { path: '/codes', name: 'CodeManagement', component: () => import('../views/CodeManagement.vue'), meta: { auth: true } },
   { path: '/abuse', name: 'AbuseMonitor', component: () => import('../views/AbuseMonitor.vue'), meta: { auth: true } },
 

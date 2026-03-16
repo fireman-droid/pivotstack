@@ -79,32 +79,62 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 	// 用户层 tier 决策（必须在 GetNextByTier 之前）
 	uc := getUserContext(r.Context())
-	userTier := ""
+	var keyID string
 	if uc != nil {
-		userTier = uc.KeyTier
+		keyID = uc.KeyID
 	}
 
 	// Abuse prevention: check rate/concurrency limits
-	if uc != nil && uc.KeyID != "" {
+	if keyID != "" {
 		ip := r.RemoteAddr
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 			ip = strings.Split(fwd, ",")[0]
 		}
-		allowed, reason := OnRequestStart(uc.KeyID, strings.TrimSpace(ip))
+		allowed, reason := OnRequestStart(keyID, strings.TrimSpace(ip))
 		if !allowed {
 			h.sendClaudeError(w, 429, "rate_limit_error", "Request blocked: "+reason)
 			return
 		}
-		defer OnRequestEnd(uc.KeyID)
+		defer OnRequestEnd(keyID)
 	}
 
-	tier, effectiveModel := DetermineUserTier(req.Model, userTier)
-	req.Model = effectiveModel
+	// Model pool routing: determined by model, not by user tier
+	// Credit users can use any model; day card restrictions handled by ValidateKeyAccessForModel
+	pool := ResolveModelPool(req.Model)
+	if keyID != "" {
+		info := config.FindApiKeyByID(keyID)
+		if info != nil {
+			_, err := config.ValidateKeyAccessForModel(info, pool)
+			if err != nil {
+				h.sendClaudeError(w, 403, "forbidden", err.Error())
+				return
+			}
+		}
+	}
+
+	// Billing: PreAuthorize – lock estimated cost before calling upstream
+	var preChargedUSD float64
+	if keyID != "" {
+		estimatedInput := estimateClaudeRequestInputTokens(&req)
+		maxTokens := 4096
+		if req.MaxTokens > 0 {
+			maxTokens = req.MaxTokens
+		}
+		var preErr error
+		preChargedUSD, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
+		if preErr != nil {
+			h.sendClaudeError(w, 402, "insufficient_balance", preErr.Error())
+			return
+		}
+	}
+
+	tier := DeterminePoolTier(req.Model)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
 		account := h.pool.GetNextByTier(tier)
 		if account == nil {
+			RefundPreAuth(keyID, preChargedUSD) // refund on no account
 			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))
 			return
 		}
@@ -123,6 +153,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
 		if validateErr != nil {
 			h.pool.ReleaseAccount(account.ID)
+			RefundPreAuth(keyID, preChargedUSD)
 			h.sendClaudeError(w, 400, "invalid_request_error", validateErr.Error())
 			return
 		}
@@ -140,16 +171,17 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		// 转换请求
 		kiroPayload := ClaudeToKiro(&req, thinking)
 
-		// 流式或非流式
+		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
 		if req.Stream {
-			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
+			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
 		} else {
-			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc)
+			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
 		}
 		return // 成功或已处理错误，退出循环
 	}
 
-	// 所有重试都失败
+	// 所有重试都失败 – refund pre-auth
+	RefundPreAuth(keyID, preChargedUSD)
 	h.recordFailure()
 	errMsg := "All accounts failed"
 	if lastErr != nil {
@@ -159,7 +191,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -554,11 +586,14 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: deduct balance for credit/hybrid plans
-	if costCNY, billErr := TryDeductBalance(uc, model, inputTokens, outputTokens); billErr != nil {
-		fmt.Printf("[Billing] WARN: deduction failed for key %s: %s\n", uc.KeyID, billErr.Error())
-	} else if costCNY > 0 {
-		_ = costCNY // logged inside TryDeductBalance
+	// Billing: Reconcile pre-authorized amount with actual credits
+	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+		actualCredits := credits
+		if actualCredits <= 0 {
+			// Kiro API didn't return credits – fallback to estimation
+			actualCredits = EstimateCredits(outputTokens, inputTokens)
+		}
+		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
 	}
 
 	// 发送 message_delta
@@ -589,7 +624,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -629,6 +664,10 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	if err != nil {
 		h.recordFailure()
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+		// Billing: refund pre-auth on API failure
+		if uc != nil {
+			RefundPreAuth(uc.KeyID, preChargedUSD)
+		}
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
 			payloadKB = len(payloadBytes) / 1024
@@ -665,11 +704,13 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: deduct balance for credit/hybrid plans
-	if costCNY, billErr := TryDeductBalance(uc, model, inputTokens, outputTokens); billErr != nil {
-		fmt.Printf("[Billing] WARN: deduction failed for key %s: %s\n", uc.KeyID, billErr.Error())
-	} else if costCNY > 0 {
-		_ = costCNY
+	// Billing: Reconcile pre-authorized amount with actual credits
+	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+		actualCredits := credits
+		if actualCredits <= 0 {
+			actualCredits = EstimateCredits(outputTokens, inputTokens)
+		}
+		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
 	}
 
 	stopReason := "end_turn"

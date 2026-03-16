@@ -61,7 +61,7 @@ async function handleRedeem() {
           <Sparkles :size="18" style="margin-right:12px;flex-shrink:0" />
           <div v-if="result.type === 'balance'">
             <strong>兑换成功！</strong>
-            <p>账户余额已增加 ¥{{ (result.amount || 0).toFixed(2) }}</p>
+            <p>账户余额已增加 ${{ (result.amount || 0).toFixed(2) }}</p>
           </div>
           <div v-else-if="result.type === 'time'">
             <strong>兑换成功！</strong>

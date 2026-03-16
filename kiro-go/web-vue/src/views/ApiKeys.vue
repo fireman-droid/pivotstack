@@ -67,10 +67,12 @@ async function deleteKey(k) {
   } catch { toastError('删除失败') }
 }
 
+const CNY_PER_USD = 0.05 // $1 face value = ¥0.05
+
 function startEdit(k) {
   editingId.value = k.id
   editForm.note = k.note || ''
-  editForm.balance = k.balance || 0
+  editForm.balance = ((k.balance || 0) * CNY_PER_USD).toFixed(2) // $ → ¥ for admin input
   editForm.expiresAt = k.expiresAt || 0
 }
 
@@ -82,7 +84,7 @@ async function saveEdit(k) {
   try {
     const body = {
       note: editForm.note,
-      balance: Number(editForm.balance),
+      balance: Number(editForm.balance) / CNY_PER_USD, // ¥ → $ face value
       expiresAt: Number(editForm.expiresAt),
     }
     const res = await api(`/apikeys/${k.id}`, {
@@ -140,7 +142,7 @@ function subscriptionInfo(k) {
   }
   if (k.balance !== undefined && k.balance !== null) {
     const cls = k.balance < 1 ? 'danger' : 'ok'
-    parts.push({ label: '余额', value: `¥${k.balance.toFixed(2)}`, class: cls })
+    parts.push({ label: '余额', value: `$${k.balance.toFixed(2)}`, class: cls })
   }
   return parts
 }
@@ -334,7 +336,7 @@ onMounted(loadKeys)
               <div class="info-cell">
                 <div class="info-label">余额</div>
                 <div class="info-value" :class="(k.balance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
-                  ¥{{ (k.balance || 0).toFixed(2) }}
+                  ${{ (k.balance || 0).toFixed(2) }}
                 </div>
               </div>
               <div class="info-cell">

@@ -203,12 +203,16 @@ func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info 
 	fmt.Printf("[Redeem] key=%s code=%s type=%s balance=¥%.2f expiresAt=%d\n",
 		info.ID[:8], req.Code, codeType, updated.Balance, updated.ExpiresAt)
 
-	// Find the code amount for receipt
+	// Find the code amount for receipt (convert CNY → face-value USD)
 	var amount float64
 	codes := config.GetActivationCodes()
 	for _, ac := range codes {
 		if ac.Code == req.Code {
-			amount = ac.Amount
+			if ac.Type == "balance" {
+				amount = ac.Amount / config.CNYPerUSDFace // ¥ → $ face value
+			} else {
+				amount = ac.Amount // days: keep as-is
+			}
 			break
 		}
 	}

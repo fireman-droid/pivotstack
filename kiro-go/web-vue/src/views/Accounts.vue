@@ -132,6 +132,7 @@ async function deleteBanned() {
     const data = await res.json()
     if (data.success) {
       success(`已删除 ${data.deleted} 个封禁账号`)
+      store.filterStatus = 'all'
       await store.load()
     } else {
       error(data.error || '删除失败')
@@ -474,7 +475,7 @@ async function submitImport() {
 
     <!-- Footer -->
     <div class="flex items-center justify-between pt-6 border-t border-[var(--border)] text-xs font-bold text-[var(--text)]-secondary">
-      <span>显示 {{ (currentPage - 1) * pageSize + 1 }}-{{ Math.min(currentPage * pageSize, store.filtered.length) }} / {{ store.filtered.length }} 个账号（共 {{ store.accounts.length }}）</span>
+      <span>显示 {{ store.filtered.length > 0 ? (currentPage - 1) * pageSize + 1 : 0 }}-{{ Math.min(currentPage * pageSize, store.filtered.length) }} / {{ store.filtered.length }} 个账号（共 {{ store.accounts.length }}）</span>
       <span v-if="store.selectedIds.size">已选 {{ store.selectedIds.size }} 个</span>
     </div>
   </div>

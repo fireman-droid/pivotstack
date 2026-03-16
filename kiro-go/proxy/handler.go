@@ -99,6 +99,7 @@ type CallLog struct {
 	OutputTokens    int     `json:"output_tokens"`
 	TotalTokens     int     `json:"total_tokens"`
 	Credits         float64 `json:"credits,omitempty"`
+	CostUSD         float64 `json:"cost_usd,omitempty"`
 	Stream          bool    `json:"stream"`
 	Error           string  `json:"error,omitempty"`
 	PayloadKB       int     `json:"payload_kb,omitempty"`

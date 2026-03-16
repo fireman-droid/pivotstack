@@ -3,128 +3,126 @@ package proxy
 import (
 	"fmt"
 	"kiro-api-proxy/config"
+	"strings"
 )
 
-// PricingSnapshot captures pricing at request start to avoid mid-request changes.
-type PricingSnapshot struct {
-	Models         map[string]config.ModelPricing
-	DefaultInput   float64
-	DefaultOutput  float64
-	MinRequestCost float64
+const (
+	CREDIT_TO_USD = 2.0 // 1 Kiro credit = $2 USD face value
+)
+
+// ResolveModelPool determines pool type from model name.
+// 4.5 → "free", 4.6/opus → "pro"
+func ResolveModelPool(model string) string {
+	base := strings.ToLower(model)
+	if strings.Contains(base, "4.6") || strings.Contains(base, "opus") {
+		return "pro"
+	}
+	return "free"
 }
 
-// SnapshotPricing captures the current pricing config for use during a request.
-func SnapshotPricing() PricingSnapshot {
+// PoolPriceUSD returns the USD price per credit for a pool.
+func PoolPriceUSD(pool string) float64 {
 	p := config.GetPricing()
-	snap := PricingSnapshot{
-		DefaultInput:   p.DefaultInput,
-		DefaultOutput:  p.DefaultOutput,
-		MinRequestCost: p.MinRequestCost,
-		Models:         make(map[string]config.ModelPricing),
+	if pool == "pro" {
+		return p.ProPoolPriceUSD
 	}
-	for k, v := range p.Models {
-		snap.Models[k] = v
-	}
-	return snap
+	return p.FreePoolPriceUSD
 }
 
-// CalcCostWithSnapshot calculates the cost in CNY using a pricing snapshot.
-func CalcCostWithSnapshot(snap PricingSnapshot, model string, inputTokens, outputTokens int) float64 {
-	rate, ok := snap.Models[model]
-	if !ok {
-		rate = config.ModelPricing{
-			InputPricePerM:  snap.DefaultInput,
-			OutputPricePerM: snap.DefaultOutput,
-		}
-	}
-	cost := float64(inputTokens)/1e6*rate.InputPricePerM +
-		float64(outputTokens)/1e6*rate.OutputPricePerM
-
-	minCost := snap.MinRequestCost
-	if minCost <= 0 {
-		minCost = 0.0001
-	}
-	if cost < minCost {
-		cost = minCost
-	}
-	return cost
+// CreditsToCostUSD converts credits to USD cost based on pool.
+func CreditsToCostUSD(credits float64, pool string) float64 {
+	return credits * PoolPriceUSD(pool)
 }
 
-// CalcCost calculates the cost using live pricing (for backward compat).
-func CalcCost(model string, inputTokens, outputTokens int) float64 {
-	return CalcCostWithSnapshot(SnapshotPricing(), model, inputTokens, outputTokens)
+// EstimateCredits estimates credits from max_tokens (rough estimation for pre-auth).
+// Based on empirical formula: credit ≈ 0.0036268×(inputK) + 0.0001092735×(outputK) + 0.00948186
+func EstimateCredits(maxTokens, estimatedInput int) float64 {
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	if estimatedInput <= 0 {
+		estimatedInput = 1000
+	}
+	return 0.0036268*float64(estimatedInput)/1000 +
+		0.0001092735*float64(maxTokens)/1000 + 0.00948186
 }
 
-// PreAuthorize pre-deducts estimated cost at request start.
-// Uses max_tokens to estimate output cost. Returns (preChargedAmount, pricingSnapshot, error).
-func PreAuthorize(keyID string, model string, maxTokens int, estimatedInputTokens int) (float64, PricingSnapshot, error) {
+// PreAuthorize pre-deducts estimated cost (in USD) at request start.
+// Returns (preChargedUSD, error). Returns 0 if action="free" (no charge needed).
+func PreAuthorize(keyID string, model string, maxTokens, estimatedInput int) (float64, error) {
 	info := config.FindApiKeyByID(keyID)
 	if info == nil {
-		return 0, PricingSnapshot{}, nil
-	}
-	if info.Plan != "credit" && info.Plan != "hybrid" {
-		return 0, SnapshotPricing(), nil // no pre-auth for timed plans
+		return 0, nil
 	}
 
-	snap := SnapshotPricing()
-
-	// Estimate: use requested max_tokens as output estimate, 1000 as default input estimate
-	estInput := estimatedInputTokens
-	if estInput <= 0 {
-		estInput = 1000
-	}
-	estOutput := maxTokens
-	if estOutput <= 0 {
-		estOutput = 4096 // default max_tokens
+	pool := ResolveModelPool(model)
+	action, err := config.ValidateKeyAccessForModel(info, pool)
+	if err != nil {
+		return 0, err
 	}
 
-	estimatedCost := CalcCostWithSnapshot(snap, model, estInput, estOutput)
+	if action == "free" {
+		return 0, nil // day card covers this, no charge
+	}
 
-	ok, remaining := config.DeductKeyBalance(keyID, estimatedCost)
+	// Estimate credits and convert to USD
+	estCredits := EstimateCredits(maxTokens, estimatedInput)
+	estCostUSD := CreditsToCostUSD(estCredits, pool)
+
+	ok, remaining := config.DeductKeyBalance(keyID, estCostUSD)
 	if !ok {
-		return 0, snap, fmt.Errorf("insufficient balance (need ¥%.4f estimated, have ¥%.4f)", estimatedCost, remaining)
+		return 0, fmt.Errorf("insufficient balance (need $%.4f, have $%.4f)", estCostUSD, remaining)
 	}
 
-	fmt.Printf("[Billing] PreAuth key=%s model=%s est_cost=¥%.4f remaining=¥%.4f\n",
-		keyID[:8], model, estimatedCost, remaining)
+	fmt.Printf("[Billing] PreAuth key=%s model=%s pool=%s est_credits=%.4f est_cost=$%.4f remaining=$%.4f\n",
+		keyID[:8], model, pool, estCredits, estCostUSD, remaining)
 
-	return estimatedCost, snap, nil
+	return estCostUSD, nil
 }
 
 // Reconcile settles the difference between pre-charged and actual cost.
-// If actual < preCharged, refunds the difference. If actual > preCharged, deducts more.
-func Reconcile(keyID string, snap PricingSnapshot, model string, inputTokens, outputTokens int, preCharged float64) float64 {
+// actualCredits comes from Kiro API response. Returns actual cost in USD.
+func Reconcile(keyID, model string, actualCredits, preCharged float64) float64 {
 	info := config.FindApiKeyByID(keyID)
 	if info == nil {
 		return 0
 	}
-	if info.Plan != "credit" && info.Plan != "hybrid" {
-		return 0
+
+	pool := ResolveModelPool(model)
+	action, _ := config.ValidateKeyAccessForModel(info, pool)
+	if action == "free" {
+		return 0 // no charge for day card users
 	}
 
-	actualCost := CalcCostWithSnapshot(snap, model, inputTokens, outputTokens)
-	diff := actualCost - preCharged
+	actualCostUSD := CreditsToCostUSD(actualCredits, pool)
+	diff := actualCostUSD - preCharged
 
 	if diff > 0 {
-		// Need to charge more
 		ok, _ := config.DeductKeyBalance(keyID, diff)
 		if !ok {
-			// Can't charge more, but request already completed - accept the loss
-			fmt.Printf("[Billing] Reconcile key=%s UNDERPAID by ¥%.4f\n", keyID[:8], diff)
+			fmt.Printf("[Billing] Reconcile key=%s UNDERPAID by $%.4f\n", keyID[:8], diff)
 		}
 	} else if diff < 0 {
-		// Refund overpayment
 		config.AddKeyBalance(keyID, -diff)
 	}
 
-	fmt.Printf("[Billing] Reconcile key=%s actual=¥%.4f preCharged=¥%.4f diff=¥%.4f\n",
-		keyID[:8], actualCost, preCharged, diff)
+	fmt.Printf("[Billing] Reconcile key=%s pool=%s actual_credits=%.4f actual_cost=$%.4f preCharged=$%.4f diff=$%.4f\n",
+		keyID[:8], pool, actualCredits, actualCostUSD, preCharged, diff)
 
-	return actualCost
+	return actualCostUSD
 }
 
-// TryDeductBalance is the simple post-request deduction (fallback for non-preauth flows).
-func TryDeductBalance(uc *UserContext, model string, inputTokens, outputTokens int) (costCNY float64, err error) {
+// RefundPreAuth fully refunds a pre-authorized amount (on request failure).
+func RefundPreAuth(keyID string, preCharged float64) {
+	if preCharged > 0 && keyID != "" {
+		config.AddKeyBalance(keyID, preCharged)
+		fmt.Printf("[Billing] Refund key=%s amount=$%.4f\n", keyID[:8], preCharged)
+	}
+}
+
+// TryDeductBalance is the simple post-request deduction (fallback if pre-auth not used).
+// Uses actual credits from Kiro API. Returns (costUSD, error).
+func TryDeductBalance(uc *UserContext, model string, actualCredits float64) (float64, error) {
 	if uc == nil || uc.KeyID == "" {
 		return 0, nil
 	}
@@ -134,18 +132,49 @@ func TryDeductBalance(uc *UserContext, model string, inputTokens, outputTokens i
 		return 0, nil
 	}
 
-	if info.Plan != "credit" && info.Plan != "hybrid" {
+	pool := ResolveModelPool(model)
+	action, err := config.ValidateKeyAccessForModel(info, pool)
+	if err != nil {
+		return 0, err
+	}
+	if action == "free" {
 		return 0, nil
 	}
 
-	cost := CalcCost(model, inputTokens, outputTokens)
-	ok, remaining := config.DeductKeyBalance(uc.KeyID, cost)
+	costUSD := CreditsToCostUSD(actualCredits, pool)
+	ok, remaining := config.DeductKeyBalance(uc.KeyID, costUSD)
 	if !ok {
-		return cost, fmt.Errorf("insufficient balance (need ¥%.4f, have ¥%.4f)", cost, remaining)
+		return costUSD, fmt.Errorf("insufficient balance (need $%.4f, have $%.4f)", costUSD, remaining)
 	}
 
-	fmt.Printf("[Billing] key=%s model=%s in=%d out=%d cost=¥%.4f remaining=¥%.4f\n",
-		uc.KeyID[:8], model, inputTokens, outputTokens, cost, remaining)
+	fmt.Printf("[Billing] key=%s model=%s pool=%s credits=%.4f cost=$%.4f remaining=$%.4f\n",
+		uc.KeyID[:8], model, pool, actualCredits, costUSD, remaining)
 
-	return cost, nil
+	return costUSD, nil
+}
+
+// CalcAdminProfit calculates profit for admin dashboard using per-pool costs.
+func CalcAdminProfit(totalUSDConsumed, proCreditConsumed, freeCreditConsumed float64) map[string]float64 {
+	pricing := config.GetPricing()
+	proCostCNY := proCreditConsumed * pricing.ProCostPerCredit()
+	freeCostCNY := freeCreditConsumed * pricing.FreeCostPerCredit()
+	totalCostCNY := proCostCNY + freeCostCNY
+
+	// Convert face-value USD to real CNY ($1 face = ¥0.05 real)
+	revenueCNY := totalUSDConsumed * config.CNYPerUSDFace
+	profitCNY := revenueCNY - totalCostCNY
+
+	margin := 0.0
+	if revenueCNY > 0 {
+		margin = profitCNY / revenueCNY * 100
+	}
+	return map[string]float64{
+		"revenue_usd":    totalUSDConsumed,
+		"revenue_cny":    revenueCNY,
+		"pro_cost_cny":   proCostCNY,
+		"free_cost_cny":  freeCostCNY,
+		"total_cost_cny": totalCostCNY,
+		"profit_cny":     profitCNY,
+		"margin_percent": margin,
+	}
 }
