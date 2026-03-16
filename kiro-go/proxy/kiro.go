@@ -246,6 +246,21 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			}
 			fmt.Printf("[KiroAPI] Endpoint %s error %d | payload: %dKB | response: %s\n",
 				ep.Name, resp.StatusCode, len(reqBody)/1024, string(errBody))
+			// Debug: print payload details on 400 errors
+			if resp.StatusCode == 400 {
+				toolCount := 0
+				if payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext != nil {
+					toolCount = len(payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools)
+				}
+				histLen := len(payload.ConversationState.History)
+				contentLen := len(payload.ConversationState.CurrentMessage.UserInputMessage.Content)
+				preview := string(reqBody)
+				if len(preview) > 500 {
+					preview = preview[:500]
+				}
+				fmt.Printf("[KiroAPI-DEBUG] 400 details | tools=%d | history=%d msgs | content_len=%d | payload_preview: %s\n",
+					toolCount, histLen, contentLen, preview)
+			}
 			continue
 		}
 
