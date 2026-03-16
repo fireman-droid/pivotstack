@@ -175,6 +175,20 @@ async function batchDelete() {
   success(`已作废 ${ok} 个${fail > 0 ? `，${fail} 个失败` : ''}`)
 }
 
+async function cleanupUsedCodes() {
+  if (!confirm('确认彻底清除所有已作废和已使用的激活码记录？此操作不可恢复。')) return
+  try {
+    const res = await api('/codes/cleanup', { method: 'POST' })
+    if (res.ok) {
+      const data = await res.json()
+      success(`清理成功，共清除了 ${data.cleaned} 条无效记录`)
+      loadCodes()
+    }
+  } catch {
+    toastError('清理失败')
+  }
+}
+
 function copyCode(code) {
   copyToClipboard(code)
   success('已复制')
@@ -441,7 +455,10 @@ onMounted(loadCodes)
           <X class="w-3.5 h-3.5" /> 取消
         </button>
       </div>
-      <div v-else class="flex gap-2">
+      <div v-else class="flex gap-2 shrink-0">
+        <button v-if="stats.used > 0 || stats.total !== stats.unused" @click="cleanupUsedCodes" class="toolbar-btn text-amber-500 hover:bg-amber-500/10 border-amber-500/20 mr-2">
+          <Trash2 class="w-3.5 h-3.5" /> 清理已作废
+        </button>
         <button @click="copyAllUnused" class="toolbar-btn">
           <Copy class="w-3.5 h-3.5" /> 复制全部未使用
         </button>

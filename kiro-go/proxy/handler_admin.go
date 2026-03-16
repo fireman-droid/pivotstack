@@ -138,6 +138,8 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetCodes(w, r)
 	case path == "/codes" && r.Method == "POST":
 		h.apiCreateCodes(w, r)
+	case path == "/codes/cleanup" && r.Method == "POST":
+		h.apiCleanupCodes(w, r)
 	case strings.HasPrefix(path, "/codes/") && r.Method == "DELETE":
 		code := strings.TrimPrefix(path, "/codes/")
 		h.apiDeleteCode(w, r, code)
@@ -979,7 +981,26 @@ func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
 	if codes == nil {
 		codes = []config.ActivationCode{}
 	}
-	json.NewEncoder(w).Encode(codes)
+
+	// Filter out used codes
+	activeCodes := []config.ActivationCode{}
+	for _, c := range codes {
+		if !c.Used {
+			activeCodes = append(activeCodes, c)
+		}
+	}
+
+	json.NewEncoder(w).Encode(activeCodes)
+}
+
+// POST /admin/api/codes/cleanup - physically remove all used codes from data store
+func (h *Handler) apiCleanupCodes(w http.ResponseWriter, r *http.Request) {
+	cleaned := config.CleanupUsedCodes()
+	AuditLog("codes_cleanup", "admin", fmt.Sprintf("Removed %d used codes", cleaned))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"cleaned": cleaned,
+	})
 }
 
 // POST /admin/api/codes - batch create activation codes
