@@ -245,8 +245,7 @@ onUnmounted(() => {
       <div v-if="apiKeys.length" class="relative">
         <Key class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-secondary)] pointer-events-none" />
         <select v-model="keyFilter"
-          class="h-10 pl-9 pr-8 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer hover:border-[var(--primary)] transition-colors"
-          style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 0.5rem center; background-size: 1em;"
+          class="select-arrow h-10 pl-9 pr-8 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer hover:border-[var(--primary)] transition-colors"
         >
           <option value="all">全部 Key</option>
           <option v-for="k in apiKeys" :key="k.id" :value="k.id">
@@ -483,4 +482,10 @@ onUnmounted(() => {
 <style scoped>
 .overflow-x-auto::-webkit-scrollbar { height: 4px; }
 .overflow-x-auto::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+.select-arrow {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 1em;
+}
 </style>
