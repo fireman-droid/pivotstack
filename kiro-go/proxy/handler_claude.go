@@ -172,12 +172,19 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		kiroPayload := ClaudeToKiro(&req, thinking)
 
 		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
+		var shouldRetry bool
 		if req.Stream {
-			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		}
-		return // 成功或已处理错误，退出循环
+		if shouldRetry {
+			h.pool.ReleaseAccount(account.ID)
+			lastErr = fmt.Errorf("429 quota exhausted, retrying with next account")
+			fmt.Printf("[Retry] Account %s got 429, trying next account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
+			continue
+		}
+		return // 成功或已处理非429错误，退出循环
 	}
 
 	// 所有重试都失败 – refund pre-auth
@@ -191,7 +198,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -220,6 +227,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	activeBlockIndex := -1
 	activeBlockType := ""
 	startInputTokens := estimatedInputTokens
+	headersSent := false // 追踪是否已发送SSE数据，用于判断429时能否换号重试
 
 	closeActiveBlock := func() {
 		if activeBlockIndex < 0 {
@@ -457,29 +465,36 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		}
 	}
 
-	// 发送 message_start
-	h.sendSSE(w, flusher, "message_start", map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":            msgID,
-			"type":          "message",
-			"role":          "assistant",
-			"content":       []interface{}{},
-			"model":         model,
-			"stop_reason":   nil,
-			"stop_sequence": nil,
-			"usage": map[string]int{
-				"input_tokens":  startInputTokens,
-				"output_tokens": 0,
+	// message_start 延迟发送，429时可以换号重试
+	sendMessageStart := func() {
+		if headersSent {
+			return
+		}
+		h.sendSSE(w, flusher, "message_start", map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"id":            msgID,
+				"type":          "message",
+				"role":          "assistant",
+				"content":       []interface{}{},
+				"model":         model,
+				"stop_reason":   nil,
+				"stop_sequence": nil,
+				"usage": map[string]int{
+					"input_tokens":  startInputTokens,
+					"output_tokens": 0,
+				},
 			},
-		},
-	})
+		})
+		headersSent = true
+	}
 
 	callback := &KiroStreamCallback{
 		OnText: func(text string, isThinking bool) {
 			if text == "" {
 				return
 			}
+			sendMessageStart()
 			if isThinking {
 				rawThinkingBuilder.WriteString(text)
 			} else {
@@ -488,6 +503,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			processClaudeText(text, isThinking, false)
 		},
 		OnToolUse: func(tu KiroToolUse) {
+			sendMessageStart()
 			tu.Name = RestoreToolName(tu.Name)
 			// 先刷新缓冲区
 			processClaudeText("", false, true)
@@ -542,11 +558,20 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 
 	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.recordFailure()
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota"))
+		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
+		h.pool.RecordError(account.ID, isQuotaErr)
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
 			payloadKB = len(payloadBytes) / 1024
+		}
+		// 429 且还没发送任何SSE数据，可以换号重试
+		if isQuotaErr && !headersSent {
+			fmt.Printf("[429-Retry] Claude Stream | %s → %s | account: %s | payload: %dKB | will retry\n",
+				originalModel, model, account.Email, payloadKB)
+			return true
+		}
+		h.recordFailure()
+		if payloadKB > 0 {
 			fmt.Printf("[ERROR] Claude Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
 		} else {
@@ -562,7 +587,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 				"error": map[string]string{"type": "api_error", "message": err.Error()},
 			})
 		}
-		return
+		return false
 	}
 	processClaudeText("", false, true)
 	if eventThinkingOpen {
@@ -623,10 +648,11 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.sendSSE(w, flusher, "message_stop", map[string]interface{}{
 		"type": "message_stop",
 	})
+	return false
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -664,15 +690,24 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 
 	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
+		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
+		h.pool.RecordError(account.ID, isQuotaErr)
+		payloadKB := 0
+		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
+			payloadKB = len(payloadBytes) / 1024
+		}
+		// 429 可以换号重试
+		if isQuotaErr {
+			fmt.Printf("[429-Retry] Claude NonStream | %s → %s | account: %s | payload: %dKB | will retry\n",
+				originalModel, model, account.Email, payloadKB)
+			return true
+		}
 		h.recordFailure()
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
 		// Billing: refund pre-auth on API failure
 		if uc != nil {
 			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
 		}
-		payloadKB := 0
-		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
-			payloadKB = len(payloadBytes) / 1024
+		if payloadKB > 0 {
 			fmt.Printf("[ERROR] Claude NonStream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
 		} else {
@@ -686,7 +721,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		} else {
 			h.sendClaudeError(w, 500, "api_error", err.Error())
 		}
-		return
+		return false
 	}
 
 	// 合并 thinking 内容（如果有 reasoningContentEvent 的内容）
@@ -741,6 +776,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	resp := KiroToClaudeResponse(finalContent, thinkingContent, toolUses, inputTokens, outputTokens, model)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
+	return false
 }
 
 func (h *Handler) sendClaudeError(w http.ResponseWriter, status int, errType, message string) {

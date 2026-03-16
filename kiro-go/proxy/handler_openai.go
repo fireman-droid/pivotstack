@@ -127,10 +127,17 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 
 		kiroPayload := OpenAIToKiro(&req, thinking)
 
+		var shouldRetry bool
 		if req.Stream {
-			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+		}
+		if shouldRetry {
+			h.pool.ReleaseAccount(account.ID)
+			lastErr = fmt.Errorf("429 quota exhausted, retrying with next account")
+			fmt.Printf("[Retry] Account %s got 429, trying next account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
+			continue
 		}
 		return
 	}
@@ -146,7 +153,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -172,6 +179,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	var credits float64
 	var rawContentBuilder strings.Builder
 	var rawReasoningBuilder strings.Builder
+	headersSent := false
 
 	// Thinking 标签解析状态
 	var textBuffer string
@@ -185,6 +193,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		if content == "" && thinkingState == 2 {
 			return
 		}
+		headersSent = true
 
 		var chunk map[string]interface{}
 
@@ -467,11 +476,19 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 
 	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.recordFailure()
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
+		h.pool.RecordError(account.ID, isQuotaErr)
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
 			payloadKB = len(payloadBytes) / 1024
+		}
+		if isQuotaErr && !headersSent {
+			fmt.Printf("[429-Retry] OpenAI Stream | %s → %s | account: %s | payload: %dKB | will retry\n",
+				originalModel, model, account.Email, payloadKB)
+			return true
+		}
+		h.recordFailure()
+		if payloadKB > 0 {
 			fmt.Printf("[ERROR] OpenAI Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
 		} else {
@@ -482,7 +499,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		if upstreamErr != nil {
 			WriteOpenAIStreamError(w, upstreamErr.ToAppError(""))
 		}
-		return
+		return false
 	}
 
 	// 刷新剩余缓冲区
@@ -553,10 +570,11 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	fmt.Fprintf(w, "data: %s\n\n", string(data))
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	return false
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -584,15 +602,22 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 
 	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.recordFailure()
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
-		// Billing: refund pre-auth on API failure
-		if uc != nil {
-			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
-		}
+		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
+		h.pool.RecordError(account.ID, isQuotaErr)
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
 			payloadKB = len(payloadBytes) / 1024
+		}
+		if isQuotaErr {
+			fmt.Printf("[429-Retry] OpenAI NonStream | %s → %s | account: %s | payload: %dKB | will retry\n",
+				originalModel, model, account.Email, payloadKB)
+			return true
+		}
+		h.recordFailure()
+		if uc != nil {
+			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
+		}
+		if payloadKB > 0 {
 			fmt.Printf("[ERROR] OpenAI NonStream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
 		} else {
@@ -606,7 +631,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		} else {
 			h.sendOpenAIError(w, 500, "server_error", err.Error())
 		}
-		return
+		return false
 	}
 
 	// 解析 content 中的 <thinking> 标签
@@ -648,6 +673,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
+	return false
 }
 
 func (h *Handler) sendOpenAIError(w http.ResponseWriter, status int, errType, message string) {
