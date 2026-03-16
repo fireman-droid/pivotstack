@@ -6,8 +6,9 @@
 .env
 .env.local
 
-# kiro-go 账号数据（含 Token）
+# kiro-go 运行时数据（含 Token、日志）
 kiro-go/data/config.json
+kiro-go/data/call_logs.jsonl
 
 # kiro-gateway 环境变量（已废弃，现在统一用根目录 .env）
 kiro-gateway/.env
