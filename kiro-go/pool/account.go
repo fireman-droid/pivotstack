@@ -193,8 +193,8 @@ func (p *AccountPool) RecordError(id string, isQuotaError bool) {
 	p.errorCounts[id]++
 
 	if isQuotaError {
-		// 配额错误，冷却 5 分钟（临时限速，非月度额度用尽）
-		p.cooldowns[id] = time.Now().Add(5 * time.Minute)
+		// 配额错误，冷却 30 秒（号多时短冷却即可）
+		p.cooldowns[id] = time.Now().Add(30 * time.Second)
 	} else if p.errorCounts[id] >= 3 {
 		// 连续 3 次错误，冷却 1 分钟
 		p.cooldowns[id] = time.Now().Add(time.Minute)

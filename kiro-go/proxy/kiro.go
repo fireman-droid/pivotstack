@@ -218,7 +218,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
-			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...\n", ep.Name)
+			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying fallback...\n", ep.Name)
 			lastUpstreamErr = &UpstreamError{
 				StatusCode: 429,
 				Endpoint:   ep.Name,
@@ -226,7 +226,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 				AccountID:  account.ID,
 			}
 			lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
-			continue
+			continue // 试第二端点（独立限流，相当于双倍额度）
 		}
 
 		if resp.StatusCode != 200 {
