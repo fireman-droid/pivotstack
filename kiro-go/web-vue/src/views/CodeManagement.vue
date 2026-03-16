@@ -404,23 +404,23 @@ onMounted(loadCodes)
 
     <!-- 搜索 & 筛选 & 批量操作 -->
     <div class="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
-      <div class="flex gap-2 items-center flex-wrap">
+      <div class="flex gap-2 items-center overflow-x-auto pb-1 -mb-1 scrollbar-hide shrink-0 whitespace-nowrap">
         <!-- 搜索 -->
-        <div class="relative">
+        <div class="relative shrink-0">
           <Search class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]" />
           <input v-model="searchQuery" placeholder="搜索激活码 / 备注 / 使用方..."
             class="h-9 pl-9 pr-3 w-60 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs outline-none focus:border-[var(--primary)] transition-colors" />
         </div>
         <!-- 类型筛选 -->
-        <div class="flex gap-1 items-center">
+        <div class="flex gap-1 items-center shrink-0">
           <span class="text-[10px] text-[var(--text-secondary)] font-bold mr-1">类型</span>
           <button @click="filterType = 'all'" class="filter-btn" :class="filterType === 'all' ? 'filter-btn-active' : ''">全部</button>
           <button @click="filterType = 'balance'" class="filter-btn" :class="filterType === 'balance' ? 'filter-btn-active' : ''">💰 余额</button>
           <button @click="filterType = 'time'" class="filter-btn" :class="filterType === 'time' ? 'filter-btn-active' : ''">⏱️ 时间</button>
         </div>
-        <span class="text-[var(--border)] mx-1">|</span>
+        <span class="text-[var(--border)] mx-1 shrink-0">|</span>
         <!-- 状态筛选 -->
-        <div class="flex gap-1 items-center">
+        <div class="flex gap-1 items-center shrink-0">
           <span class="text-[10px] text-[var(--text-secondary)] font-bold mr-1">状态</span>
           <button @click="filterStatus = 'all'" class="filter-btn" :class="filterStatus === 'all' ? 'filter-btn-active' : ''">全部</button>
           <button @click="filterStatus = 'unused'" class="filter-btn" :class="filterStatus === 'unused' ? 'filter-btn-active' : ''">可用</button>
@@ -449,7 +449,8 @@ onMounted(loadCodes)
     </div>
 
     <!-- 列表 -->
-    <div class="modern-card overflow-hidden">
+    <div class="modern-card overflow-x-auto scrollbar-hide">
+      <div class="min-w-[900px] flex flex-col">
       <!-- 表头 -->
       <div class="code-table-row" style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); border-bottom: 1px solid var(--border); padding: 10px 20px;">
         <div style="cursor: pointer; display: flex; align-items: center; justify-content: center;" @click="toggleSelectAll">
@@ -521,6 +522,7 @@ onMounted(loadCodes)
 
       <!-- 加载中 -->
       <div v-if="loading" class="text-center py-12 text-sm text-[var(--text-secondary)]">加载中...</div>
+      </div>
     </div>
 
     <!-- 分页 -->
