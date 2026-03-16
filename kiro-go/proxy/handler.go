@@ -67,8 +67,10 @@ const userCtxKey contextKeyType = "userCtx"
 
 // UserContext holds per-request API key context.
 type UserContext struct {
-	KeyID   string
-	KeyTier string // "free" | "pro"
+	KeyID         string
+	KeyTier       string // "free" | "pro"
+	ActualPaidUSD float64
+	ActualGiftUSD float64
 }
 
 func withUserContext(r *http.Request, uc *UserContext) *http.Request {
@@ -99,6 +101,8 @@ type CallLog struct {
 	OutputTokens    int     `json:"output_tokens"`
 	TotalTokens     int     `json:"total_tokens"`
 	Credits         float64 `json:"credits,omitempty"`
+	PaidCredits     float64 `json:"paid_credits,omitempty"`
+	GiftedCredits   float64 `json:"gifted_credits,omitempty"`
 	CostUSD         float64 `json:"cost_usd,omitempty"`
 	Stream          bool    `json:"stream"`
 	Error           string  `json:"error,omitempty"`

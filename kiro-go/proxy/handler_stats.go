@@ -514,6 +514,30 @@ func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier 
 func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64, uc *UserContext) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
+	costUSD := CreditsToCostUSD(credits, ResolveModelPool(actualModel))
+	var paidCostUSD, giftCostUSD float64
+	var paidCredits, giftedCredits float64
+
+	if uc != nil && uc.KeyID != "" {
+		paidCostUSD = uc.ActualPaidUSD
+		giftCostUSD = uc.ActualGiftUSD
+		costUSD = paidCostUSD // Only report actual paid Revenue in metrics!
+
+		// Derive credits back from proportion of cost, or if cost is 0 and credits exist, this might just be 0
+		totalCost := paidCostUSD + giftCostUSD
+		if totalCost > 0 {
+			paidRatio := paidCostUSD / totalCost
+			paidCredits = credits * paidRatio
+			giftedCredits = credits - paidCredits
+		} else if credits > 0 {
+			// If action="free" and no USD charged
+			paidCredits = 0
+			giftedCredits = 0
+		}
+	} else {
+		paidCredits = credits
+	}
+
 	entry := CallLog{
 		Time:            now.In(cst).Format("01-02 15:04:05"),
 		Timestamp:       now.Unix(),
@@ -525,7 +549,9 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 		OutputTokens:    outputTokens,
 		TotalTokens:     inputTokens + outputTokens,
 		Credits:         credits,
-		CostUSD:         CreditsToCostUSD(credits, ResolveModelPool(actualModel)),
+		PaidCredits:     paidCredits,
+		GiftedCredits:   giftedCredits,
+		CostUSD:         costUSD,
 		Stream:          stream,
 		Status:          "success",
 		Subscription:    tier,

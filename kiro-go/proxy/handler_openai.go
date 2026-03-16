@@ -72,7 +72,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Billing: PreAuthorize – lock estimated cost before calling upstream
-	var preChargedUSD float64
+	var preChargedPaid, preChargedGift float64
 	if keyID != "" {
 		estimatedInput := estimateOpenAIRequestInputTokens(&req)
 		maxTokens := 4096
@@ -80,7 +80,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 			maxTokens = req.MaxTokens
 		}
 		var preErr error
-		preChargedUSD, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
+		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
 		if preErr != nil {
 			h.sendOpenAIError(w, 402, "insufficient_balance", preErr.Error())
 			return
@@ -92,7 +92,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		account := h.pool.GetNextByTier(tier)
 		if account == nil {
-			RefundPreAuth(keyID, preChargedUSD)
+			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
 			h.sendOpenAIError(w, 503, "server_error", fmt.Sprintf("No available accounts in %s pool", tier))
 			return
 		}
@@ -110,7 +110,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
 		if validateErr != nil {
 			h.pool.ReleaseAccount(account.ID)
-			RefundPreAuth(keyID, preChargedUSD)
+			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
 			h.sendOpenAIError(w, 400, "invalid_request_error", validateErr.Error())
 			return
 		}
@@ -128,15 +128,15 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		kiroPayload := OpenAIToKiro(&req, thinking)
 
 		if req.Stream {
-			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
+			h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
+			h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		}
 		return
 	}
 
 	// 所有重试都失败 – refund pre-auth
-	RefundPreAuth(keyID, preChargedUSD)
+	RefundPreAuth(keyID, preChargedPaid, preChargedGift)
 	h.recordFailure()
 	errMsg := "All accounts failed"
 	if lastErr != nil {
@@ -146,7 +146,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -512,12 +512,14 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
 	// Billing: Reconcile pre-authorized amount with actual credits
-	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
 		actualCredits := credits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
+		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		uc.ActualPaidUSD = actualPaid
+		uc.ActualGiftUSD = actualGift
 	}
 
 	// 发送结束
@@ -554,7 +556,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -586,7 +588,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
 		// Billing: refund pre-auth on API failure
 		if uc != nil {
-			RefundPreAuth(uc.KeyID, preChargedUSD)
+			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
 		}
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
@@ -623,12 +625,14 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
 	// Billing: Reconcile pre-authorized amount with actual credits
-	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
 		actualCredits := credits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
+		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		uc.ActualPaidUSD = actualPaid
+		uc.ActualGiftUSD = actualGift
 	}
 
 	stopReason := "stop"

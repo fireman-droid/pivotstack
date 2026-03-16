@@ -92,21 +92,22 @@ type Account struct {
 
 // ApiKeyInfo represents a commercial API key with subscription and usage stats.
 type ApiKeyInfo struct {
-	ID        string           `json:"id"`
-	Key       string           `json:"key"`
-	Tier      string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
-	Plan      string           `json:"plan"`           // "timed" | "credit" | "hybrid"
-	ExpiresAt int64            `json:"expiresAt"`      // Unix seconds, 0 = never
-	Enabled   bool             `json:"enabled"`
-	Balance   float64          `json:"balance,omitempty"` // USD balance (face value, credit/hybrid mode)
-	Note      string           `json:"note,omitempty"`
-	CreatedAt int64            `json:"createdAt"`
-	LastUsed  int64            `json:"lastUsed,omitempty"`
-	Requests  int64            `json:"requests"`
-	Errors    int64            `json:"errors"`
-	Tokens    int64            `json:"tokens"`
-	Credits   float64          `json:"credits"` // cumulative credits consumed
-	Models    map[string]int64 `json:"models,omitempty"`
+	ID          string           `json:"id"`
+	Key         string           `json:"key"`
+	Tier        string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
+	Plan        string           `json:"plan"`           // "timed" | "credit" | "hybrid"
+	ExpiresAt   int64            `json:"expiresAt"`      // Unix seconds, 0 = never
+	Enabled     bool             `json:"enabled"`
+	Balance     float64          `json:"balance,omitempty"`     // USD balance (paid via activation codes)
+	GiftBalance float64          `json:"giftBalance,omitempty"` // USD balance (gifted manually by admin)
+	Note        string           `json:"note,omitempty"`
+	CreatedAt   int64            `json:"createdAt"`
+	LastUsed    int64            `json:"lastUsed,omitempty"`
+	Requests    int64            `json:"requests"`
+	Errors      int64            `json:"errors"`
+	Tokens      int64            `json:"tokens"`
+	Credits     float64          `json:"credits"` // cumulative credits consumed
+	Models      map[string]int64 `json:"models,omitempty"`
 }
 
 // ActivationCode represents a redeemable code for balance or time extension.
@@ -938,31 +939,69 @@ func FindApiKeyByID(id string) *ApiKeyInfo {
 }
 
 // DeductKeyBalance atomically deducts amount from an API key's balance.
-// Returns (success, remaining balance).
-func DeductKeyBalance(keyID string, amount float64) (bool, float64) {
+// It prioritizes burning `Balance` (paid) first. If insufficient, it burns `GiftBalance`.
+// Returns (success, remainingTotalBalance, paidAmountDeducted, giftedAmountDeducted).
+func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, float64) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	for i, k := range cfg.ApiKeys {
 		if k.ID == keyID {
-			if cfg.ApiKeys[i].Balance < amount {
-				return false, cfg.ApiKeys[i].Balance
+			totalBalance := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
+			if totalBalance < amount {
+				return false, totalBalance, 0, 0
 			}
-			cfg.ApiKeys[i].Balance -= amount
-			remaining := cfg.ApiKeys[i].Balance
+
+			var paidDeducted, giftedDeducted float64
+
+			// 1. Deduct from true Paid Balance first
+			if cfg.ApiKeys[i].Balance >= amount {
+				cfg.ApiKeys[i].Balance -= amount
+				paidDeducted = amount
+			} else {
+				// Paid balance completely exhausted by this deduction
+				paidDeducted = cfg.ApiKeys[i].Balance
+				remainingAmount := amount - paidDeducted
+				cfg.ApiKeys[i].Balance = 0
+
+				// 2. Fallback to GiftBalance
+				cfg.ApiKeys[i].GiftBalance -= remainingAmount
+				giftedDeducted = remainingAmount
+			}
+
+			remainingTotal := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
 			Save()
-			return true, remaining
+			return true, remainingTotal, paidDeducted, giftedDeducted
 		}
 	}
-	return false, 0
+	return false, 0, 0, 0
 }
 
-// AddKeyBalance adds balance to an API key.
-func AddKeyBalance(keyID string, amount float64) error {
+// AddKeyBalance adds paid balance to an API key. Reverses a deduction (used by RefundPreAuth).
+func AddKeyBalance(keyID string, paidAmount, giftAmount float64) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	for i, k := range cfg.ApiKeys {
 		if k.ID == keyID {
-			cfg.ApiKeys[i].Balance += amount
+			if paidAmount != 0 {
+				cfg.ApiKeys[i].Balance += paidAmount
+			}
+			if giftAmount != 0 {
+				cfg.ApiKeys[i].GiftBalance += giftAmount
+			}
+			return Save()
+		}
+	}
+	return fmt.Errorf("api key not found: %s", keyID)
+}
+
+// SetKeyBalances specifically sets both balance fields (used by admin panel).
+func SetKeyBalances(keyID string, paidBalance float64, giftBalance float64) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			cfg.ApiKeys[i].Balance = paidBalance
+			cfg.ApiKeys[i].GiftBalance = giftBalance
 			return Save()
 		}
 	}

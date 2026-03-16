@@ -1,0 +1,6 @@
+Found Key: sk-f10f5a4ce3b057ebb6b7d4adc34d878d
+Initial DB State -> Balance: 1.9961912543706, GiftBalance: 0
+Making a small API request...
+API Error: {"debug":{"account_id":"d1ecef86-6dc4-4e06-a9fd-5cecebe5de09","upstream_status_code":429,"upstream_endpoint":"AmazonQ","upstream_body_snippet":"quota exhausted"},"error":{"message":"Upstream rate limit exceeded. Please retry later.","retryable":true,"type":"rate_limit"}}
+
+Final DB State -> Balance: 1.9961912543706, GiftBalance: 0

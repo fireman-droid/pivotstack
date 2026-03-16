@@ -113,7 +113,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	}
 
 	// Billing: PreAuthorize – lock estimated cost before calling upstream
-	var preChargedUSD float64
+	var preChargedPaid, preChargedGift float64
 	if keyID != "" {
 		estimatedInput := estimateClaudeRequestInputTokens(&req)
 		maxTokens := 4096
@@ -121,7 +121,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 			maxTokens = req.MaxTokens
 		}
 		var preErr error
-		preChargedUSD, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
+		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
 		if preErr != nil {
 			h.sendClaudeError(w, 402, "insufficient_balance", preErr.Error())
 			return
@@ -134,7 +134,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		// 从对应号池获取账号
 		account := h.pool.GetNextByTier(tier)
 		if account == nil {
-			RefundPreAuth(keyID, preChargedUSD) // refund on no account
+			RefundPreAuth(keyID, preChargedPaid, preChargedGift) // refund on no account
 			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))
 			return
 		}
@@ -153,7 +153,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
 		if validateErr != nil {
 			h.pool.ReleaseAccount(account.ID)
-			RefundPreAuth(keyID, preChargedUSD)
+			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
 			h.sendClaudeError(w, 400, "invalid_request_error", validateErr.Error())
 			return
 		}
@@ -173,15 +173,15 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
 		if req.Stream {
-			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
+			h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedUSD)
+			h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		}
 		return // 成功或已处理错误，退出循环
 	}
 
 	// 所有重试都失败 – refund pre-auth
-	RefundPreAuth(keyID, preChargedUSD)
+	RefundPreAuth(keyID, preChargedPaid, preChargedGift)
 	h.recordFailure()
 	errMsg := "All accounts failed"
 	if lastErr != nil {
@@ -191,7 +191,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -587,13 +587,15 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
 	// Billing: Reconcile pre-authorized amount with actual credits
-	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
 		actualCredits := credits
 		if actualCredits <= 0 {
 			// Kiro API didn't return credits – fallback to estimation
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
+		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		uc.ActualPaidUSD = actualPaid
+		uc.ActualGiftUSD = actualGift
 	}
 
 	// 发送 message_delta
@@ -624,7 +626,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedUSD float64) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -666,7 +668,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
 		// Billing: refund pre-auth on API failure
 		if uc != nil {
-			RefundPreAuth(uc.KeyID, preChargedUSD)
+			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
 		}
 		payloadKB := 0
 		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
@@ -705,12 +707,14 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
 	// Billing: Reconcile pre-authorized amount with actual credits
-	if uc != nil && uc.KeyID != "" && preChargedUSD > 0 {
+	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
 		actualCredits := credits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		Reconcile(uc.KeyID, model, actualCredits, preChargedUSD)
+		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		uc.ActualPaidUSD = actualPaid
+		uc.ActualGiftUSD = actualGift
 	}
 
 	stopReason := "end_turn"

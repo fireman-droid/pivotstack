@@ -839,11 +839,12 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Plan      *string  `json:"plan"`
-		ExpiresAt *int64   `json:"expiresAt"`
-		Enabled   *bool    `json:"enabled"`
-		Balance   *float64 `json:"balance"`
-		Note      *string  `json:"note"`
+		Plan        *string  `json:"plan"`
+		ExpiresAt   *int64   `json:"expiresAt"`
+		Enabled     *bool    `json:"enabled"`
+		Balance     *float64 `json:"balance"`
+		GiftBalance *float64 `json:"giftBalance"`
+		Note        *string  `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -874,6 +875,9 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	}
 	if req.Balance != nil {
 		existing.Balance = *req.Balance
+	}
+	if req.GiftBalance != nil {
+		existing.GiftBalance = *req.GiftBalance
 	}
 	if req.Note != nil {
 		existing.Note = *req.Note
@@ -941,13 +945,19 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 // GET /admin/api/profit
 func (h *Handler) apiGetProfit(w http.ResponseWriter, r *http.Request) {
 	h.callLogsMu.RLock()
-	var totalUSDConsumed float64
-	var proCreditConsumed float64
-	var freeCreditConsumed float64
+	var totalPaidUSDConsumed float64 // Represents "Revenue" (from actual paid balance only)
+	var proCreditConsumed float64    // Used to calculate true underlying Cost
+	var freeCreditConsumed float64   // Used to calculate true underlying Cost
+
 	for _, log := range h.callLogs {
 		pool := ResolveModelPool(log.ActualModel)
-		costUSD := CreditsToCostUSD(log.Credits, pool)
-		totalUSDConsumed += costUSD
+
+		// Calculates "Revenue" based ONLY on PaidCredits
+		// If PaidCredits is 0, Revenue will be $0 for this log.
+		revenueUSD := CreditsToCostUSD(log.PaidCredits, pool)
+		totalPaidUSDConsumed += revenueUSD
+
+		// Calculates generic cost using ALL Credits (Cost is paid to upstream regardless)
 		if pool == "pro" {
 			proCreditConsumed += log.Credits
 		} else {
@@ -956,7 +966,8 @@ func (h *Handler) apiGetProfit(w http.ResponseWriter, r *http.Request) {
 	}
 	h.callLogsMu.RUnlock()
 
-	profit := CalcAdminProfit(totalUSDConsumed, proCreditConsumed, freeCreditConsumed)
+	// CalcAdminProfit uses (revenue, proCost, freeCost)
+	profit := CalcAdminProfit(totalPaidUSDConsumed, proCreditConsumed, freeCreditConsumed)
 	writeJSON(w, 200, profit)
 }
 

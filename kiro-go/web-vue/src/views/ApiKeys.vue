@@ -18,7 +18,7 @@ const showKeyId = ref(null)
 const expandedId = ref(null)
 const searchQuery = ref('')
 const editingId = ref(null)
-const editForm = reactive({ note: '', balance: 0, expiresAt: 0 })
+const editForm = reactive({ note: '', balance: 0, giftBalance: 0, expiresAt: 0 })
 
 const form = ref({ note: '' })
 
@@ -73,6 +73,7 @@ function startEdit(k) {
   editingId.value = k.id
   editForm.note = k.note || ''
   editForm.balance = ((k.balance || 0) * CNY_PER_USD).toFixed(2) // $ → ¥ for admin input
+  editForm.giftBalance = ((k.giftBalance || 0) * CNY_PER_USD).toFixed(2)
   editForm.expiresAt = k.expiresAt || 0
 }
 
@@ -85,6 +86,7 @@ async function saveEdit(k) {
     const body = {
       note: editForm.note,
       balance: Number(editForm.balance) / CNY_PER_USD, // ¥ → $ face value
+      giftBalance: Number(editForm.giftBalance) / CNY_PER_USD,
       expiresAt: Number(editForm.expiresAt),
     }
     const res = await api(`/apikeys/${k.id}`, {
@@ -93,6 +95,7 @@ async function saveEdit(k) {
     if (res.ok) {
       k.note = editForm.note
       k.balance = body.balance
+      k.giftBalance = body.giftBalance
       k.expiresAt = body.expiresAt
       editingId.value = null
       success('已保存')
@@ -307,8 +310,15 @@ onMounted(loadKeys)
 
             <!-- Balance -->
             <div class="space-y-1">
-              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">余额 (¥)</label>
+              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">激活余额 (¥)</label>
               <input v-model.number="editForm.balance" type="number" step="0.01"
+                class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
+            </div>
+
+            <!-- GiftBalance -->
+            <div class="space-y-1">
+              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">赠送余额 (¥)</label>
+              <input v-model.number="editForm.giftBalance" type="number" step="0.01"
                 class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
             </div>
 
@@ -334,9 +344,15 @@ onMounted(loadKeys)
           <div v-else class="p-5 bg-[var(--bg)]/50">
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div class="info-cell">
-                <div class="info-label">余额</div>
+                <div class="info-label">激活余额</div>
                 <div class="info-value" :class="(k.balance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
                   ${{ (k.balance || 0).toFixed(2) }}
+                </div>
+              </div>
+              <div class="info-cell">
+                <div class="info-label">赠送余额</div>
+                <div class="info-value" :class="(k.giftBalance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
+                  ${{ (k.giftBalance || 0).toFixed(2) }}
                 </div>
               </div>
               <div class="info-cell">

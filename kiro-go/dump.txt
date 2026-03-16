@@ -1,0 +1,22 @@
+[
+  {
+    "id": "c499d197-f358-462a-a1db-bd3f33ecb6a5",
+    "key": "sk-f10f5a4ce3b057ebb6b7d4adc34d878d",
+    "plan": "credit",
+    "expiresAt": 0,
+    "enabled": true,
+    "balance": 1.9925909256942487,
+    "note": "\u6d4b\u8bd5\u7684key",
+    "createdAt": 1773624515,
+    "lastUsed": 1773643614,
+    "requests": 10,
+    "errors": 2,
+    "tokens": 222518,
+    "credits": 2.883417444543947,
+    "models": {
+      "claude-opus-4.6": 3,
+      "claude-sonnet-4.5": 6,
+      "claude-sonnet-4.6": 1
+    }
+  }
+]
