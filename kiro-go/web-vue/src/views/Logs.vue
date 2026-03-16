@@ -138,6 +138,15 @@ function formatDuration(ms) {
   return (ms / 1000).toFixed(1) + 's'
 }
 
+function getApiKeyDisplay(keyId) {
+  if (!keyId) return '未关联'
+  const keyObj = apiKeys.value.find(k => k.id === keyId)
+  if (keyObj) {
+    return keyObj.note || keyObj.key?.slice(0, 10) + '...'
+  }
+  return keyId
+}
+
 const filteredLogs = computed(() => {
   let result = logs.value
   if (statusFilter.value === 'error') {
@@ -246,7 +255,7 @@ onUnmounted(() => {
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">时间</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">状态</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">模型</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">账号</th>
+              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">使用方</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">Credit</th>
               <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">耗时</th>
               <th class="px-6 py-4 w-10"></th>
@@ -291,12 +300,15 @@ onUnmounted(() => {
 
                 <td class="px-6 py-4">
                   <div class="flex items-center gap-2">
-                    <div class="w-6 h-6 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+                    <div class="w-6 h-6 shrink-0 rounded-lg bg-indigo-500/10 flex items-center justify-center">
                       <Monitor class="w-3 h-3 text-indigo-500" />
                     </div>
-                    <div>
-                      <div class="text-xs font-bold truncate max-w-[120px]">{{ log.account?.split('@')[0] }}</div>
-                      <div class="text-[9px] text-[var(--text-secondary)]">{{ log.api_type || 'REST' }}</div>
+                    <div class="min-w-0 flex flex-col gap-0.5">
+                      <div class="text-xs font-bold truncate max-w-[150px]" :title="log.account">{{ log.account?.split('@')[0] }}</div>
+                      <div class="flex items-center gap-1 text-[9px] text-[var(--text-secondary)]" :title="log.api_type + ' | Key: ' + getApiKeyDisplay(log.api_key_id)">
+                        <Key class="w-2.5 h-2.5 shrink-0" v-if="log.api_key_id" />
+                        <span class="truncate max-w-[130px] font-mono">{{ log.api_key_id ? getApiKeyDisplay(log.api_key_id) : (log.api_type || 'REST') }}</span>
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -357,9 +369,13 @@ onUnmounted(() => {
                       </div>
                       <div class="p-3 bg-[var(--bg)] rounded-xl">
                         <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求时间</div>
-                        <div class="text-xs font-bold font-mono">{{ log.time }}</div>
+                        <div class="text-xs font-bold">{{ log.time }}</div>
                       </div>
                       <div class="p-3 bg-[var(--bg)] rounded-xl">
+                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">来源 API Key</div>
+                        <div class="text-xs font-bold">{{ apiKeys.find(k => k.id === log.api_key_id)?.note || log.api_key_id || '未关联/内置' }}</div>
+                      </div>
+                      <div class="p-3 bg-[var(--bg)] rounded-xl opacity-50">
                         <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Request ID</div>
                         <div class="text-xs font-bold font-mono text-sky-400">{{ log.request_id || '-' }}</div>
                       </div>
