@@ -1070,10 +1070,8 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			if ac.CodeExpiresAt > 0 && time.Now().Unix() > ac.CodeExpiresAt {
 				return "", fmt.Errorf("activation code has expired")
 			}
-			cfg.ActivationCodes[i].Used = true
-			cfg.ActivationCodes[i].UsedBy = keyID
-			cfg.ActivationCodes[i].UsedAt = time.Now().Unix()
 
+			// Process balance/time addition before deleting
 			switch ac.Type {
 			case "balance":
 				for j, k := range cfg.ApiKeys {
@@ -1112,6 +1110,9 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			default:
 				return "", fmt.Errorf("unknown activation code type: %s", ac.Type)
 			}
+
+			// Delete the code permanently instead of marking it used
+			cfg.ActivationCodes = append(cfg.ActivationCodes[:i], cfg.ActivationCodes[i+1:]...)
 
 			Save()
 			return ac.Type, nil
