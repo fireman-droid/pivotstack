@@ -370,3 +370,19 @@ a:focus-visible {
   box-shadow: 0 0 20px rgba(196, 30, 58, 0.4);
   transition: box-shadow 0.4s ease-in-out;
 }
+
+/* ===== 移动端适配工具 ===== */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* 移动端表格/长文本不换行 */
+@media (max-width: 640px) {
+  .modern-card {
+    border-radius: var(--world-radius-lg);
+  }
+}

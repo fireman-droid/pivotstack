@@ -387,9 +387,9 @@ async function submitImport() {
         />
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-hide">
         <!-- Pool Tier Filter -->
-        <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
+        <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5 shrink-0">
           <button v-for="f in [{v:'all',l:'全部'},{v:'free',l:'FREE',c:'text-green-500'},{v:'pro',l:'PRO',c:'text-purple-500'}]" :key="f.v"
             @click="store.filterTier = f.v"
             class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
@@ -398,7 +398,7 @@ async function submitImport() {
         </div>
 
         <!-- Status Filter Buttons -->
-        <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
+        <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5 shrink-0">
           <button v-for="f in [{v:'all',l:'全部'},{v:'enabled',l:'启用'},{v:'disabled',l:'禁用'},{v:'banned',l:'封禁'}]" :key="f.v"
             @click="store.filterStatus = f.v"
             class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
@@ -406,8 +406,8 @@ async function submitImport() {
           >{{ f.l }}</button>
         </div>
 
-        <!-- View Switcher -->
-        <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
+        <!-- View Switcher (hidden on small mobile) -->
+        <div class="hidden sm:flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5 shrink-0">
           <button @click="viewMode = 'grid'" class="p-2 rounded-lg transition-all" :class="viewMode === 'grid' ? 'bg-[var(--primary)] text-white shadow-sm' : 'text-[var(--text)]-secondary'">
             <LayoutGrid class="w-4 h-4" />
           </button>
@@ -417,12 +417,12 @@ async function submitImport() {
         </div>
 
         <button @click="refreshAll" :disabled="isRefreshing"
-          class="p-2.5 bg-[var(--card)] border border-[var(--border)] rounded-xl hover:bg-[var(--bg)] transition-all disabled:opacity-50">
+          class="p-2.5 bg-[var(--card)] border border-[var(--border)] rounded-xl hover:bg-[var(--bg)] transition-all disabled:opacity-50 shrink-0">
           <RotateCw class="w-4 h-4 text-[var(--text)]-secondary" :class="{ 'animate-spin': isRefreshing }" />
         </button>
 
         <button v-if="stats.banned > 0" @click="deleteBanned" :disabled="isDeletingBanned"
-          class="flex items-center gap-1.5 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500/20 transition-all disabled:opacity-50">
+          class="flex items-center gap-1.5 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500/20 transition-all disabled:opacity-50 shrink-0 whitespace-nowrap">
           <Trash2 class="w-3.5 h-3.5" />
           删除封禁 ({{ stats.banned }})
         </button>

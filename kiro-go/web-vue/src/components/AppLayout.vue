@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import WorldSwitcher from './WorldSwitcher.vue'
@@ -12,7 +12,10 @@ import {
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
-const isSidebarOpen = ref(true)
+const isSidebarOpen = ref(false)
+
+// Auto-close sidebar on route change (mobile)
+watch(() => route.path, () => { isSidebarOpen.value = false })
 
 const navItems = [
   { name: '数据面板', path: '/', icon: LayoutDashboard },
@@ -38,6 +41,9 @@ function handleLogout() {
 
 <template>
   <div class="flex h-screen text-[var(--text)] overflow-hidden font-sans relative z-10">
+    <!-- Mobile Overlay Backdrop -->
+    <div v-if="isSidebarOpen" class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden" @click="isSidebarOpen = false"></div>
+
     <!-- Sidebar -->
     <aside 
       class="fixed inset-y-0 left-0 z-50 w-60 bg-[var(--card)]/95 backdrop-blur-xl border-r border-[var(--border)] transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0 flex flex-col"
