@@ -7,6 +7,8 @@ import (
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -527,6 +529,9 @@ func (h *Handler) apiClearLogs(w http.ResponseWriter, r *http.Request) {
 	h.callLogsMu.Lock()
 	h.callLogs = nil
 	h.callLogsMu.Unlock()
+	// Also truncate the on-disk log file
+	logPath := filepath.Join(config.GetDataDir(), "call_logs.jsonl")
+	os.Truncate(logPath, 0)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
