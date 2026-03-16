@@ -53,6 +53,23 @@ function connectSSE() {
   eventSource.addEventListener('log', (e) => {
     try {
       const entry = JSON.parse(e.data)
+      
+      // 过滤不需要显示的 SSE 日志
+      if (statusFilter.value === 'error' && !entry.error && entry.status !== 'error') return
+      if (statusFilter.value === 'success' && (entry.error || entry.status === 'error')) return
+      if (keyFilter.value !== 'all' && entry.api_key_id !== keyFilter.value) return
+      if (searchQuery.value) {
+        const q = searchQuery.value.toLowerCase()
+        const matches = 
+          entry.actual_model?.toLowerCase().includes(q) ||
+          entry.original_model?.toLowerCase().includes(q) ||
+          entry.account?.toLowerCase().includes(q) ||
+          entry.error?.toLowerCase().includes(q) ||
+          entry.request_id?.toLowerCase().includes(q) ||
+          entry.stop_reason?.toLowerCase().includes(q)
+        if (!matches) return
+      }
+
       totalLogs.value++
       if (currentPage.value !== 1) return
       const exists = logs.value.some(l => 
@@ -95,7 +112,15 @@ async function loadApiKeys() {
 async function loadLogs(page = 1) {
   loading.value = true
   try {
-    const res = await api(`/logs?page=${page}&limit=${pageSize.value}`)
+    const params = new URLSearchParams({
+      page,
+      limit: pageSize.value
+    })
+    if (statusFilter.value !== 'all') params.append('status', statusFilter.value)
+    if (keyFilter.value !== 'all') params.append('key', keyFilter.value)
+    if (searchQuery.value) params.append('search', searchQuery.value)
+
+    const res = await api(`/logs?${params.toString()}`)
     if (res.ok) {
       const d = await res.json()
       logs.value = d.logs || []
@@ -147,29 +172,21 @@ function getApiKeyDisplay(keyId) {
   return keyId
 }
 
-const filteredLogs = computed(() => {
-  let result = logs.value
-  if (statusFilter.value === 'error') {
-    result = result.filter(l => l.error || l.status === 'error')
-  } else if (statusFilter.value === 'success') {
-    result = result.filter(l => !l.error && l.status !== 'error')
-  }
-  if (keyFilter.value !== 'all') {
-    result = result.filter(l => l.api_key_id === keyFilter.value)
-  }
-  if (!searchQuery.value) return result
-  const q = searchQuery.value.toLowerCase()
-  return result.filter(l =>
-    l.actual_model?.toLowerCase().includes(q) ||
-    l.original_model?.toLowerCase().includes(q) ||
-    l.account?.toLowerCase().includes(q) ||
-    l.error?.toLowerCase().includes(q) ||
-    l.request_id?.toLowerCase().includes(q) ||
-    l.stop_reason?.toLowerCase().includes(q)
-  )
+const filteredLogs = computed(() => logs.value)
+
+let searchTimeout = null
+watch(searchQuery, () => {
+  if (searchTimeout) clearTimeout(searchTimeout)
+  searchTimeout = setTimeout(() => {
+    goToPage(1)
+  }, 500)
 })
 
-const errorCount = computed(() => logs.value.filter(l => l.error || l.status === 'error').length)
+watch([statusFilter, keyFilter], () => {
+  goToPage(1)
+})
+
+const errorCount = computed(() => totalLogs.value > 0 ? logs.value.filter(l => l.error || l.status === 'error').length : 0)
 
 onMounted(async () => {
   await Promise.all([loadLogs(), loadApiKeys()])

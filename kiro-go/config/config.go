@@ -1133,3 +1133,27 @@ func DeleteActivationCode(codeStr string) error {
 	}
 	return nil
 }
+
+// CleanupUsedCodes completely removes all voided/used activation codes from the storage.
+func CleanupUsedCodes() int {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+
+	var activeCodes []ActivationCode
+	removedCount := 0
+
+	for _, ac := range cfg.ActivationCodes {
+		if ac.Used {
+			removedCount++
+		} else {
+			activeCodes = append(activeCodes, ac)
+		}
+	}
+
+	if removedCount > 0 {
+		cfg.ActivationCodes = activeCodes
+		_ = Save()
+	}
+
+	return removedCount
+}
