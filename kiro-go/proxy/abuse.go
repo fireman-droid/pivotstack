@@ -42,8 +42,8 @@ func OnRequestStart(keyID, ip string) (bool, string) {
 
 	now := time.Now().Unix()
 
-	// Concurrency limit: max 5 concurrent streams per key
-	if rt.ActiveStreams >= 5 {
+	// Concurrency limit: max 10 concurrent streams per key
+	if rt.ActiveStreams >= 10 {
 		fmt.Printf("[Abuse] key=%s blocked: concurrency_limit (%d active)\n", keyID[:8], rt.ActiveStreams)
 		return false, "concurrency_limit"
 	}
