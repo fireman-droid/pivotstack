@@ -374,6 +374,14 @@ onMounted(loadKeys)
                 <div class="info-label">最后使用</div>
                 <div class="info-value">{{ k.lastUsed ? formatDate(k.lastUsed) : '从未' }}</div>
               </div>
+              <div class="info-cell">
+                <div class="info-label">累积充值</div>
+                <div class="info-value text-[var(--primary)]">${{ (k.totalRecharged || 0).toFixed(2) }}</div>
+              </div>
+              <div class="info-cell">
+                <div class="info-label">累积赠送</div>
+                <div class="info-value text-[var(--primary)]">${{ (k.totalGifted || 0).toFixed(2) }}</div>
+              </div>
             </div>
 
 

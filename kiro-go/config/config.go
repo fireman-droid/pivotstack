@@ -92,22 +92,24 @@ type Account struct {
 
 // ApiKeyInfo represents a commercial API key with subscription and usage stats.
 type ApiKeyInfo struct {
-	ID          string           `json:"id"`
-	Key         string           `json:"key"`
-	Tier        string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
-	Plan        string           `json:"plan"`           // "timed" | "credit" | "hybrid"
-	ExpiresAt   int64            `json:"expiresAt"`      // Unix seconds, 0 = never
-	Enabled     bool             `json:"enabled"`
-	Balance     float64          `json:"balance,omitempty"`     // USD balance (paid via activation codes)
-	GiftBalance float64          `json:"giftBalance,omitempty"` // USD balance (gifted manually by admin)
-	Note        string           `json:"note,omitempty"`
-	CreatedAt   int64            `json:"createdAt"`
-	LastUsed    int64            `json:"lastUsed,omitempty"`
-	Requests    int64            `json:"requests"`
-	Errors      int64            `json:"errors"`
-	Tokens      int64            `json:"tokens"`
-	Credits     float64          `json:"credits"` // cumulative credits consumed
-	Models      map[string]int64 `json:"models,omitempty"`
+	ID             string           `json:"id"`
+	Key            string           `json:"key"`
+	Tier           string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
+	Plan           string           `json:"plan"`           // "timed" | "credit" | "hybrid"
+	ExpiresAt      int64            `json:"expiresAt"`      // Unix seconds, 0 = never
+	Enabled        bool             `json:"enabled"`
+	Balance        float64          `json:"balance,omitempty"`        // USD balance (paid via activation codes)
+	GiftBalance    float64          `json:"giftBalance,omitempty"`    // USD balance (gifted manually by admin)
+	TotalRecharged float64          `json:"totalRecharged,omitempty"` // cumulative amount recharged via activation codes (USD)
+	TotalGifted    float64          `json:"totalGifted,omitempty"`    // cumulative amount gifted by admin (USD)
+	Note           string           `json:"note,omitempty"`
+	CreatedAt      int64            `json:"createdAt"`
+	LastUsed       int64            `json:"lastUsed,omitempty"`
+	Requests       int64            `json:"requests"`
+	Errors         int64            `json:"errors"`
+	Tokens         int64            `json:"tokens"`
+	Credits        float64          `json:"credits"` // cumulative credits consumed
+	Models         map[string]int64 `json:"models,omitempty"`
 }
 
 // ActivationCode represents a redeemable code for balance or time extension.
@@ -1000,6 +1002,10 @@ func SetKeyBalances(keyID string, paidBalance float64, giftBalance float64) erro
 	defer cfgLock.Unlock()
 	for i, k := range cfg.ApiKeys {
 		if k.ID == keyID {
+			// Track cumulative gifted amount (only increases)
+			if giftBalance > cfg.ApiKeys[i].GiftBalance {
+				cfg.ApiKeys[i].TotalGifted += giftBalance - cfg.ApiKeys[i].GiftBalance
+			}
 			cfg.ApiKeys[i].Balance = paidBalance
 			cfg.ApiKeys[i].GiftBalance = giftBalance
 			return Save()
@@ -1121,7 +1127,9 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			case "balance":
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
-						cfg.ApiKeys[j].Balance += ac.Amount / CNYPerUSDFace // ¥ → $ face value
+						amountUSD := ac.Amount / CNYPerUSDFace
+						cfg.ApiKeys[j].Balance += amountUSD
+						cfg.ApiKeys[j].TotalRecharged += amountUSD
 						// Set plan: if already timed → hybrid, otherwise credit
 						if cfg.ApiKeys[j].Plan == "timed" || cfg.ApiKeys[j].Plan == "hybrid" {
 							cfg.ApiKeys[j].Plan = "hybrid"

@@ -145,6 +145,9 @@ function goRecharge() {
         <div v-if="giftBalanceValue > 0" class="stat-detail">
           付费余额 ${{ balanceValue.toFixed(2) }} · 赠送余额 ${{ giftBalanceValue.toFixed(2) }}
         </div>
+        <div v-if="(info.totalRecharged || 0) > 0 || (info.totalGifted || 0) > 0" class="stat-detail">
+          累积充值 ${{ (info.totalRecharged || 0).toFixed(2) }} · 累积赠送 ${{ (info.totalGifted || 0).toFixed(2) }}
+        </div>
       </div>
 
       <!-- Time Remaining -->
