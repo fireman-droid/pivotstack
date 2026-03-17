@@ -4,10 +4,13 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"kiro-api-proxy/config"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,9 +19,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	utls "github.com/refraction-networking/utls"
 )
 
-const KiroVersion = "1.26.2"
+const KiroVersion = "1.28.0"
 
 // 双端点配置（429 时自动 fallback）
 type kiroEndpoint struct {
@@ -43,21 +47,90 @@ var kiroEndpoints = []kiroEndpoint{
 	},
 }
 
-// 全局 HTTP 客户端，复用连接池，支持 VPN_PROXY_URL 代理
+// makeUTLSDialer 创建 UTLS Chrome 指纹 TLS 拨号器
+// 使用 Chrome 的 TLS 指纹而非 Go 标准库指纹，防止 AWS 识别为非标准客户端
+func makeUTLSDialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+
+		var netConn net.Conn
+		if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
+			p, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, err
+			}
+			// 通过代理建立 TCP 连接
+			d := &net.Dialer{Timeout: 30 * time.Second}
+			netConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(p.Hostname(), p.Port()))
+			if err != nil {
+				return nil, err
+			}
+			// CONNECT 隧道
+			connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", addr, addr)
+			_, err = netConn.Write([]byte(connectReq))
+			if err != nil {
+				netConn.Close()
+				return nil, err
+			}
+			// 读取代理响应（简单方式）
+			buf := make([]byte, 4096)
+			n, err := netConn.Read(buf)
+			if err != nil || !strings.Contains(string(buf[:n]), "200") {
+				netConn.Close()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("proxy CONNECT failed: %s", string(buf[:n]))
+			}
+		} else {
+			d := &net.Dialer{Timeout: 30 * time.Second}
+			netConn, err = d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// UTLS Chrome 指纹 + 强制 HTTP/1.1
+		spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+		if err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		for _, ext := range spec.Extensions {
+			if alpn, ok := ext.(*utls.ALPNExtension); ok {
+				alpn.AlpnProtocols = []string{"http/1.1"}
+				break
+			}
+		}
+		tlsConn := utls.UClient(netConn, &utls.Config{ServerName: host}, utls.HelloCustom)
+		if err := tlsConn.ApplyPreset(&spec); err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+}
+
+// 全局 HTTP 客户端，UTLS Chrome 指纹 + 支持 VPN_PROXY_URL 代理
 var kiroHttpClient = func() *http.Client {
 	transport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 20,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
-		ForceAttemptHTTP2:   true,
+		ForceAttemptHTTP2:   false,                                                  // UTLS 强制 HTTP/1.1
+		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{}, // 禁用 Go 内置 HTTP/2
+		DialTLSContext:      makeUTLSDialer(),
 	}
-	if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
-	return &http.Client{Timeout: 0, Transport: transport} // Timeout=0: 流式响应不设超时，避免长输出被截断
+	// 注意：代理已在 UTLS dialer 中处理，不再设置 transport.Proxy
+	return &http.Client{Timeout: 0, Transport: transport} // Timeout=0: 流式响应不设超时
 }()
 
 // ==================== 请求结构 ====================
@@ -171,15 +244,15 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		return nil, err
 	}
 
-	// User-Agent
+	// User-Agent（更新为最新 Kiro CLI 格式）
 	machineId := account.MachineId
 	var userAgent, amzUserAgent string
 	if machineId != "" {
-		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E %s", KiroVersion, machineId)
-		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust %s", KiroVersion, machineId)
+		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI m/E %s", KiroVersion, machineId)
+		amzUserAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI %s", machineId)
 	} else {
-		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", KiroVersion)
-		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", KiroVersion)
+		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI", KiroVersion)
+		amzUserAgent = "aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI"
 	}
 
 	// 根据配置排序端点
@@ -240,6 +313,17 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			}
 			lastUpstreamErr = upstreamErr
 			lastErr = upstreamErr
+
+			// Token 失效自动检测：月额度耗尽或被暂停时标记账号
+			errStr := string(errBody)
+			if strings.Contains(errStr, "MONTHLY_REQUEST_COUNT") {
+				fmt.Printf("[KiroAPI] Account %s MONTHLY_REQUEST_COUNT exhausted, disabling\n", account.ID[:8])
+				account.Enabled = false
+			} else if strings.Contains(errStr, "TEMPORARILY_SUSPENDED") {
+				fmt.Printf("[KiroAPI] Account %s TEMPORARILY_SUSPENDED, disabling\n", account.ID[:8])
+				account.Enabled = false
+			}
+
 			// 认证错误不继续尝试
 			if resp.StatusCode == 401 || resp.StatusCode == 403 {
 				return upstreamErr, upstreamErr

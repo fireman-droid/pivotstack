@@ -41,9 +41,13 @@ var modelMapOrdered = []modelMapping{
 	{"gpt-3.5-turbo", "claude-sonnet-4.5"},
 }
 
-// Thinking 模式提示
-const ThinkingModePrompt = `<thinking_mode>enabled</thinking_mode>
-<max_thinking_length>200000</max_thinking_length>`
+// buildThinkingModePrompt 构建 thinking 模式标签，支持自定义 budget_tokens
+func buildThinkingModePrompt(budgetTokens int) string {
+	if budgetTokens <= 0 {
+		budgetTokens = 200000
+	}
+	return fmt.Sprintf("<thinking_mode>interleaved</thinking_mode>\n<max_thinking_length>%d</max_thinking_length>", budgetTokens)
+}
 
 const minimalFallbackUserContent = "."
 
@@ -171,6 +175,13 @@ type ClaudeRequest struct {
 	System      interface{}     `json:"system,omitempty"` // string or []SystemBlock
 	Tools       []ClaudeTool    `json:"tools,omitempty"`
 	ToolChoice  interface{}     `json:"tool_choice,omitempty"`
+	Thinking    *ClaudeThinking `json:"thinking,omitempty"`
+}
+
+// ClaudeThinking Anthropic thinking 参数
+type ClaudeThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 type ClaudeMessage struct {
@@ -281,12 +292,17 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// 提取系统提示
 	systemPrompt := extractSystemPrompt(req.System)
 
-	// 如果启用 thinking 模式，注入 thinking 提示
+	// 如果启用 thinking 模式，注入 thinking 提示（支持自定义 budget_tokens）
 	if thinking {
+		budgetTokens := 0
+		if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+			budgetTokens = req.Thinking.BudgetTokens
+		}
+		thinkingPrompt := buildThinkingModePrompt(budgetTokens)
 		if systemPrompt != "" {
-			systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+			systemPrompt = thinkingPrompt + "\n\n" + systemPrompt
 		} else {
-			systemPrompt = ThinkingModePrompt
+			systemPrompt = thinkingPrompt
 		}
 	}
 
@@ -761,10 +777,11 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 
 	// 如果启用 thinking 模式，注入 thinking 提示
 	if thinking {
+		thinkingPrompt := buildThinkingModePrompt(0) // OpenAI 格式暂不支持自定义 budget
 		if systemPrompt != "" {
-			systemPrompt = ThinkingModePrompt + "\n\n" + systemPrompt
+			systemPrompt = thinkingPrompt + "\n\n" + systemPrompt
 		} else {
-			systemPrompt = ThinkingModePrompt
+			systemPrompt = thinkingPrompt
 		}
 	}
 

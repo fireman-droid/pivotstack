@@ -129,10 +129,20 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	}
 
 	tier := DeterminePoolTier(req.Model)
+	fallbackToFree := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
 		account := h.pool.GetNextByTier(tier)
+
+		// PRO 池无可用账号时，fallback 到 FREE 池（降级模型到 sonnet-4.5）
+		if account == nil && tier == "pro" && !fallbackToFree {
+			fmt.Printf("[Fallback] PRO pool exhausted, falling back to FREE pool\n")
+			tier = "free"
+			fallbackToFree = true
+			account = h.pool.GetNextByTier(tier)
+		}
+
 		if account == nil {
 			RefundPreAuth(keyID, preChargedPaid, preChargedGift) // refund on no account
 			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))

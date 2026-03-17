@@ -6,31 +6,16 @@ import (
 	"io"
 	"kiro-api-proxy/config"
 	"net/http"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 )
 
 const (
 	kiroRestAPIBase = "https://codewhisperer.us-east-1.amazonaws.com"
-	kiroVersion     = "1.26.2"
 )
 
-// kiroApiClient 是 kiro_api.go 使用的代理感知 HTTP 客户端
-var kiroApiClient = func() *http.Client {
-	transport := &http.Transport{
-		MaxIdleConns:        50,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}
-	if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
-	return &http.Client{Timeout: 30 * time.Second, Transport: transport}
-}()
+// kiroApiClient 复用主客户端的 UTLS 指纹，但设置超时
+var kiroApiClient = &http.Client{Timeout: 30 * time.Second, Transport: kiroHttpClient.Transport}
 
 // GetUsageLimits 获取账户使用量和订阅信息
 func GetUsageLimits(account *config.Account) (*UsageLimitsResponse, error) {
@@ -127,11 +112,11 @@ func setKiroHeaders(req *http.Request, account *config.Account) {
 	machineId := account.MachineId
 	var userAgent, amzUserAgent string
 	if machineId != "" {
-		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E %s", kiroVersion, machineId)
-		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust %s", kiroVersion, machineId)
+		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI m/E %s", KiroVersion, machineId)
+		amzUserAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI %s", machineId)
 	} else {
-		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", kiroVersion)
-		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", kiroVersion)
+		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI", KiroVersion)
+		amzUserAgent = "aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI"
 	}
 
 	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
