@@ -16,7 +16,7 @@ var httpClient = func() *http.Client {
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
-		ForceAttemptHTTP2:   true,
+		ForceAttemptHTTP2:   false, // 禁用 HTTP/2，防止通过代理时超时
 	}
 	if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
 		if u, err := url.Parse(proxyURL); err == nil {
