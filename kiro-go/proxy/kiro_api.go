@@ -112,11 +112,11 @@ func setKiroHeaders(req *http.Request, account *config.Account) {
 	machineId := account.MachineId
 	var userAgent, amzUserAgent string
 	if machineId != "" {
-		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI m/E %s", KiroVersion, machineId)
-		amzUserAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI %s", machineId)
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E %s", KiroVersion, machineId)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust %s", KiroVersion, machineId)
 	} else {
-		userAgent = fmt.Sprintf("aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 md/appVersion-%s app/AmazonQ-For-CLI", KiroVersion)
-		amzUserAgent = "aws-sdk-rust/1.3.10 ua/2.1 api/codewhispererstreaming/0.1.12842 os/macos lang/rust/1.88.0 m/F app/AmazonQ-For-CLI"
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", KiroVersion)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", KiroVersion)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
