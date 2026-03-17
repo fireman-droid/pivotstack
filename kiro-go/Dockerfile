@@ -7,7 +7,7 @@ COPY web-vue/ .
 RUN npm run build
 
 # Stage 2: Build Go backend
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN GOPROXY=https://goproxy.cn,direct go mod download
