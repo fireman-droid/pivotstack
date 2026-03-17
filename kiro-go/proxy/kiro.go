@@ -238,9 +238,23 @@ func getSortedEndpoints(preferred string) []kiroEndpoint {
 	return []kiroEndpoint{kiroEndpoints[0], kiroEndpoints[1]}
 }
 
+// apiDebugLog 包级 debug 日志函数，记录到 data/debug.log
+func apiDebugLog(format string, args ...interface{}) {
+	if os.Getenv("DEBUG_REQUESTS") != "true" {
+		return
+	}
+	f, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if f != nil {
+		fmt.Fprintf(f, format+"\n", args...)
+		f.Close()
+	}
+}
+
 // CallKiroAPI 调用 Kiro API（流式），双端点自动 fallback
 func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroStreamCallback) (*UpstreamError, error) {
+
 	if _, err := json.Marshal(payload); err != nil {
+		apiDebugLog("[API Error] payload marshal failed: %v", err)
 		return nil, err
 	}
 
@@ -254,6 +268,17 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", KiroVersion)
 		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", KiroVersion)
 	}
+
+	// 计算 payload 大小用于日志
+	payloadBytes, _ := json.Marshal(payload)
+	payloadKB := len(payloadBytes) / 1024
+	toolCount := 0
+	if payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext != nil {
+		toolCount = len(payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools)
+	}
+	histLen := len(payload.ConversationState.History)
+	apiDebugLog("[API Request] account=%s | payload=%dKB | tools=%d | history=%d msgs",
+		account.Email, payloadKB, toolCount, histLen)
 
 	// 根据配置排序端点
 	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())
@@ -286,12 +311,14 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		if err != nil {
 			lastErr = err
 			fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)
+			apiDebugLog("[API Error] Endpoint %s HTTP request failed: %v", ep.Name, err)
 			continue
 		}
 
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
 			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying fallback...\n", ep.Name)
+			apiDebugLog("[API Error] Endpoint %s quota exhausted (429), trying fallback", ep.Name)
 			lastUpstreamErr = &UpstreamError{
 				StatusCode: 429,
 				Endpoint:   ep.Name,
@@ -314,18 +341,29 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			lastUpstreamErr = upstreamErr
 			lastErr = upstreamErr
 
+			// 记录到 debug.log
+			errBodyStr := string(errBody)
+			if len(errBodyStr) > 500 {
+				errBodyStr = errBodyStr[:500] + "...(truncated)"
+			}
+			apiDebugLog("[API Error] Endpoint %s status=%d | payload=%dKB | response: %s",
+				ep.Name, resp.StatusCode, len(reqBody)/1024, errBodyStr)
+
 			// Token 失效自动检测：月额度耗尽或被暂停时标记账号
 			errStr := string(errBody)
 			if strings.Contains(errStr, "MONTHLY_REQUEST_COUNT") {
 				fmt.Printf("[KiroAPI] Account %s MONTHLY_REQUEST_COUNT exhausted, disabling\n", account.ID[:8])
+				apiDebugLog("[API Error] Account %s MONTHLY_REQUEST_COUNT exhausted, disabling", account.ID[:8])
 				account.Enabled = false
 			} else if strings.Contains(errStr, "TEMPORARILY_SUSPENDED") {
 				fmt.Printf("[KiroAPI] Account %s TEMPORARILY_SUSPENDED, disabling\n", account.ID[:8])
+				apiDebugLog("[API Error] Account %s TEMPORARILY_SUSPENDED, disabling", account.ID[:8])
 				account.Enabled = false
 			}
 
 			// 认证错误不继续尝试
 			if resp.StatusCode == 401 || resp.StatusCode == 403 {
+				apiDebugLog("[API Error] Auth error %d, not retrying", resp.StatusCode)
 				return upstreamErr, upstreamErr
 			}
 			fmt.Printf("[KiroAPI] Endpoint %s error %d | payload: %dKB | response: %s\n",
@@ -348,11 +386,16 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 			continue
 		}
 
+		apiDebugLog("[API OK] Endpoint %s connected, starting stream parse", ep.Name)
 		err = parseEventStream(resp.Body, callback)
 		resp.Body.Close()
+		if err != nil {
+			apiDebugLog("[API Error] Stream parse error on %s: %v", ep.Name, err)
+		}
 		return nil, err
 	}
 
+	apiDebugLog("[API Error] All endpoints failed, last error: %v", lastErr)
 	if lastErr != nil {
 		return lastUpstreamErr, lastErr
 	}
@@ -427,6 +470,24 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 
 		inputTokens, outputTokens = updateTokensFromEvent(event, inputTokens, outputTokens)
 
+		// Fallback: 通过 JSON payload 字段来推断事件类型 (参考 kirocli2api 的做法)
+		// 这样即使 extractEventType 因为二进制 header 解析问题返回空字符串，也能正确识别事件
+		if eventType == "" {
+			if _, hasToolUseId := event["toolUseId"]; hasToolUseId {
+				eventType = "toolUseEvent"
+			} else if _, hasContent := event["content"]; hasContent {
+				eventType = "assistantResponseEvent"
+			} else if _, hasReason := event["reason"]; hasReason {
+				eventType = "invalidStateEvent"
+			} else if _, hasText := event["text"]; hasText {
+				eventType = "reasoningContentEvent"
+			} else if _, hasUsage := event["usage"]; hasUsage {
+				eventType = "meteringEvent"
+			}
+		}
+
+		apiDebugLog("[SSE Event] type=%s payload=%.300s", eventType, string(payloadBytes))
+
 		// 处理事件
 		switch eventType {
 		case "assistantResponseEvent":
@@ -445,11 +506,28 @@ func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
 			}
 		case "toolUseEvent":
 			currentToolUse = handleToolUseEvent(event, currentToolUse, callback)
+		case "invalidStateEvent":
+			// Kiro API 返回错误状态 (如 reason="ERROR")
+			if reason, ok := event["reason"].(string); ok {
+				msg, _ := event["message"].(string)
+				apiDebugLog("[SSE InvalidState] reason=%s message=%s", reason, msg)
+				if callback.OnError != nil {
+					callback.OnError(fmt.Errorf("kiro invalid state: %s: %s", reason, msg))
+				}
+			}
 		case "meteringEvent":
 			if usage, ok := event["usage"].(float64); ok {
 				totalCredits += usage
 			}
 		}
+	}
+
+	// 流结束后，如果还有未 flush 的 toolUse，强制完成
+	// Kiro API 不一定会发送 stop:true 的 toolUseEvent，所以必须在流结束时主动 flush
+	if currentToolUse != nil {
+		apiDebugLog("[SSE] Flushing pending toolUse at stream end: name=%s id=%s", currentToolUse.Name, currentToolUse.ToolUseID)
+		finishToolUse(currentToolUse, callback)
+		currentToolUse = nil
 	}
 
 	duration := time.Since(streamStart)
