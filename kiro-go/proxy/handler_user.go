@@ -54,19 +54,21 @@ func (h *Handler) resolveUserKey(r *http.Request) *config.ApiKeyInfo {
 // GET /user/api/me
 func (h *Handler) handleUserMe(w http.ResponseWriter, info *config.ApiKeyInfo) {
 	resp := map[string]interface{}{
-		"id":        info.ID,
-		"tier":      info.Tier,
-		"plan":      info.Plan,
-		"balance":   info.Balance,
-		"credits":   info.Credits,
-		"expiresAt": info.ExpiresAt,
-		"enabled":   info.Enabled,
-		"requests":  info.Requests,
-		"tokens":    info.Tokens,
-		"models":    info.Models,
-		"createdAt": info.CreatedAt,
-		"lastUsed":  info.LastUsed,
-		"note":      info.Note,
+		"id":           info.ID,
+		"tier":         info.Tier,
+		"plan":         info.Plan,
+		"balance":      info.Balance,
+		"giftBalance":  info.GiftBalance,
+		"totalBalance": info.Balance + info.GiftBalance,
+		"credits":      info.Credits,
+		"expiresAt":    info.ExpiresAt,
+		"enabled":      info.Enabled,
+		"requests":     info.Requests,
+		"tokens":       info.Tokens,
+		"models":       info.Models,
+		"createdAt":    info.CreatedAt,
+		"lastUsed":     info.LastUsed,
+		"note":         info.Note,
 	}
 
 	// Check access validity

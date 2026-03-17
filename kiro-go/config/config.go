@@ -1037,6 +1037,12 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 	hasBalance := info.Balance > 0 || info.GiftBalance > 0
 	hasCreditPlan := info.Plan == "credit"
 
+	// 如果没有 Plan 但有余额（赠送或付费），则视为隐式 credit 计划
+	// 用户不需要激活码即可使用管理员赠送的余额
+	if info.Plan == "" && hasBalance {
+		hasCreditPlan = true
+	}
+
 	if !hasDayCard && !hasBalance && !hasCreditPlan {
 		if info.Plan == "" {
 			return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")

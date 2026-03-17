@@ -30,10 +30,12 @@ onMounted(async () => {
 })
 
 const info = computed(() => auth.userInfo || {})
-const isActivated = computed(() => !!info.value.plan)
+const isActivated = computed(() => !!info.value.plan || Number(info.value.giftBalance || 0) > 0)
 const isTimedPlan = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
-const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid')
+const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid' || (!info.value.plan && totalBalanceValue.value > 0))
 const balanceValue = computed(() => Number(info.value.balance || 0))
+const giftBalanceValue = computed(() => Number(info.value.giftBalance || 0))
+const totalBalanceValue = computed(() => balanceValue.value + giftBalanceValue.value)
 
 const timeRemaining = computed(() => {
   if (!isTimedPlan.value) return { label: '-', unit: '' }
@@ -113,7 +115,7 @@ function goRecharge() {
     </div>
 
     <!-- Activation Banner -->
-    <div v-if="!info.plan" class="activate-banner glass">
+    <div v-if="!info.plan && giftBalanceValue <= 0" class="activate-banner glass">
       <div class="banner-content">
         <div class="icon-box">
           <AlertTriangle :size="24" color="#818cf8" />
@@ -136,9 +138,12 @@ function goRecharge() {
           <span class="stat-label">当前余额</span>
           <Wallet :size="18" class="stat-icon" />
         </div>
-        <div class="stat-value balance">${{ balanceValue.toFixed(2) }}</div>
-        <div class="stat-sub" :style="{ color: balanceValue < 1 ? '#ef4444' : '#22c55e' }">
-          {{ balanceValue < 1 ? '⚠ 余额不足' : '✓ 账户正常' }}
+        <div class="stat-value balance">${{ totalBalanceValue.toFixed(2) }}</div>
+        <div class="stat-sub" :style="{ color: totalBalanceValue < 1 ? '#ef4444' : '#22c55e' }">
+          {{ totalBalanceValue < 1 ? '⚠ 余额不足' : '✓ 账户正常' }}
+        </div>
+        <div v-if="giftBalanceValue > 0" class="stat-detail">
+          付费余额 ${{ balanceValue.toFixed(2) }} · 赠送余额 ${{ giftBalanceValue.toFixed(2) }}
         </div>
       </div>
 
@@ -417,6 +422,14 @@ function goRecharge() {
 .stat-sub.warning { color: #f59e0b; }
 .stat-sub.danger { color: #ef4444; }
 .stat-sub.muted { color: #64748b; }
+
+.stat-detail {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
 
 .status-dot-pulse {
   width: 10px;
