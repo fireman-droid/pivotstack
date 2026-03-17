@@ -10,7 +10,7 @@ import (
 )
 
 // handleModels 模型列表（根据账号类型返回对应模型）
-func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleModels(w http.ResponseWriter, _ *http.Request) {
 	thinkingSuffix := config.GetThinkingConfig().Suffix
 
 	// 判断当前可用账号的主要类型

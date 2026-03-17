@@ -334,7 +334,8 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	for i, msg := range messages {
 		isLast := i == len(messages)-1
 
-		if msg.Role == "user" {
+		switch msg.Role {
+		case "user":
 			content, images, toolResults := extractClaudeUserContent(msg.Content)
 			content = normalizeUserContent(content, len(images) > 0)
 
@@ -360,7 +361,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 					UserInputMessage: &userMsg,
 				})
 			}
-		} else if msg.Role == "assistant" {
+		case "assistant":
 			content, toolUses := extractClaudeAssistantContent(msg.Content)
 			history = append(history, KiroHistoryMessage{
 				AssistantResponseMessage: &KiroAssistantResponseMessage{

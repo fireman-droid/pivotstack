@@ -138,7 +138,7 @@ func (h *Handler) handleUserUsage(w http.ResponseWriter, info *config.ApiKeyInfo
 }
 
 // GET /user/api/logs - request logs for this key only
-func (h *Handler) handleUserLogs(w http.ResponseWriter, r *http.Request, info *config.ApiKeyInfo) {
+func (h *Handler) handleUserLogs(w http.ResponseWriter, _ *http.Request, info *config.ApiKeyInfo) {
 	h.callLogsMu.RLock()
 	defer h.callLogsMu.RUnlock()
 

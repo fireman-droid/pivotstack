@@ -418,7 +418,7 @@ func (h *Handler) loadLogsFromDisk() {
 }
 
 // handleHealth 健康检查（不暴露统计数据）
-func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "ok",
@@ -428,7 +428,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStats 统计数据（需要 API Key 鉴权）
-func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleStats(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":          "ok",

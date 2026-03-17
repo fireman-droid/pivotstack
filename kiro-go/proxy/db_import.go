@@ -62,11 +62,11 @@ type dbAccount struct {
 
 // importResult 单个账号导入结果
 type importResult struct {
-	Success  bool
-	Account  config.Account
-	DbID     string // 远端数据库 ID，用于标记已激活
-	Email    string
-	Error    string
+	Success bool
+	Account config.Account
+	DbID    string // 远端数据库 ID，用于标记已激活
+	Email   string
+	Error   string
 }
 
 // apiImportFromDB 从远程数据库导入未激活普通账号（并发版本）
@@ -340,7 +340,7 @@ func (h *Handler) apiImportFromDB(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiGetDBStatus 查询远程数据库中可用账号数
-func (h *Handler) apiGetDBStatus(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetDBStatus(w http.ResponseWriter, _ *http.Request) {
 	dbCfg := getDBImportConfig()
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&timeout=10s",
 		dbCfg.User, dbCfg.Password, dbCfg.Host, dbCfg.Port, dbCfg.Database)

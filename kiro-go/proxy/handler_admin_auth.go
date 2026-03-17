@@ -648,7 +648,7 @@ func parseUsageData(account *config.Account, data map[string]interface{}) {
 }
 
 // apiRefreshAccount 刷新账户信息
-func (h *Handler) apiRefreshAccount(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) apiRefreshAccount(w http.ResponseWriter, _ *http.Request, id string) {
 	accounts := config.GetAccounts()
 	var account *config.Account
 	for i := range accounts {
@@ -719,7 +719,7 @@ func (h *Handler) apiRefreshAccount(w http.ResponseWriter, r *http.Request, id s
 }
 
 // apiGetAccountFull 获取单个账号完整信息
-func (h *Handler) apiGetAccountFull(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) apiGetAccountFull(w http.ResponseWriter, _ *http.Request, id string) {
 	accounts := config.GetAccounts()
 	poolAccounts := h.pool.GetAllAccounts()
 	var account *config.Account
@@ -760,7 +760,7 @@ func (h *Handler) apiGetAccountFull(w http.ResponseWriter, r *http.Request, id s
 }
 
 // apiGetAccountModels 获取账户可用模型
-func (h *Handler) apiGetAccountModels(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) apiGetAccountModels(w http.ResponseWriter, _ *http.Request, id string) {
 	accounts := config.GetAccounts()
 	var account *config.Account
 	for i := range accounts {

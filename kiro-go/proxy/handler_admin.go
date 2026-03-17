@@ -155,7 +155,7 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) apiGetAccounts(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetAccounts(w http.ResponseWriter, _ *http.Request) {
 	accounts := config.GetAccounts()
 	poolAccounts := h.pool.GetAllAccounts()
 	statsMap := make(map[string]config.Account)
@@ -232,7 +232,7 @@ func (h *Handler) apiAddAccount(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "id": account.ID})
 }
 
-func (h *Handler) apiDeleteAccount(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) apiDeleteAccount(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := config.DeleteAccount(id); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -415,7 +415,7 @@ func (h *Handler) apiBatchAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) apiGetStatus(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetStatus(w http.ResponseWriter, _ *http.Request) {
 	proPool := h.pool.TierStats("pro")
 	freePool := h.pool.TierStats("free")
 	proRemaining := (proPool.UsageLimit - proPool.UsageCurrent) + (proPool.TrialLimit - proPool.TrialCurrent)
@@ -433,7 +433,7 @@ func (h *Handler) apiGetStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) apiGetSettings(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetSettings(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"apiKey": config.GetApiKey(), "requireApiKey": config.IsApiKeyRequired(),
 		"port": config.GetPort(), "host": config.GetHost(),
@@ -459,7 +459,7 @@ func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGetAdminStats(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetAdminStats(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"totalRequests": atomic.LoadInt64(&h.totalRequests), "successRequests": atomic.LoadInt64(&h.successRequests),
 		"failedRequests": atomic.LoadInt64(&h.failedRequests), "totalTokens": atomic.LoadInt64(&h.totalTokens),
@@ -467,7 +467,7 @@ func (h *Handler) apiGetAdminStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) apiResetStats(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiResetStats(w http.ResponseWriter, _ *http.Request) {
 	atomic.StoreInt64(&h.totalRequests, 0)
 	atomic.StoreInt64(&h.successRequests, 0)
 	atomic.StoreInt64(&h.failedRequests, 0)
@@ -479,7 +479,7 @@ func (h *Handler) apiResetStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGenerateMachineId(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGenerateMachineId(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"machineId": config.GenerateMachineId()})
 }
 
@@ -559,7 +559,7 @@ func (h *Handler) apiGetLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) apiClearLogs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiClearLogs(w http.ResponseWriter, _ *http.Request) {
 	h.callLogsMu.Lock()
 	h.callLogs = nil
 	h.callLogsMu.Unlock()
@@ -569,7 +569,7 @@ func (h *Handler) apiClearLogs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func (h *Handler) apiGetThinkingConfig(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetThinkingConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.GetThinkingConfig()
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"suffix": cfg.Suffix, "openaiFormat": cfg.OpenAIFormat, "claudeFormat": cfg.ClaudeFormat,
@@ -606,7 +606,7 @@ func (h *Handler) apiUpdateThinkingConfig(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGetEndpointConfig(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetEndpointConfig(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"preferredEndpoint": config.GetPreferredEndpoint()})
 }
 
@@ -633,13 +633,13 @@ func (h *Handler) apiUpdateEndpointConfig(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGetVersion(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetVersion(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"version": config.Version})
 }
 
 // apiPricingAnalysis 定价分析 API — 为未来 AI 提供所有定价决策数据
 // GET /admin/api/pricing-analysis
-func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, _ *http.Request) {
 	h.callLogsMu.RLock()
 	logs := make([]CallLog, len(h.callLogs))
 	copy(logs, h.callLogs)
@@ -790,7 +790,7 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, r *http.Request) {
 
 // ==================== API Key 管理 ====================
 
-func (h *Handler) apiGetApiKeys(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetApiKeys(w http.ResponseWriter, _ *http.Request) {
 	keys := config.GetAllApiKeys()
 	// 合并内存中的实时统计
 	h.apiKeyStatsMu.RLock()
@@ -890,7 +890,7 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiDeleteApiKey(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handler) apiDeleteApiKey(w http.ResponseWriter, _ *http.Request, id string) {
 	if err := config.DeleteApiKey(id); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -902,7 +902,7 @@ func (h *Handler) apiDeleteApiKey(w http.ResponseWriter, r *http.Request, id str
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, r *http.Request, keyID string) {
+func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, _ *http.Request, keyID string) {
 	h.callLogsMu.RLock()
 	var filtered []CallLog
 	for _, log := range h.callLogs {
@@ -920,7 +920,7 @@ func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, r *http.Request, keyID
 // ==================== Billing Admin APIs ====================
 
 // GET /admin/api/pricing
-func (h *Handler) apiGetPricing(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetPricing(w http.ResponseWriter, _ *http.Request) {
 	pricing := config.GetPricing()
 	json.NewEncoder(w).Encode(pricing)
 }
@@ -943,7 +943,7 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /admin/api/profit
-func (h *Handler) apiGetProfit(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetProfit(w http.ResponseWriter, _ *http.Request) {
 	h.callLogsMu.RLock()
 	var totalPaidUSDConsumed float64 // Represents "Revenue" (from actual paid balance only)
 	var proCreditConsumed float64    // Used to calculate true underlying Cost
@@ -1019,7 +1019,7 @@ func (h *Handler) apiRemoveCostEntry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"success": true})
 }
 
-func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetCodes(w http.ResponseWriter, _ *http.Request) {
 	codes := config.GetActivationCodes()
 	if codes == nil {
 		codes = []config.ActivationCode{}
@@ -1037,7 +1037,7 @@ func (h *Handler) apiGetCodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /admin/api/codes/cleanup - physically remove all used codes from data store
-func (h *Handler) apiCleanupCodes(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiCleanupCodes(w http.ResponseWriter, _ *http.Request) {
 	cleaned := config.CleanupUsedCodes()
 	AuditLog("codes_cleanup", "admin", fmt.Sprintf("Removed %d used codes", cleaned))
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1106,7 +1106,7 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // DELETE /admin/api/codes/:code
-func (h *Handler) apiDeleteCode(w http.ResponseWriter, r *http.Request, code string) {
+func (h *Handler) apiDeleteCode(w http.ResponseWriter, _ *http.Request, code string) {
 	if err := config.DeleteActivationCode(code); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -1117,7 +1117,7 @@ func (h *Handler) apiDeleteCode(w http.ResponseWriter, r *http.Request, code str
 }
 
 // GET /admin/api/abuse
-func (h *Handler) apiGetAbuse(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiGetAbuse(w http.ResponseWriter, _ *http.Request) {
 	flagged := GetFlaggedKeys()
 	if flagged == nil {
 		flagged = []map[string]interface{}{}
@@ -1126,7 +1126,7 @@ func (h *Handler) apiGetAbuse(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /admin/api/abuse/:keyId/clear
-func (h *Handler) apiClearAbuse(w http.ResponseWriter, r *http.Request, keyID string) {
+func (h *Handler) apiClearAbuse(w http.ResponseWriter, _ *http.Request, keyID string) {
 	ClearFlag(keyID)
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
