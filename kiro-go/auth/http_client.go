@@ -3,25 +3,18 @@ package auth
 
 import (
 	"net/http"
-	"net/url"
-	"os"
 	"time"
 )
 
-// 全局 HTTP 客户端，复用连接池，支持 VPN_PROXY_URL 代理
-// 用于所有 auth 模块的 HTTP 请求
+// 全局 HTTP 客户端，复用连接池
+// auth 请求直连 AWS（不走 VPN 代理），避免代理阻塞 OIDC 端点
 var httpClient = func() *http.Client {
 	transport := &http.Transport{
 		MaxIdleConns:        50,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
-		ForceAttemptHTTP2:   false, // 禁用 HTTP/2，防止通过代理时超时
-	}
-	if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
+		ForceAttemptHTTP2:   false,
 	}
 	return &http.Client{
 		Timeout:   30 * time.Second,
