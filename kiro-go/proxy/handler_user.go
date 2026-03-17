@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kiro-api-proxy/config"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -139,27 +140,51 @@ func (h *Handler) handleUserUsage(w http.ResponseWriter, info *config.ApiKeyInfo
 	})
 }
 
-// GET /user/api/logs - request logs for this key only
-func (h *Handler) handleUserLogs(w http.ResponseWriter, _ *http.Request, info *config.ApiKeyInfo) {
+// GET /user/api/logs - request logs for this key only (paginated)
+func (h *Handler) handleUserLogs(w http.ResponseWriter, r *http.Request, info *config.ApiKeyInfo) {
 	h.callLogsMu.RLock()
 	defer h.callLogsMu.RUnlock()
 
-	var logs []CallLog
-	limit := 50 // default limit
-
-	// Collect logs for this key (most recent first)
-	for i := len(h.callLogs) - 1; i >= 0 && len(logs) < limit; i-- {
+	// Collect ALL logs for this key (most recent first)
+	var allLogs []CallLog
+	for i := len(h.callLogs) - 1; i >= 0; i-- {
 		log := h.callLogs[i]
 		if log.ApiKeyID == info.ID {
-			// Sanitize: don't expose account details to user
-			log.Account = ""
-			logs = append(logs, log)
+			log.Account = "" // Sanitize: don't expose account details to user
+			allLogs = append(allLogs, log)
 		}
 	}
 
+	total := len(allLogs)
+
+	// Pagination: ?page=1&limit=50
+	page := 1
+	limit := 50
+	if p := r.URL.Query().Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+
+	start := (page - 1) * limit
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+
 	writeJSON(w, 200, map[string]interface{}{
-		"logs":  logs,
-		"total": len(logs),
+		"logs":  allLogs[start:end],
+		"total": total,
+		"page":  page,
+		"limit": limit,
 	})
 }
 

@@ -1,18 +1,39 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { userApi } from '../../api/user'
-import { FileX, CheckCircle2, XCircle, Clock, Database, Coins, Timer } from 'lucide-vue-next'
+import { FileX, CheckCircle2, XCircle, Clock, Database, Coins, Timer, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 
 const logs = ref([])
 const loading = ref(true)
+const page = ref(1)
+const limit = ref(50)
+const total = ref(0)
 
-onMounted(async () => {
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit.value)))
+const hasMore = computed(() => page.value < totalPages.value)
+
+async function loadLogs() {
+  loading.value = true
   try {
-    const data = await userApi('/logs')
+    const data = await userApi(`/logs?page=${page.value}&limit=${limit.value}`)
     logs.value = data.logs || []
+    total.value = data.total || 0
   } catch {}
   loading.value = false
-})
+}
+
+function prevPage() {
+  if (page.value > 1) { page.value--; loadLogs() }
+}
+function nextPage() {
+  if (hasMore.value) { page.value++; loadLogs() }
+}
+function gotoPage(p) {
+  page.value = p
+  loadLogs()
+}
+
+onMounted(loadLogs)
 
 function fmtTime(ts) {
   if (!ts) return '-'
@@ -33,7 +54,22 @@ function creditToUSD(credits, model) {
     <div class="page-header">
       <div class="title-section">
         <h3>请求日志</h3>
-        <span class="count-badge">{{ logs.length }}</span>
+        <span class="count-badge">{{ total }}</span>
+      </div>
+      <!-- Pagination Top -->
+      <div v-if="total > limit" class="pagination">
+        <button @click="prevPage" :disabled="page <= 1" class="pg-btn">
+          <ChevronLeft :size="16" />
+        </button>
+        <template v-for="p in totalPages" :key="p">
+          <button v-if="p === 1 || p === totalPages || (p >= page - 1 && p <= page + 1)"
+            @click="gotoPage(p)" :class="['pg-btn', { active: p === page }]">{{ p }}</button>
+          <span v-else-if="p === page - 2 || p === page + 2" class="pg-dots">…</span>
+        </template>
+        <button @click="nextPage" :disabled="!hasMore" class="pg-btn">
+          <ChevronRight :size="16" />
+        </button>
+        <span class="pg-info">{{ (page - 1) * limit + 1 }}-{{ Math.min(page * limit, total) }} / {{ total }}</span>
       </div>
     </div>
 
@@ -91,6 +127,17 @@ function creditToUSD(credits, model) {
         </div>
       </div>
     </div>
+
+    <!-- Pagination Bottom -->
+    <div v-if="total > limit && !loading" class="pagination bottom">
+      <button @click="prevPage" :disabled="page <= 1" class="pg-btn">
+        <ChevronLeft :size="16" />
+      </button>
+      <span class="pg-info">第 {{ page }} / {{ totalPages }} 页</span>
+      <button @click="nextPage" :disabled="!hasMore" class="pg-btn">
+        <ChevronRight :size="16" />
+      </button>
+    </div>
   </div>
 </template>
 
@@ -107,6 +154,64 @@ function creditToUSD(credits, model) {
 
 .page-header {
   margin-bottom: 2.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.pagination.bottom {
+  justify-content: center;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pg-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 150ms ease;
+}
+.pg-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+.pg-btn.active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #c7d2fe;
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.pg-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.pg-dots {
+  color: #475569;
+  font-size: 0.75rem;
+  padding: 0 0.25rem;
+}
+.pg-info {
+  color: #64748b;
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+  white-space: nowrap;
 }
 
 .title-section {

@@ -1,0 +1,1 @@
+import{j as c}from"./index-pcpt_mjJ.js";const r=c("chevron-left",[["path",{d:"m15 18-6-6 6-6",key:"1wnfg3"}]]);const t=c("circle-check",[["circle",{cx:"12",cy:"12",r:"10",key:"1mglay"}],["path",{d:"m9 12 2 2 4-4",key:"dzmm74"}]]);export{t as C,r as a};
