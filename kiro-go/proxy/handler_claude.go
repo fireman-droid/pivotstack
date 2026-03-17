@@ -591,6 +591,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 
 	upstreamErr, err := CallKiroAPI(account, payload, callback)
 	if err != nil {
+		debugLog("[SSE Error] CallKiroAPI failed: %v", err)
 		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
 		h.pool.RecordError(account.ID, isQuotaErr)
 		payloadKB := 0
