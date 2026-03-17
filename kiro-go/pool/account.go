@@ -25,7 +25,7 @@ type AccountPool struct {
 	inFlight     map[string]int32     // 每账号当前并发请求数
 }
 
-const maxInFlightPerAccount = 10 // 单账号最大并发数
+const maxInFlightPerAccount = 50 // 单账号最大并发数
 
 var (
 	pool     *AccountPool

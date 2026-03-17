@@ -63,8 +63,15 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	}
 
 	// 可选的请求体调试日志（通过环境变量 DEBUG_REQUESTS=true 启用）
-	if os.Getenv("DEBUG_REQUESTS") == "true" {
-		fmt.Printf("[DEBUG] Claude API Request Body: %s\n", string(body))
+	debugMode := os.Getenv("DEBUG_REQUESTS") == "true"
+	if debugMode {
+		debugFile, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if debugFile != nil {
+			ts := time.Now().Format("2006-01-02 15:04:05")
+			fmt.Fprintf(debugFile, "\n========== [%s] 新请求 ==========\n", ts)
+			fmt.Fprintf(debugFile, "[请求体] %s\n", string(body))
+			debugFile.Close()
+		}
 	}
 
 	var req ClaudeRequest
@@ -129,19 +136,10 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	}
 
 	tier := DeterminePoolTier(req.Model)
-	fallbackToFree := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
 		account := h.pool.GetNextByTier(tier)
-
-		// PRO 池无可用账号时，fallback 到 FREE 池（降级模型到 sonnet-4.5）
-		if account == nil && tier == "pro" && !fallbackToFree {
-			fmt.Printf("[Fallback] PRO pool exhausted, falling back to FREE pool\n")
-			tier = "free"
-			fallbackToFree = true
-			account = h.pool.GetNextByTier(tier)
-		}
 
 		if account == nil {
 			RefundPreAuth(keyID, preChargedPaid, preChargedGift) // refund on no account
@@ -180,6 +178,16 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 		// 转换请求
 		kiroPayload := ClaudeToKiro(&req, thinking)
+
+		// 调试：记录转换后的 Kiro payload
+		if debugMode {
+			debugFile, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+			if debugFile != nil {
+				payloadJSON, _ := json.MarshalIndent(kiroPayload, "", "  ")
+				fmt.Fprintf(debugFile, "[Kiro Payload] thinking=%v model=%s→%s account=%s\n%s\n", thinking, originalModel, actualModel, account.Email, string(payloadJSON))
+				debugFile.Close()
+			}
+		}
 
 		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
 		var shouldRetry bool
@@ -499,11 +507,23 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		headersSent = true
 	}
 
+	debugLog := func(format string, args ...interface{}) {
+		if os.Getenv("DEBUG_REQUESTS") != "true" {
+			return
+		}
+		f, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if f != nil {
+			fmt.Fprintf(f, format+"\n", args...)
+			f.Close()
+		}
+	}
+
 	callback := &KiroStreamCallback{
 		OnText: func(text string, isThinking bool) {
 			if text == "" {
 				return
 			}
+			debugLog("[SSE OnText] thinking=%v len=%d text=%.200s", isThinking, len(text), text)
 			sendMessageStart()
 			if isThinking {
 				rawThinkingBuilder.WriteString(text)
@@ -513,6 +533,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			processClaudeText(text, isThinking, false)
 		},
 		OnToolUse: func(tu KiroToolUse) {
+			debugLog("[SSE OnToolUse] name=%s id=%s", tu.Name, tu.ToolUseID)
 			sendMessageStart()
 			tu.Name = RestoreToolName(tu.Name)
 			// 先刷新缓冲区
@@ -555,10 +576,12 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			})
 		},
 		OnComplete: func(inTok, outTok int) {
+			debugLog("[SSE OnComplete] input=%d output=%d", inTok, outTok)
 			inputTokens = inTok
 			outputTokens = outTok
 		},
 		OnError: func(err error) {
+			debugLog("[SSE OnError] %v", err)
 			h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota"))
 		},
 		OnCredits: func(c float64) {
