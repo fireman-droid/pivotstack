@@ -81,6 +81,20 @@ func PreAuthorize(keyID string, model string, maxTokens, estimatedInput int) (fl
 	return paidDeducted, giftDeducted, nil
 }
 
+// ApplyLowOutputProtection caps credits when output is abnormally low but cost is high.
+// This protects users from being overcharged for failed/truncated responses.
+func ApplyLowOutputProtection(outputTokens int, actualCredits float64, inputTokens int) float64 {
+	if outputTokens < 30 && actualCredits > 1.0 {
+		capped := EstimateCredits(100, inputTokens)
+		if capped < actualCredits {
+			fmt.Printf("[Billing] LowOutputProtection: out=%d credits=%.4f → capped=%.4f (saved %.4f)\n",
+				outputTokens, actualCredits, capped, actualCredits-capped)
+			return capped
+		}
+	}
+	return actualCredits
+}
+
 // Reconcile settles the difference between pre-charged and actual cost.
 // Returns (actualPaidCostUSD, actualGiftCostUSD).
 func Reconcile(keyID, model string, actualCredits, preChargedPaid, preChargedGift float64) (float64, float64) {

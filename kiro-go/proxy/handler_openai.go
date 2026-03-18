@@ -534,6 +534,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
+		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
@@ -655,6 +656,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
+		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift

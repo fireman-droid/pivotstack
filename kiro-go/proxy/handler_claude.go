@@ -652,6 +652,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			// Kiro API didn't return credits – fallback to estimation
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
+		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
@@ -781,6 +782,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
+		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
