@@ -93,6 +93,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetEndpointConfig(w, r)
 	case path == "/endpoint" && r.Method == "POST":
 		h.apiUpdateEndpointConfig(w, r)
+	case path == "/concurrency" && r.Method == "GET":
+		h.apiGetConcurrency(w, r)
+	case path == "/concurrency" && r.Method == "POST":
+		h.apiUpdateConcurrency(w, r)
 	case path == "/version" && r.Method == "GET":
 		h.apiGetVersion(w, r)
 	case path == "/export" && r.Method == "POST":
@@ -626,6 +630,42 @@ func (h *Handler) apiUpdateEndpointConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := config.UpdatePreferredEndpoint(req.PreferredEndpoint); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (h *Handler) apiGetConcurrency(w http.ResponseWriter, _ *http.Request) {
+	perKey, perAccount := config.GetConcurrencyConfig()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"maxConcurrentPerKey":   perKey,
+		"maxInFlightPerAccount": perAccount,
+	})
+}
+
+func (h *Handler) apiUpdateConcurrency(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxConcurrentPerKey   int `json:"maxConcurrentPerKey"`
+		MaxInFlightPerAccount int `json:"maxInFlightPerAccount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.MaxConcurrentPerKey < 1 || req.MaxConcurrentPerKey > 200 {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "maxConcurrentPerKey must be 1-200"})
+		return
+	}
+	if req.MaxInFlightPerAccount < 1 || req.MaxInFlightPerAccount > 500 {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "maxInFlightPerAccount must be 1-500"})
+		return
+	}
+	if err := config.UpdateConcurrencyConfig(req.MaxConcurrentPerKey, req.MaxInFlightPerAccount); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return

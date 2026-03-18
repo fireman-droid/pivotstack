@@ -287,6 +287,10 @@ type Config struct {
 	// Endpoint configuration: "auto", "codewhisperer", or "amazonq"
 	PreferredEndpoint string `json:"preferredEndpoint,omitempty"`
 
+	// Concurrency limits (configurable from admin UI)
+	MaxConcurrentPerKey   int `json:"maxConcurrentPerKey,omitempty"`   // Per API key max concurrent streams (default: 20)
+	MaxInFlightPerAccount int `json:"maxInFlightPerAccount,omitempty"` // Per account max in-flight requests (default: 50)
+
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
 	SuccessRequests int     `json:"successRequests,omitempty"` // Successful requests count
@@ -759,6 +763,34 @@ func UpdateSettings(apiKey string, requireApiKey bool, password string) error {
 	cfg.RequireApiKey = requireApiKey
 	if password != "" {
 		cfg.Password = password
+	}
+	return Save()
+}
+
+// GetConcurrencyConfig returns (maxPerKey, maxPerAccount) with safe defaults.
+func GetConcurrencyConfig() (int, int) {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	perKey := cfg.MaxConcurrentPerKey
+	if perKey <= 0 {
+		perKey = 20
+	}
+	perAccount := cfg.MaxInFlightPerAccount
+	if perAccount <= 0 {
+		perAccount = 50
+	}
+	return perKey, perAccount
+}
+
+// UpdateConcurrencyConfig updates concurrency limits and persists to disk.
+func UpdateConcurrencyConfig(perKey, perAccount int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if perKey > 0 {
+		cfg.MaxConcurrentPerKey = perKey
+	}
+	if perAccount > 0 {
+		cfg.MaxInFlightPerAccount = perAccount
 	}
 	return Save()
 }

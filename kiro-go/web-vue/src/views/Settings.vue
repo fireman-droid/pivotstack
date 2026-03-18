@@ -17,7 +17,8 @@ import {
   Info,
   Trash2,
   FileX,
-  DollarSign
+  DollarSign,
+  Zap
 } from 'lucide-vue-next'
 
 const { success, error } = useToast()
@@ -29,7 +30,9 @@ const openaiFormat = ref('reasoning_content')
 const claudeFormat = ref('thinking')
 const preferredEndpoint = ref('auto')
 const newPassword = ref('')
-const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false })
+const maxConcurrentPerKey = ref(20)
+const maxInFlightPerAccount = ref(50)
+const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false, concurrency: false })
 
 onMounted(async () => {
   try {
@@ -50,6 +53,12 @@ onMounted(async () => {
     if (endpointRes.ok) {
       const d = await endpointRes.json()
       preferredEndpoint.value = d.preferredEndpoint || 'auto'
+    }
+    const concurrencyRes = await api('/concurrency')
+    if (concurrencyRes.ok) {
+      const d = await concurrencyRes.json()
+      maxConcurrentPerKey.value = d.maxConcurrentPerKey || 20
+      maxInFlightPerAccount.value = d.maxInFlightPerAccount || 50
     }
   } catch {}
 })
@@ -81,6 +90,13 @@ async function saveEndpoint() {
   const res = await api('/endpoint', { method: 'POST', body: JSON.stringify({ preferredEndpoint: preferredEndpoint.value }) })
   res.ok ? success('端点设置已保存') : error('保存失败')
   loading.value.endpoint = false
+}
+
+async function saveConcurrency() {
+  loading.value.concurrency = true
+  const res = await api('/concurrency', { method: 'POST', body: JSON.stringify({ maxConcurrentPerKey: maxConcurrentPerKey.value, maxInFlightPerAccount: maxInFlightPerAccount.value }) })
+  res.ok ? success('并发设置已保存') : error('保存失败')
+  loading.value.concurrency = false
 }
 
 async function changePassword() {
@@ -226,6 +242,27 @@ async function resetPricing() {
             </select>
           </div>
           <button @click="saveEndpoint" :disabled="loading.endpoint" class="w-full py-3 bg-amber-500 text-white rounded-xl font-black text-xs hover:bg-amber-600 transition-all">保存路由</button>
+        </div>
+      </section>
+
+      <!-- Concurrency Control Card -->
+      <section class="modern-card overflow-hidden shadow-sm">
+        <div class="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
+          <Zap class="w-4 h-4 text-cyan-500" />
+          <h2 class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]">并发控制</h2>
+        </div>
+        <div class="p-6 space-y-6">
+          <div class="space-y-3">
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">单 Key 最大并发流</span>
+            <input v-model.number="maxConcurrentPerKey" type="number" min="1" max="200" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
+            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">每个 API Key 同时允许的最大并发请求数（默认 20）</p>
+          </div>
+          <div class="space-y-3">
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">单账号最大并发请求</span>
+            <input v-model.number="maxInFlightPerAccount" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
+            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">号池中每个 Kiro 账号同时处理的最大请求数（默认 50）</p>
+          </div>
+          <button @click="saveConcurrency" :disabled="loading.concurrency" class="w-full py-3 bg-cyan-500 text-white rounded-xl font-black text-xs hover:bg-cyan-600 transition-all">保存并发配置</button>
         </div>
       </section>
 

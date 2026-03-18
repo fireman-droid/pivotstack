@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"kiro-api-proxy/config"
 	"sync"
 	"time"
 )
@@ -42,9 +43,10 @@ func OnRequestStart(keyID, ip string) (bool, string) {
 
 	now := time.Now().Unix()
 
-	// Concurrency limit: max 10 concurrent streams per key
-	if rt.ActiveStreams >= 10 {
-		fmt.Printf("[Abuse] key=%s blocked: concurrency_limit (%d active)\n", keyID[:8], rt.ActiveStreams)
+	// Concurrency limit: dynamic from config (default: 20)
+	maxPerKey, _ := config.GetConcurrencyConfig()
+	if rt.ActiveStreams >= maxPerKey {
+		fmt.Printf("[Abuse] key=%s blocked: concurrency_limit (%d/%d active)\n", keyID[:8], rt.ActiveStreams, maxPerKey)
 		return false, "concurrency_limit"
 	}
 
