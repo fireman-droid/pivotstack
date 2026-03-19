@@ -31,7 +31,8 @@ const claudeFormat = ref('thinking')
 const preferredEndpoint = ref('auto')
 const newPassword = ref('')
 const maxConcurrentPerKey = ref(20)
-const maxInFlightPerAccount = ref(50)
+const maxInFlightPerAccountFree = ref(50)
+const maxInFlightPerAccountPro = ref(50)
 const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false, concurrency: false })
 
 onMounted(async () => {
@@ -58,7 +59,8 @@ onMounted(async () => {
     if (concurrencyRes.ok) {
       const d = await concurrencyRes.json()
       maxConcurrentPerKey.value = d.maxConcurrentPerKey || 20
-      maxInFlightPerAccount.value = d.maxInFlightPerAccount || 50
+      maxInFlightPerAccountFree.value = d.maxInFlightPerAccountFree || d.maxInFlightPerAccount || 50
+      maxInFlightPerAccountPro.value = d.maxInFlightPerAccountPro || d.maxInFlightPerAccount || 50
     }
   } catch {}
 })
@@ -94,7 +96,7 @@ async function saveEndpoint() {
 
 async function saveConcurrency() {
   loading.value.concurrency = true
-  const res = await api('/concurrency', { method: 'POST', body: JSON.stringify({ maxConcurrentPerKey: maxConcurrentPerKey.value, maxInFlightPerAccount: maxInFlightPerAccount.value }) })
+  const res = await api('/concurrency', { method: 'POST', body: JSON.stringify({ maxConcurrentPerKey: maxConcurrentPerKey.value, maxInFlightPerAccountFree: maxInFlightPerAccountFree.value, maxInFlightPerAccountPro: maxInFlightPerAccountPro.value }) })
   res.ok ? success('并发设置已保存') : error('保存失败')
   loading.value.concurrency = false
 }
@@ -258,9 +260,14 @@ async function resetPricing() {
             <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">每个 API Key 同时允许的最大并发请求数（默认 20）</p>
           </div>
           <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">单账号最大并发请求</span>
-            <input v-model.number="maxInFlightPerAccount" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
-            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">号池中每个 Kiro 账号同时处理的最大请求数（默认 50）</p>
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">FREE 账号最大并发</span>
+            <input v-model.number="maxInFlightPerAccountFree" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
+            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">免费号池中每个账号同时处理的最大请求数（默认 50）</p>
+          </div>
+          <div class="space-y-3">
+            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">PRO 账号最大并发</span>
+            <input v-model.number="maxInFlightPerAccountPro" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
+            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">付费号池中每个账号同时处理的最大请求数（默认 50）</p>
           </div>
           <button @click="saveConcurrency" :disabled="loading.concurrency" class="w-full py-3 bg-cyan-500 text-white rounded-xl font-black text-xs hover:bg-cyan-600 transition-all">保存并发配置</button>
         </div>

@@ -288,8 +288,10 @@ type Config struct {
 	PreferredEndpoint string `json:"preferredEndpoint,omitempty"`
 
 	// Concurrency limits (configurable from admin UI)
-	MaxConcurrentPerKey   int `json:"maxConcurrentPerKey,omitempty"`   // Per API key max concurrent streams (default: 20)
-	MaxInFlightPerAccount int `json:"maxInFlightPerAccount,omitempty"` // Per account max in-flight requests (default: 50)
+	MaxConcurrentPerKey       int `json:"maxConcurrentPerKey,omitempty"`       // Per API key max concurrent streams (default: 20)
+	MaxInFlightPerAccount     int `json:"maxInFlightPerAccount,omitempty"`     // Legacy: unified per-account limit (kept for migration)
+	MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree,omitempty"` // Per FREE account max in-flight requests (default: 50)
+	MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro,omitempty"`  // Per PRO account max in-flight requests (default: 50)
 
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
@@ -767,30 +769,42 @@ func UpdateSettings(apiKey string, requireApiKey bool, password string) error {
 	return Save()
 }
 
-// GetConcurrencyConfig returns (maxPerKey, maxPerAccount) with safe defaults.
-func GetConcurrencyConfig() (int, int) {
+// GetConcurrencyConfig returns (maxPerKey, maxPerAccountFree, maxPerAccountPro) with safe defaults.
+func GetConcurrencyConfig() (int, int, int) {
 	cfgLock.RLock()
 	defer cfgLock.RUnlock()
 	perKey := cfg.MaxConcurrentPerKey
 	if perKey <= 0 {
 		perKey = 20
 	}
-	perAccount := cfg.MaxInFlightPerAccount
-	if perAccount <= 0 {
-		perAccount = 50
+	// Migration: if new fields are 0 but old field has value, use old field
+	fallback := cfg.MaxInFlightPerAccount
+	if fallback <= 0 {
+		fallback = 50
 	}
-	return perKey, perAccount
+	perFree := cfg.MaxInFlightPerAccountFree
+	if perFree <= 0 {
+		perFree = fallback
+	}
+	perPro := cfg.MaxInFlightPerAccountPro
+	if perPro <= 0 {
+		perPro = fallback
+	}
+	return perKey, perFree, perPro
 }
 
 // UpdateConcurrencyConfig updates concurrency limits and persists to disk.
-func UpdateConcurrencyConfig(perKey, perAccount int) error {
+func UpdateConcurrencyConfig(perKey, perAccountFree, perAccountPro int) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	if perKey > 0 {
 		cfg.MaxConcurrentPerKey = perKey
 	}
-	if perAccount > 0 {
-		cfg.MaxInFlightPerAccount = perAccount
+	if perAccountFree > 0 {
+		cfg.MaxInFlightPerAccountFree = perAccountFree
+	}
+	if perAccountPro > 0 {
+		cfg.MaxInFlightPerAccountPro = perAccountPro
 	}
 	return Save()
 }

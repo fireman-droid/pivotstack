@@ -44,7 +44,7 @@ func OnRequestStart(keyID, ip string) (bool, string) {
 	now := time.Now().Unix()
 
 	// Concurrency limit: dynamic from config (default: 20)
-	maxPerKey, _ := config.GetConcurrencyConfig()
+	maxPerKey, _, _ := config.GetConcurrencyConfig()
 	if rt.ActiveStreams >= maxPerKey {
 		fmt.Printf("[Abuse] key=%s blocked: concurrency_limit (%d/%d active)\n", keyID[:8], rt.ActiveStreams, maxPerKey)
 		return false, "concurrency_limit"

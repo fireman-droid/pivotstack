@@ -26,9 +26,12 @@ type AccountPool struct {
 }
 
 // getMaxInFlightPerAccount returns the per-account concurrency limit from config.
-func getMaxInFlightPerAccount() int32 {
-	_, maxPerAccount := config.GetConcurrencyConfig()
-	return int32(maxPerAccount)
+func getMaxInFlightPerAccount(tier string) int32 {
+	_, perFree, perPro := config.GetConcurrencyConfig()
+	if tier == "pro" {
+		return int32(perPro)
+	}
+	return int32(perFree)
 }
 
 var (
@@ -123,7 +126,7 @@ func (p *AccountPool) GetNext() *config.Account {
 		}
 
 		// 跳过 InFlight 已满的账号
-		if p.inFlight[accID] >= getMaxInFlightPerAccount() {
+		if p.inFlight[accID] >= getMaxInFlightPerAccount("free") {
 			seen[accID] = true
 			continue
 		}
@@ -331,7 +334,7 @@ func (p *AccountPool) GetNextByTier(tier string) *config.Account {
 		}
 
 		// 跳过 InFlight 已满的账号
-		if p.inFlight[accID] >= getMaxInFlightPerAccount() {
+		if p.inFlight[accID] >= getMaxInFlightPerAccount(tier) {
 			seen[accID] = true
 			continue
 		}

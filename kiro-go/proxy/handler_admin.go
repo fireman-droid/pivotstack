@@ -638,17 +638,20 @@ func (h *Handler) apiUpdateEndpointConfig(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) apiGetConcurrency(w http.ResponseWriter, _ *http.Request) {
-	perKey, perAccount := config.GetConcurrencyConfig()
+	perKey, perFree, perPro := config.GetConcurrencyConfig()
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"maxConcurrentPerKey":   perKey,
-		"maxInFlightPerAccount": perAccount,
+		"maxConcurrentPerKey":       perKey,
+		"maxInFlightPerAccountFree": perFree,
+		"maxInFlightPerAccountPro":  perPro,
 	})
 }
 
 func (h *Handler) apiUpdateConcurrency(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MaxConcurrentPerKey   int `json:"maxConcurrentPerKey"`
-		MaxInFlightPerAccount int `json:"maxInFlightPerAccount"`
+		MaxConcurrentPerKey       int `json:"maxConcurrentPerKey"`
+		MaxInFlightPerAccount     int `json:"maxInFlightPerAccount"`     // Legacy: sets both free and pro
+		MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree"` // Per FREE account
+		MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro"`  // Per PRO account
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -660,12 +663,28 @@ func (h *Handler) apiUpdateConcurrency(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "maxConcurrentPerKey must be 1-200"})
 		return
 	}
-	if req.MaxInFlightPerAccount < 1 || req.MaxInFlightPerAccount > 500 {
+	// Backward compat: if old unified field is set but new fields aren't, apply to both
+	perFree := req.MaxInFlightPerAccountFree
+	perPro := req.MaxInFlightPerAccountPro
+	if req.MaxInFlightPerAccount > 0 {
+		if perFree == 0 {
+			perFree = req.MaxInFlightPerAccount
+		}
+		if perPro == 0 {
+			perPro = req.MaxInFlightPerAccount
+		}
+	}
+	if perFree > 0 && (perFree < 1 || perFree > 500) {
 		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "maxInFlightPerAccount must be 1-500"})
+		json.NewEncoder(w).Encode(map[string]string{"error": "maxInFlightPerAccountFree must be 1-500"})
 		return
 	}
-	if err := config.UpdateConcurrencyConfig(req.MaxConcurrentPerKey, req.MaxInFlightPerAccount); err != nil {
+	if perPro > 0 && (perPro < 1 || perPro > 500) {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "maxInFlightPerAccountPro must be 1-500"})
+		return
+	}
+	if err := config.UpdateConcurrencyConfig(req.MaxConcurrentPerKey, perFree, perPro); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
