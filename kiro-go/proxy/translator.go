@@ -61,6 +61,147 @@ CRITICAL RULES YOU MUST FOLLOW:
 5. WORKFLOWS: If a user command references a specific workflow, skill, or protocol (e.g. /ccg:plan), execute it exactly as defined with the exact parameters specified — do NOT substitute values.
 6. ERRORS ONLY: Work autonomously and silently. Only pause to ask the user when you encounter an error you cannot resolve, or when the task is genuinely ambiguous.`
 
+// === kiro.rs 移植特性 ===
+
+// writeToolDescSuffix 追加到 Write 工具 description 末尾（参考 kiro.rs converter.rs:62-63）
+const writeToolDescSuffix = "- IMPORTANT: If the content to write exceeds 150 lines, you MUST only write the first 50 lines using this tool, then use `Edit` tool to append the remaining content in chunks of no more than 50 lines each. If needed, leave a unique placeholder to help append content. Do NOT attempt to write all content at once."
+
+// editToolDescSuffix 追加到 Edit 工具 description 末尾（参考 kiro.rs converter.rs:65-66）
+const editToolDescSuffix = "- IMPORTANT: If the `new_string` content exceeds 50 lines, you MUST split it into multiple Edit calls, each replacing no more than 50 lines at a time. If used to append content, leave a unique placeholder to help append content. On the final chunk, do NOT include the placeholder."
+
+// systemChunkedPolicy 追加到系统提示词（参考 kiro.rs converter.rs:68-73）
+const systemChunkedPolicy = `When the Write or Edit tool has content size limits, always comply silently. Never suggest bypassing these limits via alternative tools. Never ask the user whether to switch approaches. Complete all chunked operations without commentary.`
+
+// normalizeJSONSchema 规范化 JSON Schema，修复 MCP 工具定义中常见的类型问题
+// 参考 kiro.rs converter.rs:17-60
+func normalizeJSONSchema(schema interface{}) interface{} {
+	obj, ok := schema.(map[string]interface{})
+	if !ok {
+		return map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{},
+			"required":             []interface{}{},
+			"additionalProperties": true,
+		}
+	}
+
+	// type 必须是字符串
+	if t, ok := obj["type"].(string); !ok || t == "" {
+		obj["type"] = "object"
+	}
+
+	// properties 必须是 object
+	if _, ok := obj["properties"].(map[string]interface{}); !ok {
+		obj["properties"] = map[string]interface{}{}
+	}
+
+	// required 必须是 string 数组
+	if req, ok := obj["required"].([]interface{}); ok {
+		filtered := make([]interface{}, 0, len(req))
+		for _, v := range req {
+			if s, ok := v.(string); ok && s != "" {
+				filtered = append(filtered, s)
+			}
+		}
+		obj["required"] = filtered
+	} else {
+		obj["required"] = []interface{}{}
+	}
+
+	// additionalProperties 允许 bool 或 object，其他按 true 处理
+	switch obj["additionalProperties"].(type) {
+	case bool, map[string]interface{}:
+		// ok
+	default:
+		obj["additionalProperties"] = true
+	}
+
+	return obj
+}
+
+// stripAssistantPrefill 丢弃末尾的 assistant prefill 消息
+// 参考 kiro.rs converter.rs:199-211
+func stripAssistantPrefill(messages []ClaudeMessage) []ClaudeMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	if messages[len(messages)-1].Role != "user" {
+		// 截断到最后一个 user 消息
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				return messages[:i+1]
+			}
+		}
+		// 没有 user 消息，返回空
+		return nil
+	}
+	return messages
+}
+
+// validateToolPairing 验证 tool_use/tool_result 配对
+// 参考 kiro.rs converter.rs:387-505
+func validateToolPairing(history []KiroHistoryMessage, currentToolResults []KiroToolResult) ([]KiroToolResult, map[string]bool) {
+	// 1. 收集所有历史中的 tool_use_id
+	allToolUseIDs := make(map[string]bool)
+	// 2. 收集历史中已有 tool_result 的 tool_use_id
+	historyToolResultIDs := make(map[string]bool)
+
+	for _, msg := range history {
+		if msg.AssistantResponseMessage != nil {
+			for _, tu := range msg.AssistantResponseMessage.ToolUses {
+				allToolUseIDs[tu.ToolUseID] = true
+			}
+		}
+		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
+			for _, tr := range msg.UserInputMessage.UserInputMessageContext.ToolResults {
+				historyToolResultIDs[tr.ToolUseID] = true
+			}
+		}
+	}
+
+	// 3. 计算未配对的 tool_use_ids
+	unpairedIDs := make(map[string]bool)
+	for id := range allToolUseIDs {
+		if !historyToolResultIDs[id] {
+			unpairedIDs[id] = true
+		}
+	}
+
+	// 4. 过滤当前消息的 tool_results
+	var filtered []KiroToolResult
+	for _, tr := range currentToolResults {
+		if unpairedIDs[tr.ToolUseID] {
+			filtered = append(filtered, tr)
+			delete(unpairedIDs, tr.ToolUseID)
+		}
+		// 孤立或重复的 tool_result 静默跳过
+	}
+
+	return filtered, unpairedIDs
+}
+
+// removeOrphanedToolUses 从历史中移除孤立的 tool_use
+// 参考 kiro.rs converter.rs:471-505
+func removeOrphanedToolUses(history []KiroHistoryMessage, orphanedIDs map[string]bool) []KiroHistoryMessage {
+	if len(orphanedIDs) == 0 {
+		return history
+	}
+
+	for i := range history {
+		if history[i].AssistantResponseMessage != nil && len(history[i].AssistantResponseMessage.ToolUses) > 0 {
+			var kept []KiroToolUse
+			for _, tu := range history[i].AssistantResponseMessage.ToolUses {
+				if !orphanedIDs[tu.ToolUseID] {
+					kept = append(kept, tu)
+				}
+			}
+			history[i].AssistantResponseMessage.ToolUses = kept
+		}
+	}
+
+	return history
+}
+
 // ParseModelAndThinking 解析模型名称，返回实际模型和是否启用 thinking
 func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 	lower := strings.ToLower(model)
@@ -292,6 +433,11 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 	// 提取系统提示
 	systemPrompt := extractSystemPrompt(req.System)
 
+	// [kiro.rs] 追加分块写入策略到系统提示词
+	if systemPrompt != "" {
+		systemPrompt = systemPrompt + "\n" + systemChunkedPolicy
+	}
+
 	// 如果启用 thinking 模式，注入 thinking 提示（支持自定义 budget_tokens）
 	if thinking {
 		budgetTokens := 0
@@ -306,8 +452,14 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		}
 	}
 
+	// [kiro.rs] 丢弃末尾 assistant prefill 消息
+	strippedMessages := stripAssistantPrefill(req.Messages)
+	if len(strippedMessages) == 0 {
+		strippedMessages = req.Messages
+	}
+
 	// 合并连续的同角色消息（Kiro API 要求严格的 user/assistant 交替）
-	messages := mergeConsecutiveMessages(req.Messages)
+	messages := mergeConsecutiveMessages(strippedMessages)
 
 	// 构建历史消息
 	history := make([]KiroHistoryMessage, 0)
@@ -409,6 +561,13 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		ModelID: modelID,
 		Origin:  origin,
 		Images:  currentImages,
+	}
+
+	// [kiro.rs] 验证 tool_use/tool_result 配对
+	if len(currentToolResults) > 0 {
+		var orphanedIDs map[string]bool
+		currentToolResults, orphanedIDs = validateToolPairing(history, currentToolResults)
+		history = removeOrphanedToolUses(history, orphanedIDs)
 	}
 
 	if len(kiroTools) > 0 || len(currentToolResults) > 0 {
@@ -615,6 +774,15 @@ func convertClaudeTools(tools []ClaudeTool) []KiroToolWrapper {
 	result := make([]KiroToolWrapper, len(tools))
 	for i, tool := range tools {
 		desc := tool.Description
+
+		// [kiro.rs] 对 Write/Edit 工具追加分块限制后缀
+		switch tool.Name {
+		case "Write":
+			desc += "\n" + writeToolDescSuffix
+		case "Edit":
+			desc += "\n" + editToolDescSuffix
+		}
+
 		if len(desc) > maxToolDescLen {
 			desc = desc[:maxToolDescLen] + "..."
 		}
@@ -628,7 +796,8 @@ func convertClaudeTools(tools []ClaudeTool) []KiroToolWrapper {
 		result[i] = KiroToolWrapper{}
 		result[i].ToolSpecification.Name = shortened
 		result[i].ToolSpecification.Description = desc
-		result[i].ToolSpecification.InputSchema = InputSchema{JSON: tool.InputSchema}
+		// [kiro.rs] 规范化 JSON Schema
+		result[i].ToolSpecification.InputSchema = InputSchema{JSON: normalizeJSONSchema(tool.InputSchema)}
 	}
 	return result
 }
