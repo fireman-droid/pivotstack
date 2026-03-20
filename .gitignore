@@ -10,6 +10,10 @@
 kiro-go/data/config.json
 kiro-go/data/call_logs.jsonl
 
+# 服务器特定配置（本地和服务器不同，不要互相覆盖）
+kiro-go/docker-compose.yml
+clash/config.yaml
+
 # kiro-gateway 环境变量（已废弃，现在统一用根目录 .env）
 kiro-gateway/.env
 kiro-gateway/.env.local
