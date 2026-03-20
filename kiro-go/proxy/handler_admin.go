@@ -237,12 +237,25 @@ func (h *Handler) apiAddAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiDeleteAccount(w http.ResponseWriter, _ *http.Request, id string) {
+	// 先获取账号 email，用于重置远程数据库状态
+	var email string
+	accounts := config.GetAccounts()
+	for _, a := range accounts {
+		if a.ID == id {
+			email = a.Email
+			break
+		}
+	}
 	if err := config.DeleteAccount(id); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 	h.pool.Reload()
+	// 异步重置远程数据库中该账号的 card_status，让它可以被重新导入
+	if email != "" {
+		go resetDBCardStatus([]string{email})
+	}
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -368,14 +381,28 @@ func (h *Handler) apiBatchAccounts(w http.ResponseWriter, r *http.Request) {
 	case "delete":
 		successCount := 0
 		failCount := 0
+		// 收集要删除账号的 email，用于重置远程数据库状态
+		accounts := config.GetAccounts()
+		emailMap := make(map[string]string)
+		for _, a := range accounts {
+			emailMap[a.ID] = a.Email
+		}
+		var deletedEmails []string
 		for _, id := range req.IDs {
 			if err := config.DeleteAccount(id); err != nil {
 				failCount++
 			} else {
 				successCount++
+				if e := emailMap[id]; e != "" {
+					deletedEmails = append(deletedEmails, e)
+				}
 			}
 		}
 		h.pool.Reload()
+		// 异步重置远程数据库中这些账号的 card_status
+		if len(deletedEmails) > 0 {
+			go resetDBCardStatus(deletedEmails)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "deleted": successCount, "failed": failCount})
 
 	case "setWeight":

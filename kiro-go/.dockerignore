@@ -1,0 +1,9 @@
+node_modules
+web-vue/node_modules
+data
+*.exe
+*.log
+.git
+.claude
+.env
+__pycache__

@@ -379,3 +379,43 @@ func (h *Handler) apiGetDBStatus(w http.ResponseWriter, _ *http.Request) {
 		"database":  dbAddr,
 	})
 }
+
+// resetDBCardStatus 异步重置远程数据库中指定 email 账号的 card_status 为 unactivated
+// 这样删除本地账号后，该账号可以被重新从数据库导入
+func resetDBCardStatus(emails []string) {
+	if len(emails) == 0 {
+		return
+	}
+
+	dbCfg := getDBImportConfig()
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=true&timeout=10s",
+		dbCfg.User, dbCfg.Password, dbCfg.Host, dbCfg.Port, dbCfg.Database)
+
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		log.Printf("[DB Reset] 连接数据库失败: %v", err)
+		return
+	}
+	defer db.Close()
+
+	placeholders := make([]string, len(emails))
+	args := make([]interface{}, len(emails))
+	for i, e := range emails {
+		placeholders[i] = "?"
+		args[i] = e
+	}
+
+	query := fmt.Sprintf(
+		"UPDATE kiro_accounts SET card_status = 'unactivated' WHERE email IN (%s)",
+		strings.Join(placeholders, ","),
+	)
+
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		log.Printf("[DB Reset] 重置 card_status 失败: %v", err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	log.Printf("[DB Reset] 已重置 %d 个账号的 card_status 为 unactivated (emails: %v)", affected, emails)
+}
