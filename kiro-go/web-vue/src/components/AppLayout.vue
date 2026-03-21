@@ -6,7 +6,7 @@ import WorldSwitcher from './WorldSwitcher.vue'
 import {
   LayoutDashboard, Key, FileText, Users, Settings,
   LogOut, Menu, X, ChevronRight, Shield, TrendingUp, KeyRound,
-  DollarSign, Gift, ShieldAlert
+  DollarSign, Gift, ShieldAlert, Globe
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -26,6 +26,7 @@ const navItems = [
   { name: '激活码', path: '/codes', icon: Gift },
   { name: '滥用监控', path: '/abuse', icon: ShieldAlert },
   { name: '账号管理', path: '/accounts', icon: Users },
+  { name: 'EcomAgent', path: '/ecom-accounts', icon: Globe },
   { name: '个人设置', path: '/settings', icon: Settings },
 ]
 

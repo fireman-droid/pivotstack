@@ -13,6 +13,7 @@ const routes = [
   { path: '/pricing-config', redirect: '/pricing' },
   { path: '/codes', name: 'CodeManagement', component: () => import('../views/CodeManagement.vue'), meta: { auth: true } },
   { path: '/abuse', name: 'AbuseMonitor', component: () => import('../views/AbuseMonitor.vue'), meta: { auth: true } },
+  { path: '/ecom-accounts', name: 'EcomAccounts', component: () => import('../views/EcomAccounts.vue'), meta: { auth: true } },
 
 
   { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },

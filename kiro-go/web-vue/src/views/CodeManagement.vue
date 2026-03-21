@@ -78,6 +78,7 @@ const form = ref({
   useCustomTime: false,
   customBalance: '',
   tier: 'free',
+  line: 'kiro',
   count: 1,
   note: ''
 })
@@ -131,6 +132,7 @@ async function generateCodes() {
         type: form.value.type,
         amount,
         tier: form.value.type === 'time' ? form.value.tier : undefined,
+        line: form.value.type === 'time' ? form.value.line : undefined,
         count: form.value.count,
         note: form.value.note
       })
@@ -384,8 +386,19 @@ onMounted(loadCodes)
                   👑 Pro
                 </button>
               </div>
+              <div class="flex gap-2 mt-2">
+                <label class="form-label">线路</label>
+              </div>
+              <div class="flex gap-2">
+                <button @click="form.line = 'kiro'" class="type-btn" :class="form.line === 'kiro' ? 'type-btn-active-blue' : ''">
+                  🛡️ Kiro
+                </button>
+                <button @click="form.line = 'ecom'" class="type-btn" :class="form.line === 'ecom' ? 'type-btn-active-green' : ''">
+                  🌐 EcomAgent
+                </button>
+              </div>
               <div class="text-[10px] text-[var(--text-secondary)] mt-1">
-                {{ form.tier === 'free' ? 'Free = 仅 Sonnet 4.5' : 'Pro = 全模型' }}
+                {{ form.line === 'kiro' ? 'Kiro 线路（默认）' : 'EcomAgent 线路（激活后自动切换）' }}
               </div>
             </template>
             <template v-else>

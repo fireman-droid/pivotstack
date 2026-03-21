@@ -96,6 +96,7 @@ type ApiKeyInfo struct {
 	Key            string           `json:"key"`
 	Tier           string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
 	Plan           string           `json:"plan"`           // "timed" | "credit" | "hybrid"
+	Line           string           `json:"line,omitempty"` // "kiro"(default) | "ecom" — selects which account pool to use
 	ExpiresAt      int64            `json:"expiresAt"`      // Unix seconds, 0 = never
 	Enabled        bool             `json:"enabled"`
 	Balance        float64          `json:"balance,omitempty"`        // USD balance (paid via activation codes)
@@ -118,12 +119,37 @@ type ActivationCode struct {
 	Type          string  `json:"type"`                    // "balance" | "days"
 	Amount        float64 `json:"amount"`                  // balance: USD face value; days: number of days
 	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days)
+	Line          string  `json:"line,omitempty"`          // "kiro" | "ecom" — auto-set key line on redeem
 	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
 	Used          bool    `json:"used"`
 	UsedBy        string  `json:"usedBy,omitempty"` // ApiKey ID
 	UsedAt        int64   `json:"usedAt,omitempty"`
 	CreatedAt     int64   `json:"createdAt"`
 	Note          string  `json:"note,omitempty"`
+}
+
+// EcomAccount represents an EcomAgent upstream account.
+// These accounts are used in the EcomAgent pool for load-balanced proxying to api.ecomagent.in.
+type EcomAccount struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Password    string `json:"password,omitempty"`
+	ApiKey      string `json:"apiKey"`                // Bearer token for api.ecomagent.in API calls
+	AccountId   string `json:"accountId"`             // EcomAgent account UUID
+	AccessToken string `json:"accessToken,omitempty"` // EcomAgent dashboard JWT (for usage queries)
+	Enabled     bool   `json:"enabled"`
+	// Runtime statistics (local proxy stats)
+	RequestCount int   `json:"requestCount,omitempty"`
+	ErrorCount   int   `json:"errorCount,omitempty"`
+	TotalTokens  int   `json:"totalTokens,omitempty"`
+	LastUsed     int64 `json:"lastUsed,omitempty"`
+	// Upstream usage (from EcomAgent dashboard API: ecomagent.in)
+	UpstreamRequests int    `json:"upstreamRequests,omitempty"` // used requests (from /api/account-usage)
+	UpstreamTokens   int    `json:"upstreamTokens,omitempty"`   // used tokens (from /api/account-usage)
+	RequestLimit     string `json:"requestLimit,omitempty"`     // request limit e.g. "100" (from /api/subscription)
+	TokenLimit       string `json:"tokenLimit,omitempty"`       // token limit e.g. "10M" (from /api/subscription)
+	UpstreamPlan     string `json:"upstreamPlan,omitempty"`     // subscription plan name e.g. "free_trial"
+	LastRefresh      int64  `json:"lastRefresh,omitempty"`      // last upstream refresh timestamp
 }
 
 // CostEntry represents a single account purchase record.
@@ -276,6 +302,7 @@ type Config struct {
 	RequireApiKey   bool             `json:"requireApiKey"`    // Whether to enforce API key validation
 	ApiKeys         []ApiKeyInfo     `json:"apiKeys,omitempty"`
 	Accounts        []Account        `json:"accounts"`
+	EcomAccounts    []EcomAccount    `json:"ecomAccounts,omitempty"` // EcomAgent upstream accounts
 	ActivationCodes []ActivationCode `json:"activationCodes,omitempty"`
 	Pricing         PricingConfig    `json:"pricing,omitempty"`
 
@@ -1085,12 +1112,29 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 		return "key_disabled", fmt.Errorf("api key is disabled")
 	}
 	now := time.Now().Unix()
-	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
+
+	// EcomAgent 线路：只认时间卡，过期就拒绝，余额无效
+	if info.Line == "ecom" {
+		if (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt) {
+			return "", nil
+		}
+		return "ecom_expired", fmt.Errorf("EcomAgent time card expired or not activated")
+	}
+
+	// 纯时间卡：只看时间，过期就不能用，余额不能当后路
+	if info.Plan == "timed" {
+		if info.ExpiresAt == 0 || now <= info.ExpiresAt {
+			return "", nil
+		}
+		return "key_expired", fmt.Errorf("time card expired")
+	}
+
+	// hybrid = 时间卡 + 余额，任一有效即可
+	hasDayCard := info.Plan == "hybrid" && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
 	hasBalance := info.Balance > 0 || info.GiftBalance > 0
 	hasCreditPlan := info.Plan == "credit"
 
 	// 如果没有 Plan 但有余额（赠送或付费），则视为隐式 credit 计划
-	// 用户不需要激活码即可使用管理员赠送的余额
 	if info.Plan == "" && hasBalance {
 		hasCreditPlan = true
 	}
@@ -1203,6 +1247,10 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 						if ac.Tier != "" {
 							cfg.ApiKeys[j].Tier = ac.Tier
 						}
+						// Auto-set line for ecom time cards
+						if ac.Line != "" {
+							cfg.ApiKeys[j].Line = ac.Line
+						}
 						break
 					}
 				}
@@ -1255,4 +1303,173 @@ func CleanupUsedCodes() int {
 	}
 
 	return removedCount
+}
+
+// ==================== EcomAgent Accounts ====================
+
+// GetEcomAccounts returns all EcomAgent accounts.
+func GetEcomAccounts() []EcomAccount {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	accounts := make([]EcomAccount, len(cfg.EcomAccounts))
+	copy(accounts, cfg.EcomAccounts)
+	return accounts
+}
+
+// GetEnabledEcomAccounts returns only enabled EcomAgent accounts.
+func GetEnabledEcomAccounts() []EcomAccount {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	var accounts []EcomAccount
+	for _, a := range cfg.EcomAccounts {
+		if a.Enabled {
+			accounts = append(accounts, a)
+		}
+	}
+	return accounts
+}
+
+// ImportEcomAccounts imports EcomAgent accounts from a JSON array.
+// Duplicates (same AccountId) are updated with new access_token if provided.
+func ImportEcomAccounts(accounts []EcomAccount) (int, int, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+
+	imported := 0
+	skipped := 0
+	// Build index of existing accounts by AccountId
+	existingIdx := make(map[string]int) // accountId -> index in cfg.EcomAccounts
+	for i, a := range cfg.EcomAccounts {
+		existingIdx[a.AccountId] = i
+	}
+
+	changed := false
+	for _, account := range accounts {
+		if idx, exists := existingIdx[account.AccountId]; exists {
+			// Account already exists — update access_token if provided
+			updated := false
+			if account.AccessToken != "" && cfg.EcomAccounts[idx].AccessToken != account.AccessToken {
+				cfg.EcomAccounts[idx].AccessToken = account.AccessToken
+				updated = true
+			}
+			if account.Password != "" && cfg.EcomAccounts[idx].Password == "" {
+				cfg.EcomAccounts[idx].Password = account.Password
+				updated = true
+			}
+			if updated {
+				changed = true
+			}
+			skipped++
+			continue
+		}
+		if account.ID == "" {
+			account.ID = GenerateMachineId()
+		}
+		if !account.Enabled {
+			account.Enabled = true // default to enabled on import
+		}
+		cfg.EcomAccounts = append(cfg.EcomAccounts, account)
+		existingIdx[account.AccountId] = len(cfg.EcomAccounts) - 1
+		imported++
+		changed = true
+	}
+
+	if changed {
+		if err := Save(); err != nil {
+			return imported, skipped, err
+		}
+	}
+	return imported, skipped, nil
+}
+
+// DeleteEcomAccount deletes an EcomAgent account by ID.
+func DeleteEcomAccount(id string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.EcomAccounts {
+		if a.ID == id {
+			cfg.EcomAccounts = append(cfg.EcomAccounts[:i], cfg.EcomAccounts[i+1:]...)
+			return Save()
+		}
+	}
+	return nil
+}
+
+// ToggleEcomAccount toggles the enabled status of an EcomAgent account.
+func ToggleEcomAccount(id string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.EcomAccounts {
+		if a.ID == id {
+			cfg.EcomAccounts[i].Enabled = !a.Enabled
+			return Save()
+		}
+	}
+	return fmt.Errorf("ecom account not found: %s", id)
+}
+
+// UpdateEcomAccountStatsNoSave updates EcomAgent account stats without writing to disk.
+func UpdateEcomAccountStatsNoSave(id string, requestCount, errorCount, totalTokens int, lastUsed int64) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.EcomAccounts {
+		if a.ID == id {
+			cfg.EcomAccounts[i].RequestCount = requestCount
+			cfg.EcomAccounts[i].ErrorCount = errorCount
+			cfg.EcomAccounts[i].TotalTokens = totalTokens
+			cfg.EcomAccounts[i].LastUsed = lastUsed
+			return
+		}
+	}
+}
+
+// ==================== ApiKey Line ====================
+
+// GetKeyLine returns the line ("kiro" or "ecom") for an API key. Defaults to "kiro".
+func GetKeyLine(keyID string) string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	for _, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			if k.Line == "" {
+				return "kiro"
+			}
+			return k.Line
+		}
+	}
+	return "kiro"
+}
+
+// SetKeyLine sets the line ("kiro" or "ecom") for an API key.
+func SetKeyLine(keyID, line string) error {
+	if line != "kiro" && line != "ecom" {
+		return fmt.Errorf("invalid line: %s (must be 'kiro' or 'ecom')", line)
+	}
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, k := range cfg.ApiKeys {
+		if k.ID == keyID {
+			cfg.ApiKeys[i].Line = line
+			return Save()
+		}
+	}
+	return fmt.Errorf("api key not found: %s", keyID)
+}
+
+// UpdateEcomAccountUpstream updates upstream usage data for an EcomAgent account.
+func UpdateEcomAccountUpstream(id string, requests, tokens int, requestLimit, tokenLimit, plan string) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	for i, a := range cfg.EcomAccounts {
+		if a.ID == id {
+			cfg.EcomAccounts[i].UpstreamRequests = requests
+			cfg.EcomAccounts[i].UpstreamTokens = tokens
+			cfg.EcomAccounts[i].RequestLimit = requestLimit
+			cfg.EcomAccounts[i].TokenLimit = tokenLimit
+			cfg.EcomAccounts[i].UpstreamPlan = plan
+			cfg.EcomAccounts[i].LastRefresh = time.Now().Unix()
+			Save() // persist to disk so data survives restarts
+			return
+		}
+	}
 }

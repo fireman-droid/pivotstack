@@ -69,6 +69,7 @@ const userCtxKey contextKeyType = "userCtx"
 type UserContext struct {
 	KeyID         string
 	KeyTier       string // "free" | "pro"
+	Line          string // "kiro" | "ecom" — determines which account pool to use
 	ActualPaidUSD float64
 	ActualGiftUSD float64
 }
@@ -279,11 +280,16 @@ func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 
 	if !config.IsApiKeyRequired() {
 		// API key validation disabled, but still try to associate logs with user
-		uc := &UserContext{KeyTier: "pro"}
+		uc := &UserContext{KeyTier: "pro", Line: "kiro"}
 		if providedKey != "" {
 			if info := config.FindApiKey(providedKey); info != nil {
 				uc.KeyID = info.ID
 				uc.KeyTier = info.Tier
+				line := info.Line
+				if line == "" {
+					line = "kiro"
+				}
+				uc.Line = line
 			}
 		}
 		return uc, nil
@@ -303,7 +309,11 @@ func (h *Handler) resolveApiKey(r *http.Request) (*UserContext, error) {
 		return nil, fmt.Errorf("%s: %s", errType, err.Error())
 	}
 
-	return &UserContext{KeyID: info.ID, KeyTier: info.Tier}, nil
+	line := info.Line
+	if line == "" {
+		line = "kiro"
+	}
+	return &UserContext{KeyID: info.ID, KeyTier: info.Tier, Line: line}, nil
 }
 
 // ServeHTTP 路由分发
@@ -333,6 +343,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.sendClaudeError(w, 401, "authentication_error", err.Error())
 			return
 		}
+		if uc.Line == "ecom" {
+			if info := config.FindApiKeyByID(uc.KeyID); info == nil ||
+				!((info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || time.Now().Unix() <= info.ExpiresAt)) {
+				h.sendClaudeError(w, 403, "access_denied", "EcomAgent channel requires an active time card")
+				return
+			}
+			// Abuse prevention: concurrency + rate + IP checks
+			ip := strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]
+			if ip == "" {
+				ip = r.RemoteAddr
+			}
+			allowed, reason := OnRequestStart(uc.KeyID, strings.TrimSpace(ip))
+			if !allowed {
+				h.sendClaudeError(w, 429, "rate_limit_error", "Request blocked: "+reason)
+				return
+			}
+			defer OnRequestEnd(uc.KeyID)
+			h.handleEcomProxy(w, r, uc)
+			return
+		}
 		h.handleClaudeMessages(w, withUserContext(r, uc))
 	case path == "/v1/messages/count_tokens" || path == "/messages/count_tokens":
 		uc, err := h.resolveApiKey(r)
@@ -345,6 +375,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		uc, err := h.resolveApiKey(r)
 		if err != nil {
 			h.sendOpenAIError(w, 401, "authentication_error", err.Error())
+			return
+		}
+		if uc.Line == "ecom" {
+			if info := config.FindApiKeyByID(uc.KeyID); info == nil ||
+				!((info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || time.Now().Unix() <= info.ExpiresAt)) {
+				h.sendOpenAIError(w, 403, "access_denied", "EcomAgent channel requires an active time card")
+				return
+			}
+			// Abuse prevention: concurrency + rate + IP checks
+			ip := strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]
+			if ip == "" {
+				ip = r.RemoteAddr
+			}
+			allowed, reason := OnRequestStart(uc.KeyID, strings.TrimSpace(ip))
+			if !allowed {
+				h.sendOpenAIError(w, 429, "rate_limit_error", "Request blocked: "+reason)
+				return
+			}
+			defer OnRequestEnd(uc.KeyID)
+			h.handleEcomProxy(w, r, uc)
 			return
 		}
 		h.handleOpenAIChat(w, withUserContext(r, uc))

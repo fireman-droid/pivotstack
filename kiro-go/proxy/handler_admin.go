@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
+	"kiro-api-proxy/pool"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -152,6 +153,20 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/abuse/") && strings.HasSuffix(path, "/clear") && r.Method == "POST":
 		keyID := strings.TrimSuffix(strings.TrimPrefix(path, "/abuse/"), "/clear")
 		h.apiClearAbuse(w, r, keyID)
+	// ==================== EcomAgent Management ====================
+	case path == "/ecom/accounts" && r.Method == "GET":
+		h.apiGetEcomAccounts(w, r)
+	case path == "/ecom/accounts" && r.Method == "POST":
+		h.apiImportEcomAccounts(w, r)
+	case strings.HasPrefix(path, "/ecom/accounts/") && strings.HasSuffix(path, "/toggle") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/ecom/accounts/"), "/toggle")
+		h.apiToggleEcomAccount(w, r, id)
+	case strings.HasPrefix(path, "/ecom/accounts/") && r.Method == "DELETE":
+		h.apiDeleteEcomAccount(w, r, strings.TrimPrefix(path, "/ecom/accounts/"))
+	case path == "/ecom/stats" && r.Method == "GET":
+		h.apiGetEcomStats(w, r)
+	case path == "/ecom/refresh" && r.Method == "POST":
+		h.apiRefreshEcomAccounts(w, r)
 
 	default:
 		w.WriteHeader(404)
@@ -1138,6 +1153,7 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		Type   string  `json:"type"`   // "balance" | "days"
 		Amount float64 `json:"amount"` // CNY (for balance) or seconds (for days/time)
 		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
+		Line   string  `json:"line"`   // "kiro" | "ecom" (auto-set on redeem)
 		Count  int     `json:"count"`  // how many codes to generate
 		Note   string  `json:"note"`
 	}
@@ -1173,6 +1189,9 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		}
 		if (req.Type == "days" || req.Type == "time") && (req.Tier == "free" || req.Tier == "pro") {
 			ac.Tier = req.Tier
+		}
+		if req.Line == "kiro" || req.Line == "ecom" {
+			ac.Line = req.Line
 		}
 		if err := config.AddActivationCode(ac); err != nil {
 			w.WriteHeader(500)
@@ -1230,4 +1249,127 @@ func generateActivationCode() string {
 		return string(b)
 	}
 	return "KIRO-" + seg() + "-" + seg() + "-" + seg()
+}
+
+// ==================== EcomAgent Admin APIs ====================
+
+// GET /admin/api/ecom/accounts
+func (h *Handler) apiGetEcomAccounts(w http.ResponseWriter, _ *http.Request) {
+	accounts := config.GetEcomAccounts()
+	ecomPool := pool.GetEcomPool()
+	poolAccounts := ecomPool.GetAllAccounts()
+	statsMap := make(map[string]config.EcomAccount)
+	for _, a := range poolAccounts {
+		statsMap[a.ID] = a
+	}
+	result := make([]map[string]interface{}, len(accounts))
+	for i, a := range accounts {
+		stats := statsMap[a.ID]
+		result[i] = map[string]interface{}{
+			"id":               a.ID,
+			"email":            a.Email,
+			"accountId":        a.AccountId,
+			"apiKey":           maskKey(a.ApiKey),
+			"enabled":          a.Enabled,
+			"requestCount":     stats.RequestCount,
+			"errorCount":       stats.ErrorCount,
+			"totalTokens":      stats.TotalTokens,
+			"lastUsed":         stats.LastUsed,
+			"upstreamRequests": a.UpstreamRequests,
+			"upstreamTokens":   a.UpstreamTokens,
+			"requestLimit":     a.RequestLimit,
+			"tokenLimit":       a.TokenLimit,
+			"upstreamPlan":     a.UpstreamPlan,
+			"lastRefresh":      a.LastRefresh,
+			"hasAccessToken":   a.AccessToken != "",
+		}
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+// POST /admin/api/ecom/accounts — batch import
+func (h *Handler) apiImportEcomAccounts(w http.ResponseWriter, r *http.Request) {
+	// Accept the JSON format from user's registration tool
+	var rawAccounts []struct {
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		Status      string `json:"status"`
+		ApiKey      string `json:"api_key"`
+		AccountId   string `json:"account_id"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&rawAccounts); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	// Filter only successful accounts with api_key
+	var ecomAccounts []config.EcomAccount
+	for _, raw := range rawAccounts {
+		if raw.Status != "success" || raw.ApiKey == "" {
+			continue
+		}
+		ecomAccounts = append(ecomAccounts, config.EcomAccount{
+			Email:       raw.Email,
+			Password:    raw.Password,
+			ApiKey:      raw.ApiKey,
+			AccountId:   raw.AccountId,
+			AccessToken: raw.AccessToken,
+			Enabled:     true,
+		})
+	}
+
+	imported, skipped, err := config.ImportEcomAccounts(ecomAccounts)
+	if err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	pool.GetEcomPool().Reload()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"imported": imported,
+		"skipped":  skipped,
+		"filtered": len(rawAccounts) - len(ecomAccounts),
+	})
+}
+
+// DELETE /admin/api/ecom/accounts/{id}
+func (h *Handler) apiDeleteEcomAccount(w http.ResponseWriter, _ *http.Request, id string) {
+	if err := config.DeleteEcomAccount(id); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	pool.GetEcomPool().Reload()
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// POST /admin/api/ecom/accounts/{id}/toggle
+func (h *Handler) apiToggleEcomAccount(w http.ResponseWriter, _ *http.Request, id string) {
+	if err := config.ToggleEcomAccount(id); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	pool.GetEcomPool().Reload()
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// GET /admin/api/ecom/stats
+func (h *Handler) apiGetEcomStats(w http.ResponseWriter, _ *http.Request) {
+	ecomPool := pool.GetEcomPool()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total":     ecomPool.Count(),
+		"available": ecomPool.AvailableCount(),
+	})
+}
+
+// maskKey shows first 8 and last 4 chars of a key
+func maskKey(key string) string {
+	if len(key) <= 12 {
+		return key
+	}
+	return key[:8] + "..." + key[len(key)-4:]
 }

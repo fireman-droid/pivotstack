@@ -22,6 +22,5 @@ COPY --from=builder /app/kiro-api-proxy .
 COPY --from=frontend /app/web-vue/dist ./web-vue/dist
 
 EXPOSE 8080
-VOLUME /app/data
 
 CMD ["./kiro-api-proxy"]

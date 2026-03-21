@@ -31,6 +31,8 @@ func (h *Handler) handleUserAPI(w http.ResponseWriter, r *http.Request) {
 		h.handleUserRedeem(w, r, keyInfo)
 	case path == "/user/api/pricing" && r.Method == "GET":
 		h.handleUserPricing(w)
+	case path == "/user/api/line" && r.Method == "PUT":
+		h.handleUserSetLine(w, r, keyInfo)
 	default:
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 	}
@@ -58,6 +60,7 @@ func (h *Handler) handleUserMe(w http.ResponseWriter, info *config.ApiKeyInfo) {
 		"id":             info.ID,
 		"tier":           info.Tier,
 		"plan":           info.Plan,
+		"line":           info.Line,
 		"balance":        info.Balance,
 		"giftBalance":    info.GiftBalance,
 		"totalBalance":   info.Balance + info.GiftBalance,
@@ -268,4 +271,21 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+// PUT /user/api/line - switch routing line (kiro/ecom)
+func (h *Handler) handleUserSetLine(w http.ResponseWriter, r *http.Request, info *config.ApiKeyInfo) {
+	var req struct {
+		Line string `json:"line"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := config.SetKeyLine(info.ID, req.Line); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	fmt.Printf("[Line] key=%s switched to line=%s\n", info.ID[:8], req.Line)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "line": req.Line})
 }
