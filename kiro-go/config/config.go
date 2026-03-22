@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -164,10 +165,17 @@ type CostEntry struct {
 const FreeAccountCredits = 550.0 // fixed credits per FREE account
 const CNYPerUSDFace = 0.05       // $1 face value = ¥0.05 real CNY
 
+type LinePolicy struct {
+	AllowTimed  bool `json:"allowTimed"`
+	AllowCredit bool `json:"allowCredit"`
+}
+
 // PricingConfig holds credit-based pricing.
 type PricingConfig struct {
 	FreePoolPriceUSD float64 `json:"freePoolPriceUSD"` // face-value USD per credit for FREE pool (default: 0.40)
 	ProPoolPriceUSD  float64 `json:"proPoolPriceUSD"`  // face-value USD per credit for PRO pool (default: 2.00)
+	EcomPointPrice   float64 `json:"ecomPointPrice"`   // CNY price per Ecom point (default: 0.02)
+	LinePolicies     map[string]LinePolicy `json:"linePolicies,omitempty"`
 
 	ProCostEntries  []CostEntry `json:"proCostEntries,omitempty"`
 	FreeCostEntries []CostEntry `json:"freeCostEntries,omitempty"`
@@ -249,7 +257,56 @@ func GetPricing() PricingConfig {
 	if p.ProPoolPriceUSD == 0 {
 		p.ProPoolPriceUSD = 2.00
 	}
+	if p.EcomPointPrice == 0 {
+		p.EcomPointPrice = 0.02
+	}
+	p.LinePolicies = normalizeLinePolicies(p.LinePolicies)
 	return p
+}
+
+func defaultLinePolicies() map[string]LinePolicy {
+	return map[string]LinePolicy{
+		"kiro": {AllowTimed: true, AllowCredit: true},
+		"ecom": {AllowTimed: true, AllowCredit: true},
+	}
+}
+
+func normalizeLinePolicies(p map[string]LinePolicy) map[string]LinePolicy {
+	defaults := defaultLinePolicies()
+	if p == nil {
+		return defaults
+	}
+	out := map[string]LinePolicy{}
+	for k, v := range p {
+		line := strings.ToLower(strings.TrimSpace(k))
+		if line == "" {
+			continue
+		}
+		out[line] = v
+	}
+	for k, v := range defaults {
+		if _, ok := out[k]; !ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func getLinePolicy(line string) LinePolicy {
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line == "" {
+		line = "kiro"
+	}
+	policies := normalizeLinePolicies(GetPricing().LinePolicies)
+	if policy, ok := policies[line]; ok {
+		return policy
+	}
+	return policies["kiro"]
+}
+
+func GetEcomPointPrice() float64 {
+	p := GetPricing()
+	return p.EcomPointPrice
 }
 
 // AddCostEntry adds a cost entry to PRO or FREE list.
@@ -320,6 +377,11 @@ type Config struct {
 	MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree,omitempty"` // Per FREE account max in-flight requests (default: 50)
 	MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro,omitempty"`  // Per PRO account max in-flight requests (default: 50)
 
+	// Ecom abuse limits (configurable from admin UI)
+	EcomMaxConcurrentPerKey int `json:"ecomMaxConcurrentPerKey,omitempty"` // Per Ecom API key max concurrent streams (default: 5)
+	EcomMaxIPsPerKey        int `json:"ecomMaxIPsPerKey,omitempty"`        // Per Ecom API key max distinct IPs (default: 3)
+	EcomMaxDailyRequests    int `json:"ecomMaxDailyRequests,omitempty"`    // Per Ecom API key max requests per day (default: 100)
+
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
 	SuccessRequests int     `json:"successRequests,omitempty"` // Successful requests count
@@ -356,6 +418,56 @@ var (
 	cfgLock sync.RWMutex
 	cfgPath string
 )
+
+func getEcomAccountsSidecarPath() string {
+	if cfgPath == "" {
+		return filepath.Join(".", "ecom_accounts.json")
+	}
+	return filepath.Join(GetDataDir(), "ecom_accounts.json")
+}
+
+func saveEcomAccountsSidecar(accounts []EcomAccount) error {
+	if accounts == nil {
+		accounts = []EcomAccount{}
+	}
+	data, err := json.MarshalIndent(accounts, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getEcomAccountsSidecarPath(), data, 0600)
+}
+
+func loadEcomAccountsSidecar() ([]EcomAccount, error) {
+	data, err := os.ReadFile(getEcomAccountsSidecarPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []EcomAccount{}, nil
+		}
+		return nil, err
+	}
+	var accounts []EcomAccount
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+func restoreEcomAccountsIfNeeded(c *Config) {
+	if len(c.EcomAccounts) > 0 {
+		_ = saveEcomAccountsSidecar(c.EcomAccounts)
+		return
+	}
+	accounts, err := loadEcomAccountsSidecar()
+	if err != nil {
+		fmt.Printf("[Config] Failed to load ecom sidecar: %v\n", err)
+		return
+	}
+	if len(accounts) == 0 {
+		return
+	}
+	c.EcomAccounts = accounts
+	fmt.Printf("[Config] Restored %d Ecom accounts from sidecar %s\n", len(accounts), getEcomAccountsSidecarPath())
+}
 
 // Init initializes the configuration system with the specified file path.
 // If the file doesn't exist, a default configuration is created.
@@ -414,6 +526,7 @@ func Load() error {
 		migrated = true
 	}
 	cfg = &c
+	restoreEcomAccountsIfNeeded(cfg)
 	if migrated {
 		return Save()
 	}
@@ -427,7 +540,27 @@ func Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, data, 0600)
+
+	dir := filepath.Dir(cfgPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	bakPath := cfgPath + ".bak"
+	if existing, err := os.ReadFile(cfgPath); err == nil {
+		_ = os.WriteFile(bakPath, existing, 0600)
+	}
+
+	tmpPath := cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, cfgPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+
+	return saveEcomAccountsSidecar(cfg.EcomAccounts)
 }
 
 // SetPassword updates the admin password.
@@ -559,6 +692,54 @@ func UpdateApiKey(id string, key ApiKeyInfo) error {
 		}
 	}
 	return nil
+}
+
+type ApiKeyPatch struct {
+	Plan        *string
+	ExpiresAt   *int64
+	Enabled     *bool
+	Balance     *float64
+	GiftBalance *float64
+	Note        *string
+	Line        *string
+	Tier        *string
+}
+
+func PatchApiKey(id string, patch ApiKeyPatch) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID != id {
+			continue
+		}
+		if patch.Plan != nil {
+			cfg.ApiKeys[i].Plan = *patch.Plan
+		}
+		if patch.ExpiresAt != nil {
+			cfg.ApiKeys[i].ExpiresAt = *patch.ExpiresAt
+		}
+		if patch.Enabled != nil {
+			cfg.ApiKeys[i].Enabled = *patch.Enabled
+		}
+		if patch.Balance != nil {
+			cfg.ApiKeys[i].Balance = *patch.Balance
+		}
+		if patch.GiftBalance != nil {
+			cfg.ApiKeys[i].GiftBalance = *patch.GiftBalance
+		}
+		if patch.Note != nil {
+			cfg.ApiKeys[i].Note = *patch.Note
+		}
+		if patch.Line != nil {
+			cfg.ApiKeys[i].Line = *patch.Line
+		}
+		if patch.Tier != nil {
+			cfg.ApiKeys[i].Tier = *patch.Tier
+		}
+		return Save()
+	}
+	return fmt.Errorf("api key not found: %s", id)
 }
 
 func UpdateApiKeyStatsNoSave(id string, lastUsed, requests, errors, tokens int64, credits float64, models map[string]int64) {
@@ -836,6 +1017,47 @@ func UpdateConcurrencyConfig(perKey, perAccountFree, perAccountPro int) error {
 	return Save()
 }
 
+// GetEcomAbuseConfig returns (maxConcurrentPerKey, maxIPsPerKey, maxDailyRequests) with safe defaults.
+func GetEcomAbuseConfig() (int, int, int) {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+
+	maxConcurrent := cfg.EcomMaxConcurrentPerKey
+	if maxConcurrent <= 0 {
+		maxConcurrent = 5
+	}
+
+	maxIPs := cfg.EcomMaxIPsPerKey
+	if maxIPs <= 0 {
+		maxIPs = 3
+	}
+
+	maxDaily := cfg.EcomMaxDailyRequests
+	if maxDaily <= 0 {
+		maxDaily = 100
+	}
+
+	return maxConcurrent, maxIPs, maxDaily
+}
+
+// UpdateEcomAbuseConfig updates Ecom abuse limits and persists to disk.
+func UpdateEcomAbuseConfig(maxConcurrentPerKey, maxIPsPerKey, maxDailyRequests int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+
+	if maxConcurrentPerKey > 0 {
+		cfg.EcomMaxConcurrentPerKey = maxConcurrentPerKey
+	}
+	if maxIPsPerKey > 0 {
+		cfg.EcomMaxIPsPerKey = maxIPsPerKey
+	}
+	if maxDailyRequests > 0 {
+		cfg.EcomMaxDailyRequests = maxDailyRequests
+	}
+
+	return Save()
+}
+
 func UpdateStats(totalReq, successReq, failedReq, totalTokens int, totalCredits float64) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -991,6 +1213,7 @@ func UpdatePreferredEndpoint(endpoint string) error {
 func UpdatePricing(p PricingConfig) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
+	p.LinePolicies = normalizeLinePolicies(p.LinePolicies)
 	cfg.Pricing = p
 	return Save()
 }
@@ -1016,14 +1239,14 @@ func FindApiKeyByID(id string) *ApiKeyInfo {
 // DeductKeyBalance atomically deducts amount from an API key's balance.
 // It prioritizes burning `Balance` (paid) first. If insufficient, it burns `GiftBalance`.
 // Returns (success, remainingTotalBalance, paidAmountDeducted, giftedAmountDeducted).
-func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, float64) {
+func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, float64, error) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	for i, k := range cfg.ApiKeys {
 		if k.ID == keyID {
 			totalBalance := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
 			if totalBalance < amount {
-				return false, totalBalance, 0, 0
+				return false, totalBalance, 0, 0, nil
 			}
 
 			var paidDeducted, giftedDeducted float64
@@ -1044,11 +1267,13 @@ func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, flo
 			}
 
 			remainingTotal := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
-			Save()
-			return true, remainingTotal, paidDeducted, giftedDeducted
+			if err := Save(); err != nil {
+				return false, remainingTotal, paidDeducted, giftedDeducted, err
+			}
+			return true, remainingTotal, paidDeducted, giftedDeducted, nil
 		}
 	}
-	return false, 0, 0, 0
+	return false, 0, 0, 0, fmt.Errorf("api key not found: %s", keyID)
 }
 
 // AddKeyBalance adds paid balance to an API key. Reverses a deduction (used by RefundPreAuth).
@@ -1112,41 +1337,48 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 		return "key_disabled", fmt.Errorf("api key is disabled")
 	}
 	now := time.Now().Unix()
+	policy := getLinePolicy(info.Line)
 
-	// EcomAgent 线路：只认时间卡，过期就拒绝，余额无效
-	if info.Line == "ecom" {
-		if (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt) {
-			return "", nil
-		}
-		return "ecom_expired", fmt.Errorf("EcomAgent time card expired or not activated")
-	}
-
-	// 纯时间卡：只看时间，过期就不能用，余额不能当后路
-	if info.Plan == "timed" {
-		if info.ExpiresAt == 0 || now <= info.ExpiresAt {
-			return "", nil
-		}
-		return "key_expired", fmt.Errorf("time card expired")
-	}
-
-	// hybrid = 时间卡 + 余额，任一有效即可
-	hasDayCard := info.Plan == "hybrid" && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
+	hasTimed := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
 	hasBalance := info.Balance > 0 || info.GiftBalance > 0
-	hasCreditPlan := info.Plan == "credit"
-
-	// 如果没有 Plan 但有余额（赠送或付费），则视为隐式 credit 计划
+	hasCreditPlan := info.Plan == "credit" || info.Plan == "hybrid"
 	if info.Plan == "" && hasBalance {
 		hasCreditPlan = true
 	}
 
-	if !hasDayCard && !hasBalance && !hasCreditPlan {
-		if info.Plan == "" {
-			return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
-		}
-		return "key_expired", fmt.Errorf("api key expired and insufficient balance")
+	if hasTimed && policy.AllowTimed {
+		return "", nil
 	}
-	return "", nil
+	if hasBalance && hasCreditPlan && policy.AllowCredit {
+		return "", nil
+	}
+
+	if info.Plan == "" {
+		if info.Line == "ecom" {
+			return "not_activated", fmt.Errorf("EcomAgent key not activated, please redeem a time or balance card")
+		}
+		return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
+	}
+
+	if info.Line == "ecom" {
+		if !policy.AllowTimed && !policy.AllowCredit {
+			return "line_policy_denied", fmt.Errorf("EcomAgent line is currently unavailable for this key plan")
+		}
+		if info.Plan == "timed" && !hasTimed {
+			return "ecom_expired", fmt.Errorf("EcomAgent time card expired")
+		}
+		return "ecom_expired", fmt.Errorf("EcomAgent access expired and insufficient balance")
+	}
+
+	if !policy.AllowTimed && !policy.AllowCredit {
+		return "line_policy_denied", fmt.Errorf("line policy currently denies access")
+	}
+	if info.Plan == "timed" && !hasTimed {
+		return "key_expired", fmt.Errorf("time card expired")
+	}
+	return "key_expired", fmt.Errorf("api key expired and insufficient balance")
 }
+
 
 // ValidateKeyAccessForModel checks if a key can access a model in the given pool.
 // Returns action: "free" (no charge), "deduct" (charge balance), or error.
@@ -1212,6 +1444,12 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 				return "", fmt.Errorf("activation code has expired")
 			}
 
+			// Backup for rollback on persist failure
+			prevCodes := make([]ActivationCode, len(cfg.ActivationCodes))
+			copy(prevCodes, cfg.ActivationCodes)
+			prevKeys := make([]ApiKeyInfo, len(cfg.ApiKeys))
+			copy(prevKeys, cfg.ApiKeys)
+
 			// Process balance/time addition before deleting
 			switch ac.Type {
 			case "balance":
@@ -1261,7 +1499,11 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			// Delete the code permanently instead of marking it used
 			cfg.ActivationCodes = append(cfg.ActivationCodes[:i], cfg.ActivationCodes[i+1:]...)
 
-			Save()
+			if err := Save(); err != nil {
+				cfg.ActivationCodes = prevCodes
+				cfg.ApiKeys = prevKeys
+				return "", err
+			}
 			return ac.Type, nil
 		}
 	}
@@ -1282,7 +1524,7 @@ func DeleteActivationCode(codeStr string) error {
 }
 
 // CleanupUsedCodes completely removes all voided/used activation codes from the storage.
-func CleanupUsedCodes() int {
+func CleanupUsedCodes() (int, error) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 
@@ -1299,10 +1541,12 @@ func CleanupUsedCodes() int {
 
 	if removedCount > 0 {
 		cfg.ActivationCodes = activeCodes
-		_ = Save()
+		if err := Save(); err != nil {
+			return 0, err
+		}
 	}
 
-	return removedCount
+	return removedCount, nil
 }
 
 // ==================== EcomAgent Accounts ====================
@@ -1395,6 +1639,15 @@ func DeleteEcomAccount(id string) error {
 	return nil
 }
 
+// DeleteAllEcomAccounts removes all EcomAgent accounts.
+func DeleteAllEcomAccounts() (int, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	count := len(cfg.EcomAccounts)
+	cfg.EcomAccounts = []EcomAccount{}
+	return count, Save()
+}
+
 // ToggleEcomAccount toggles the enabled status of an EcomAgent account.
 func ToggleEcomAccount(id string) error {
 	cfgLock.Lock()
@@ -1457,7 +1710,7 @@ func SetKeyLine(keyID, line string) error {
 }
 
 // UpdateEcomAccountUpstream updates upstream usage data for an EcomAgent account.
-func UpdateEcomAccountUpstream(id string, requests, tokens int, requestLimit, tokenLimit, plan string) {
+func UpdateEcomAccountUpstream(id string, requests, tokens int, requestLimit, tokenLimit, plan string) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	for i, a := range cfg.EcomAccounts {
@@ -1468,8 +1721,11 @@ func UpdateEcomAccountUpstream(id string, requests, tokens int, requestLimit, to
 			cfg.EcomAccounts[i].TokenLimit = tokenLimit
 			cfg.EcomAccounts[i].UpstreamPlan = plan
 			cfg.EcomAccounts[i].LastRefresh = time.Now().Unix()
-			Save() // persist to disk so data survives restarts
-			return
+			if err := Save(); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
+	return fmt.Errorf("ecom account not found: %s", id)
 }

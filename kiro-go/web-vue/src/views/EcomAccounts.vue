@@ -1,12 +1,14 @@
 <script setup>
 import { onMounted, computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import {
   Globe, Plus, Trash2, Power, PowerOff, RotateCw,
-  Sparkles, X, CheckCircle2, ShieldAlert, Activity, Zap, RefreshCw
+  Sparkles, X, CheckCircle2, ShieldAlert, Activity, Zap, RefreshCw, AlertTriangle
 } from 'lucide-vue-next'
 
+const router = useRouter()
 const { success, error } = useToast()
 const accounts = ref([])
 const stats = ref({ total: 0, available: 0 })
@@ -16,14 +18,38 @@ const showImportDialog = ref(false)
 const jsonText = ref('')
 const isImporting = ref(false)
 
+const filters = ref({
+  search: '',
+  enabled: '',
+  hasToken: '',
+  plan: '',
+})
+const page = ref(1)
+const pageSize = ref(50)
+const total = ref(0)
+const ecomPointPrice = ref(0)
+
 async function loadAccounts() {
   loading.value = true
   try {
+    const query = new URLSearchParams({
+      page: String(page.value),
+      pageSize: String(pageSize.value),
+    })
+    if (filters.value.search.trim()) query.set('search', filters.value.search.trim())
+    if (filters.value.enabled !== '') query.set('enabled', filters.value.enabled)
+    if (filters.value.hasToken !== '') query.set('hasToken', filters.value.hasToken)
+    if (filters.value.plan.trim()) query.set('plan', filters.value.plan.trim())
+
     const [accRes, statsRes] = await Promise.all([
-      api('/ecom/accounts'),
+      api(`/ecom/accounts?${query.toString()}`),
       api('/ecom/stats')
     ])
-    accounts.value = await accRes.json()
+    const payload = await accRes.json()
+    accounts.value = payload.items || []
+    total.value = Number(payload.total || 0)
+    page.value = Number(payload.page || page.value)
+    pageSize.value = Number(payload.pageSize || pageSize.value)
     stats.value = await statsRes.json()
   } catch (e) {
     error('加载失败: ' + e.message)
@@ -31,24 +57,92 @@ async function loadAccounts() {
   loading.value = false
 }
 
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+
+function applyFilters() {
+  page.value = 1
+  loadAccounts()
+}
+
+function resetFilters() {
+  filters.value = { search: '', enabled: '', hasToken: '', plan: '' }
+  page.value = 1
+  loadAccounts()
+}
+
+function goPrevPage() {
+  if (page.value <= 1) return
+  page.value--
+  loadAccounts()
+}
+
+function goNextPage() {
+  if (page.value >= totalPages.value) return
+  page.value++
+  loadAccounts()
+}
+
+const refreshProgress = ref(null)
+
 async function refreshUpstream() {
+  if (refreshing.value) return
   refreshing.value = true
+  refreshProgress.value = { text: '正在创建刷新任务...', percent: 0 }
+
   try {
     const res = await api('/ecom/refresh', { method: 'POST' })
     const data = await res.json()
-    if (data.success) {
-      success(`刷新完成：${data.refreshed} 成功，${data.failed} 失败`)
-      await loadAccounts()
-    } else {
-      error('刷新失败')
+    const jobId = data.jobId
+    if (!jobId) throw new Error('未返回刷新任务 ID')
+
+    const startedAt = Date.now()
+    const timeoutMs = 5 * 60 * 1000
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const pRes = await api(`/ecom/refresh?id=${encodeURIComponent(jobId)}`)
+      const job = await pRes.json()
+      const percent = job.total > 0 ? Math.min(100, Math.round((job.processed / job.total) * 100)) : 100
+      refreshProgress.value = {
+        text: `实时进度：${job.processed}/${job.total}（成功 ${job.refreshed}，失败 ${job.failed}）｜${job.message || 'running'}`,
+        percent,
+      }
+
+      if (job.done) {
+        refreshing.value = false
+        success(`刷新完成：${job.refreshed} 成功，${job.failed} 失败`)
+        await loadAccounts()
+        return
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 700))
     }
+
+    throw new Error('刷新超时，请稍后重试')
   } catch (e) {
+    refreshing.value = false
+    refreshProgress.value = { text: `刷新失败：${e.message}`, percent: 0 }
     error('刷新失败: ' + e.message)
   }
-  refreshing.value = false
 }
 
-onMounted(loadAccounts)
+async function loadPricing() {
+  try {
+    const res = await api('/pricing')
+    if (!res.ok) return
+    const data = await res.json()
+    ecomPointPrice.value = Number(data?.ecomPointPrice || 0)
+  } catch {
+    ecomPointPrice.value = 0
+  }
+}
+
+function goPricing() {
+  router.push('/pricing')
+}
+
+onMounted(async () => {
+  await Promise.all([loadAccounts(), loadPricing()])
+})
 
 const summary = computed(() => {
   const all = accounts.value.length
@@ -83,6 +177,23 @@ async function importAccounts() {
     error('导入失败: ' + e.message)
   }
   isImporting.value = false
+}
+
+async function deleteAllAccounts() {
+  if (!confirm(`确定要删除全部 ${total.value} 个 EcomAgent 账号？此操作不可撤销！`)) return
+  if (!confirm('再次确认：真的要一键清空所有 EcomAgent 账号吗？')) return
+  try {
+    const res = await api('/ecom/accounts', { method: 'DELETE' })
+    const data = await res.json()
+    if (data.success) {
+      success(`已删除 ${data.deleted} 个账号`)
+      await loadAccounts()
+    } else {
+      error(data.error || '删除失败')
+    }
+  } catch (e) {
+    error('删除失败: ' + e.message)
+  }
 }
 
 async function toggleAccount(id) {
@@ -164,6 +275,10 @@ function progressColor(pct) {
           class="p-2.5 bg-[var(--card)] border border-[var(--border)] rounded-xl hover:bg-[var(--bg)] transition-all disabled:opacity-50">
           <RotateCw class="w-4 h-4 text-[var(--text-secondary)]" :class="{ 'animate-spin': loading }" />
         </button>
+        <button @click="deleteAllAccounts"
+          class="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl hover:bg-red-500/20 transition-all text-sm font-bold text-red-500">
+          <Trash2 class="w-4 h-4" /> 一键清空
+        </button>
         <button @click="showImportDialog = true"
           class="flex items-center gap-2 px-5 py-2.5 bg-[var(--primary)] text-white rounded-xl font-bold text-sm shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-[0.98] transition-all">
           <Plus class="w-4 h-4" /> 导入账号
@@ -171,7 +286,74 @@ function progressColor(pct) {
       </div>
     </div>
 
-    <!-- Stats Cards -->
+    <div class="modern-card p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div class="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
+        <AlertTriangle class="w-4 h-4 mt-0.5 text-amber-500" />
+        <div>
+          <div class="font-bold text-[var(--text)]">Ecom 计费在「定价与收益」页面配置</div>
+          <div class="text-xs">当前 ECOM 点价：<span class="font-bold text-[var(--text)]">¥{{ ecomPointPrice.toFixed(3) }}/point</span></div>
+        </div>
+      </div>
+      <button @click="goPricing"
+        class="h-10 px-4 rounded-xl border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--bg)] text-sm font-bold transition-all">
+        前往计费设置
+      </button>
+    </div>
+
+    <div v-if="refreshProgress" class="modern-card p-3 text-xs font-semibold text-[var(--text-secondary)] space-y-2">
+      <div>{{ refreshProgress.text }}</div>
+      <div class="w-full h-2 rounded-full bg-[var(--border)] overflow-hidden">
+        <div class="h-full bg-[var(--primary)] transition-all duration-300" :style="{ width: `${refreshProgress.percent || 0}%` }"></div>
+      </div>
+    </div>
+
+
+    <div class="modern-card p-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+      <div class="space-y-1 md:col-span-2">
+        <label class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">搜索</label>
+        <input v-model="filters.search" @keyup.enter="applyFilters" placeholder="邮箱 / account_id"
+          class="w-full h-10 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">状态</label>
+        <select v-model="filters.enabled" class="w-full h-10 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]">
+          <option value="">全部</option>
+          <option value="true">启用</option>
+          <option value="false">禁用</option>
+        </select>
+      </div>
+      <div class="space-y-1">
+        <label class="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Token</label>
+        <select v-model="filters.hasToken" class="w-full h-10 px-3 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]">
+          <option value="">全部</option>
+          <option value="true">有</option>
+          <option value="false">无</option>
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button @click="applyFilters" class="flex-1 h-10 rounded-xl bg-[var(--primary)] text-white text-sm font-bold">筛选</button>
+        <button @click="resetFilters" class="flex-1 h-10 rounded-xl border border-[var(--border)] text-sm font-bold">重置</button>
+      </div>
+    </div>
+
+
+    <div class="modern-card p-3 flex items-center justify-between text-xs text-[var(--text-secondary)]">
+      <div>共 {{ total }} 条，当前第 {{ page }} / {{ totalPages }} 页</div>
+      <div class="flex items-center gap-2">
+        <select v-model.number="pageSize" @change="applyFilters"
+          class="h-8 px-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-xs outline-none">
+          <option :value="20">20 / 页</option>
+          <option :value="50">50 / 页</option>
+          <option :value="100">100 / 页</option>
+          <option :value="200">200 / 页</option>
+        </select>
+        <button @click="goPrevPage" :disabled="page <= 1"
+          class="h-8 px-3 rounded-lg border border-[var(--border)] disabled:opacity-40">上一页</button>
+        <button @click="goNextPage" :disabled="page >= totalPages"
+          class="h-8 px-3 rounded-lg border border-[var(--border)] disabled:opacity-40">下一页</button>
+      </div>
+    </div>
+
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <div class="modern-card p-4">
         <div class="flex items-center gap-3">
