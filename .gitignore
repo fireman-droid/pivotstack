@@ -10,8 +10,7 @@
 kiro-go/data/config.json
 kiro-go/data/call_logs.jsonl
 
-# 服务器特定配置（本地和服务器不同，不要互相覆盖）
-kiro-go/docker-compose.yml
+# clash 节点配置（含密码不能进 git；服务器侧已备份到 /root/kiro-clash-backup/）
 clash/config.yaml
 
 # kiro-gateway 环境变量（已废弃，现在统一用根目录 .env）

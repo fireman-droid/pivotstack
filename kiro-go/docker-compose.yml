@@ -1,0 +1,11 @@
+services:
+  kiro-go:
+    build: .
+    ports:
+      - "8990:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - CONFIG_PATH=/app/data/config.json
+      - VPN_PROXY_URL=http://172.20.0.1:7890
+    restart: unless-stopped

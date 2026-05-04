@@ -1,350 +1,126 @@
-# Kiro Stack 服务器部署指南
+# Kiro Stack 部署指南（任何人/AI 部署前必读）
 
-## 服务器信息
+> **⚠️ 绝对不要在 `/var/www/kiro-stack/` 根目录跑 `docker compose up`！**
+> 真生产入口是端口 **8990**，compose 文件在 **`kiro-go/` 子目录**。
+> 历史上根目录有过 `docker-compose.yml`（端口 8088），是个废弃的开发副本，已删除。
 
-- 服务器 IP: `115.191.35.73`
-- SSH 用户: `root`
-- 项目路径: `/var/www/kiro-stack`
-- Gitee 仓库: `https://gitee.com/ji-bo-chang-oli-gave-it-to/kiro-stack.git`
+## 真生产入口
 
-## 快速连接
+| 项 | 值 |
+|---|---|
+| 公网入口 | `http://115.191.35.73:8990/admin/` |
+| Compose 文件 | `kiro-go/docker-compose.yml` ← **子目录里这一个** |
+| 项目名 | `kiro-go` |
+| 容器名 | `kiro-go-kiro-go-1` |
+| 镜像名 | `kiro-go-kiro-go` |
+| 不依赖 gateway | ✅ 独立运行 |
 
-```bash
-ssh root@115.191.35.73
-```
+## 标准部署流程
 
----
-
-## 1. 准备服务器
-
-```bash
-# 连接服务器
-ssh root@115.191.35.73
-
-# 安装 Docker
-apt update && apt install -y docker.io docker-compose git
-systemctl enable --now docker
-
-# 配置镜像加速（国内必做）
-cat > /etc/docker/daemon.json << 'EOF'
-{
-  "registry-mirrors": [
-    "https://mirror.ccs.tencentyun.com",
-    "https://docker.m.daocloud.io"
-  ]
-}
-EOF
-systemctl restart docker
-```
-
----
-
-## 2. 克隆项目
+### 本地修改 → 推 gitee
 
 ```bash
-cd /var/www
-git clone https://gitee.com/ji-bo-chang-oli-gave-it-to/kiro-stack.git
-cd kiro-stack
-
-# 配置 Git 记住密码
-git config credential.helper store
-```
-
----
-
-## 3. 配置环境变量
-
-```bash
-# 复制配置文件
-cp .env.example .env
-
-# 编辑配置
-nano .env
-```
-
-修改以下内容：
-
-```env
-# 管理面板密码（必填）
-ADMIN_PASSWORD=你的强密码
-
-# 内部通信密钥（必填，使用下面命令生成）
-INTERNAL_API_KEY=随机生成的密钥
-
-# 可选：代理配置
-# VPN_PROXY_URL=http://127.0.0.1:7890
-
-# 调试模式
-DEBUG_MODE=off
-```
-
-生成随机密钥：
-
-```bash
-openssl rand -hex 32
-```
-
----
-
-## 4. 启动服务
-
-```bash
-# 构建并启动
-docker compose up -d --build
-
-# 查看日志
-docker compose logs -f
-
-# 查看状态
-docker compose ps
-```
-
-首次构建约 2-3 分钟。
-
-**注意：** 项目已配置为只监听 `127.0.0.1`，需要通过 Nginx 反向代理访问。
-
----
-
-## 5. 配置 Nginx 反向代理
-
-```bash
-# 安装 Nginx
-apt install nginx -y
-
-# 复制配置文件
-cp nginx.conf /etc/nginx/sites-available/kiro-stack
-
-# 修改 server_name（如果有域名）
-nano /etc/nginx/sites-available/kiro-stack
-
-# 创建软链接
-ln -s /etc/nginx/sites-available/kiro-stack /etc/nginx/sites-enabled/
-
-# 测试配置
-nginx -t
-
-# 重启 Nginx
-systemctl restart nginx
-```
-
----
-
-## 6. 配置防火墙
-
-```bash
-# 开放端口
-ufw allow 80/tcp
-ufw allow 443/tcp
-
-# 查看状态
-ufw status
-```
-
----
-
-## 7. 配置 API Key 认证
-
-通过 SSH 隧道访问管理面板：
-
-```bash
-# 在本地电脑运行
-ssh -L 8088:127.0.0.1:8088 root@115.191.35.73
-
-# 浏览器访问：http://localhost:8088/admin
-# 用 ADMIN_PASSWORD 登录
-# 在设置页面配置 API Key 并启用
-```
-
-或直接修改配置文件：
-
-```bash
-nano /var/www/kiro-stack/kiro-go/data/config.json
-```
-
-添加：
-
-```json
-{
-  "password": "你的管理密码",
-  "apiKey": "sk-kiro-your-secret-api-key",
-  "requireApiKey": true,
-  ...
-}
-```
-
-重启服务：
-
-```bash
-docker compose restart kiro-go
-```
-
----
-
-## 8. 添加 Kiro 账号
-
-1. 通过 SSH 隧道访问管理面板：`http://localhost:8088/admin`
-2. 用 `ADMIN_PASSWORD` 登录
-3. 点击添加账号（支持 Builder ID / IAM SSO / SSO Token）
-
----
-
-## 9. 测试部署
-
-```bash
-# 健康检查（不需要 API Key）
-curl http://115.191.35.73/health
-
-# 测试 API（需要 API Key）
-curl http://115.191.35.73/v1/chat/completions \
-  -H "Authorization: Bearer your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4.5",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-
-# 查看模型列表
-curl http://115.191.35.73/v1/models
-```
-
----
-
-## 10. 日常更新
-
-### 本地推送代码
-
-```bash
-# 在本地项目目录
-cd D:\E\前端好玩的东西\getcode\kiro-stack
-
+cd /path/to/kiro-stack
 git add .
-git commit -m "更新说明"
-git push gitee main
+git commit -m "改动说明"
+git push gitee main      # remote 'gitee' 带凭证，能直接 push
 ```
 
-### 服务器更新
+### 服务器 SSH 部署
 
 ```bash
-ssh root@115.191.35.73
+ssh root@115.191.35.73         # SSH MCP 名为 my-server
+
 cd /var/www/kiro-stack
-bash deploy-update.sh
+git fetch origin main
+git reset --hard origin/main   # ← 不允许在服务器手改代码累积分歧
+
+cd /var/www/kiro-stack/kiro-go     # ← 这一步是关键，进 kiro-go 子目录
+docker compose up -d --build kiro-go
 ```
 
----
+约 60 秒完成（前端 vite build + go build）。
 
-## 11. 常用命令
+## 服务器关键文件
+
+| 文件 | 路径 | git 状态 |
+|---|---|---|
+| 真生产 compose | `kiro-go/docker-compose.yml` | ✅ tracked，绝不能再删 |
+| Dockerfile | `kiro-go/Dockerfile` | ✅ tracked |
+| 账号配置 | `kiro-go/data/config.json` | ❌ ignored（含 token） |
+| 调用日志 | `kiro-go/data/call_logs.jsonl` | ❌ ignored |
+| 环境变量 | `.env` | ❌ ignored |
+| clash 节点 | `clash/config.yaml` | ❌ ignored（含密码），备份在 `/root/kiro-clash-backup/config.yaml` |
+
+## 出口代理（clash-meta）
+
+业务调用 AWS Kiro/CodeWhisperer，必须**走台湾或美国出口** —— 香港会被 AWS 返回 INVALID_MODEL_ID。
+
+- 容器：`clash-meta`（host network）
+- 监听：`:7890` (http) `:7891` (socks)
+- 配置：`/var/www/kiro-stack/clash/config.yaml`（5 个台湾 anytls 节点）
+- 启动：`docker run -d --name clash-meta --restart unless-stopped --network host -v /var/www/kiro-stack/clash/config.yaml:/root/.config/mihomo/config.yaml:ro metacubex/mihomo:latest`
+
+**万一 clash/config.yaml 被 git clean 误删**：
 
 ```bash
-# 查看日志
-docker compose logs -f kiro-go
-docker compose logs -f kiro-gateway
-docker compose logs --tail=100
-
-# 重启服务
-docker compose restart
-
-# 停止服务
-docker compose down
-
-# 启动服务
-docker compose up -d
-
-# 查看状态
-docker compose ps
-
-# 查看资源占用
-docker stats
-
-# 进入容器
-docker exec -it kiro-go sh
-docker exec -it kiro-gateway sh
-
-# 备份配置
-tar -czf ~/kiro-backup-$(date +%Y%m%d).tar.gz \
-  kiro-go/data/config.json .env
+cp /root/kiro-clash-backup/config.yaml /var/www/kiro-stack/clash/config.yaml
+docker restart clash-meta
 ```
 
----
+## 不能在服务器手改代码
 
-## 12. HTTPS 配置（可选）
+服务器的 git 仓库**只用于 pull**。修改流程严格走：
+
+```
+本地编辑 → git push gitee main → 服务器 git pull → docker compose up --build
+```
+
+历史教训：服务器曾累积过 39 个未提交修改（6446 行）+ detached HEAD 状态，导致 git pull 不能用。这些工作已永久备份在 gitee `server-backup-20260504` 分支，**禁止再这样操作**。
+
+## 常用诊断
 
 ```bash
-# 安装 Certbot
-apt install certbot python3-certbot-nginx -y
+# 容器状态
+docker ps --filter name=kiro-go-kiro-go-1
+docker logs kiro-go-kiro-go-1 --tail 30
 
-# 申请证书（需要域名）
-certbot --nginx -d your-domain.com
+# 调用日志（最近）
+docker exec kiro-go-kiro-go-1 tail -10 /app/data/call_logs.jsonl
 
-# 自动续期
-crontab -e
-# 添加：0 3 * * * certbot renew --quiet
+# clash 出口 IP（应是台湾）
+curl -s -x http://127.0.0.1:7890 https://ipinfo.io/json
+
+# 健康
+curl http://localhost:8990/admin/   # 应 200
+curl http://localhost:8990/health   # 应 200
+
+# git 状态健康检查
+cd /var/www/kiro-stack
+git rev-parse --abbrev-ref HEAD     # 应是 "main" 不是 "HEAD"
+git log -1 --oneline                # 应和 gitee/main 一致
 ```
 
----
-
-## 13. 故障排查
-
-### 服务无法启动
-
-```bash
-# 查看详细日志
-docker compose logs --tail=200
-
-# 检查端口占用
-ss -tlnp | grep 8088
-ss -tlnp | grep 8001
-
-# 重新构建
-docker compose down
-docker compose build --no-cache
-docker compose up -d
-```
-
-### 无法访问
-
-```bash
-# 检查 Nginx 状态
-systemctl status nginx
-
-# 检查 Nginx 配置
-nginx -t
-
-# 查看 Nginx 日志
-tail -f /var/log/nginx/kiro-error.log
-
-# 检查防火墙
-ufw status
-```
-
-### 磁盘空间不足
-
-```bash
-# 清理 Docker
-docker system prune -f
-docker builder prune -f
-
-# 查看磁盘使用
-df -h
-du -sh /var/lib/docker
-```
-
----
-
-## 架构图
+## 模型路由 / 掺水链路（设计意图）
 
 ```
-客户端 (Claude Code / Cursor / Cline)
-        │
-        ▼  :8088
-   ┌─────────────┐
-   │   kiro-go    │  管理面板 + 账号池 + Token 刷新
-   └──────┬──────┘
-          │ (内部转发)
-          ▼  :8000 (容器内部)
-   ┌──────────────────┐
-   │   kiro-gateway   │  稳定代理层：双端点回退 + 自动重试
-   └──────┬───────────┘
-          │
-          ▼
-      Kiro API (AWS)
+用户传 model: opus 4.7
+  → ResolveModelPool       → pro 池（关键词 "opus"）
+  → DeterminePoolTier      → pro 池（同一逻辑）
+  → ParseModelAndThinking  → claude-opus-4.6   ← billingModel（按 opus 计费）
+  → ApplyStealth (95%)     → claude-sonnet-4.5  ← upstreamModel（实际发上游）
+  → AWS Kiro               → 200
 ```
+
+掺水盈利保留：用户付 opus PRO 价，上游真实用便宜 sonnet。
+Stealth 配置：`kiro-go/data/config.json` 里 `stealth.opusFakeTarget` / `sonnetFakeTarget`。
+
+## 故障排查（按现象）
+
+| 现象 | 大概率原因 |
+|---|---|
+| 全部调用 `connection refused: 7890` | clash-meta 没起，参考"出口代理"恢复 |
+| 全部 `INVALID_MODEL_ID` 拒绝 | clash 出口不是 TW/US（如切到 HK） |
+| 部分调用 `INVALID_MODEL_ID` | stealth 偷换 target 写错（如 4.6 vs 4.5），看 AWS 当前接受哪个 model id |
+| 503 `No available accounts in pool` | pool 选错（DeterminePoolTier 没识别该 model 名） |
+| `git pull` 报冲突 | 服务器有未提交改动，禁止手改，先 stash 再 pull |
