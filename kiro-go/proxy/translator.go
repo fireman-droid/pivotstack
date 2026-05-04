@@ -128,25 +128,12 @@ func DetermineUserTier(model, userTier string) (tier string, effectiveModel stri
 }
 
 // DeterminePoolTier 根据请求模型判断应使用的号池
-// 4.6 系列 → "pro"，其他所有 → "free"
+// 4.6 / 4.7 系列 + 任何 opus → "pro"，其他所有 → "free"
+// 与 ResolveModelPool（billing.go）保持一致，避免裸名（如 "opus 4.7"）在两处判定不一致。
 func DeterminePoolTier(model string) string {
 	// 移除 thinking 后缀做判断
 	base := strings.TrimSuffix(strings.TrimSuffix(model, "-thinking"), "-think")
-	baseLower := strings.ToLower(base)
-
-	proModels := []string{
-		"claude-sonnet-4.6", "claude-sonnet-4-6",
-		"claude-opus-4.6", "claude-opus-4-6",
-		// 4.7 系列也走 PRO 池（最终经 ParseModelAndThinking 归一为 4.6）
-		"claude-sonnet-4.7", "claude-sonnet-4-7",
-		"claude-opus-4.7", "claude-opus-4-7",
-	}
-	for _, pm := range proModels {
-		if strings.Contains(baseLower, pm) {
-			return "pro"
-		}
-	}
-	return "free"
+	return ResolveModelPool(base)
 }
 
 // ValidateAndMapModel 根据号池类型映射模型

@@ -11,11 +11,14 @@ const (
 )
 
 // ResolveModelPool determines pool type from model name.
-// 4.5 → "free", 4.6/opus → "pro"
-// 同时匹配 4.6（点号）和 4-6（横杠），因为用户请求可能用 claude-sonnet-4-6 这种格式
+// 4.5 → "free", 4.6/4.7/opus → "pro"
+// 同时匹配 . 和 - 分隔符（如 "claude-sonnet-4-6" 与 "opus 4.7"）。
+// 4.7 系列上游不存在，统一归到 pro 池后由 ParseModelAndThinking 归一到 4.6。
 func ResolveModelPool(model string) string {
 	base := strings.ToLower(model)
-	if strings.Contains(base, "4.6") || strings.Contains(base, "4-6") || strings.Contains(base, "opus") {
+	if strings.Contains(base, "4.6") || strings.Contains(base, "4-6") ||
+		strings.Contains(base, "4.7") || strings.Contains(base, "4-7") ||
+		strings.Contains(base, "opus") {
 		return "pro"
 	}
 	return "free"
