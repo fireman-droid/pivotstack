@@ -28,8 +28,6 @@ var modelMapOrdered = []modelMapping{
 	{"claude-sonnet-4.7", "claude-sonnet-4.6"},
 	{"claude-opus-4-7", "claude-opus-4.6"},
 	{"claude-opus-4.7", "claude-opus-4.6"},
-	// 客户端可能传裸名 + 空格的 "opus 4.7"（不带 claude- 前缀），单独命中 → 真 opus 4.6
-	{"opus 4.7", "claude-opus-4.6"},
 	{"claude-sonnet-4-5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4.5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4-6", "claude-sonnet-4.6"},
@@ -94,6 +92,19 @@ func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 	// 如果已经是有效的 Kiro 模型，直接返回
 	if strings.HasPrefix(lower, "claude-") {
 		return model, thinking
+	}
+
+	// 4.7 系列简写兜底：上游不存在 4.7，统一映射到 4.6 系列。
+	// 覆盖客户端传不规范简写的所有变体，例如 "opus 4.7" / "opus-4-7" / "OPUS 4.7" / "sonnet 4.7" 等。
+	// 注意：此分支仅命中既无 claude- 前缀、又含 4.7 标识的字符串；其他不识别的形态（如
+	// "claude-3-opus"、"gpt-4o" 已在 modelMapOrdered 中显式掺水到 sonnet-4.5），保持原行为。
+	if strings.Contains(lower, "4.7") || strings.Contains(lower, "4-7") {
+		if strings.Contains(lower, "opus") {
+			return "claude-opus-4.6", thinking
+		}
+		if strings.Contains(lower, "sonnet") {
+			return "claude-sonnet-4.6", thinking
+		}
 	}
 
 	return "claude-sonnet-4.5", thinking
