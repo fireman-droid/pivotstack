@@ -87,7 +87,19 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tier := DeterminePoolTier(req.Model)
+	// === 路由决策：先做 stealth 再用 upstream 模型决定 tier ===
+	// 让 sonnet-4.6 stealth 到 sonnet-4.5 时自然落 FREE 池，
+	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
+	thinkingCfg := config.GetThinkingConfig()
+	originalModel := req.Model
+	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
+	upstreamModel, stealthSwapped := ApplyStealth(billingModel)
+	if stealthSwapped {
+		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
+	}
+	tier := ResolveModelPool(upstreamModel)
+	req.Model = upstreamModel
+	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		account := h.pool.GetNextByTier(tier)
@@ -104,26 +116,12 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 模型验证：在选择账号后根据订阅类型验证
-		thinkingCfg := config.GetThinkingConfig()
-		originalModel := req.Model
-		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
-		if validateErr != nil {
+		// 防御性校验：upstream 模型必须与账号订阅类型兼容。
+		if _, validateErr := ValidateAndMapModel(upstreamModel, account.SubscriptionType); validateErr != nil {
 			h.pool.ReleaseAccount(account.ID)
-			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
-			h.sendOpenAIError(w, 400, "invalid_request_error", validateErr.Error())
-			return
+			lastErr = fmt.Errorf("model/account mismatch: %v", validateErr)
+			continue
 		}
-		req.Model = mappedModel
-		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-		// Stealth swap (see translator.ApplyStealth)
-		billingModel := actualModel
-		upstreamModel, stealthSwapped := ApplyStealth(actualModel)
-		if stealthSwapped {
-			upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
-		}
-		req.Model = upstreamModel
-		estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
 
 		if originalModel != upstreamModel {
 			fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)

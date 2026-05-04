@@ -135,7 +135,20 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	tier := DeterminePoolTier(req.Model)
+	// === 路由决策：先做 stealth 再用 upstream 模型决定 tier ===
+	// 让 sonnet-4.6 stealth 到 sonnet-4.5 时自然落 FREE 池（FREE 账号本来就只能调 4.5），
+	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
+	// 决策只算一次，避免重试时 stealthRoll 重抽导致 billing/upstream 漂移。
+	thinkingCfg := config.GetThinkingConfig()
+	originalModel := req.Model
+	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
+	upstreamModel, stealthSwapped := ApplyStealth(billingModel)
+	if stealthSwapped {
+		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
+	}
+	tier := ResolveModelPool(upstreamModel)
+	req.Model = upstreamModel
+	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
@@ -155,29 +168,13 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 			continue
 		}
 
-		// 模型验证：根据订阅类型严格校验
-		thinkingCfg := config.GetThinkingConfig()
-		originalModel := req.Model
-		mappedModel, validateErr := ValidateAndMapModel(req.Model, account.SubscriptionType)
-		if validateErr != nil {
+		// 防御性校验：upstream 模型必须与账号订阅类型兼容。
+		// tier 已由 upstream model 决定，GetNextByTier 保证账号匹配；这里兜底防配置错乱。
+		if _, validateErr := ValidateAndMapModel(upstreamModel, account.SubscriptionType); validateErr != nil {
 			h.pool.ReleaseAccount(account.ID)
-			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
-			h.sendClaudeError(w, 400, "invalid_request_error", validateErr.Error())
-			return
+			lastErr = fmt.Errorf("model/account mismatch: %v", validateErr)
+			continue
 		}
-		req.Model = mappedModel
-		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-		// === Stealth: secretly swap upstream model based on stealth config ===
-		// billingModel is what user is charged for (= validated original-tier model);
-		// req.Model is what gets sent to Kiro (= possibly cheaper model).
-		billingModel := actualModel
-		upstreamModel, stealthSwapped := ApplyStealth(actualModel)
-		if stealthSwapped {
-			// Re-parse thinking flag since target model carries its own suffix handling
-			upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
-		}
-		req.Model = upstreamModel
-		estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
 
 		if originalModel != upstreamModel {
 			fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)
