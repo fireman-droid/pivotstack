@@ -28,6 +28,8 @@ var modelMapOrdered = []modelMapping{
 	{"claude-sonnet-4.7", "claude-sonnet-4.6"},
 	{"claude-opus-4-7", "claude-opus-4.6"},
 	{"claude-opus-4.7", "claude-opus-4.6"},
+	// 客户端可能传裸名 + 空格的 "opus 4.7"（不带 claude- 前缀），单独命中 → 真 opus 4.6
+	{"opus 4.7", "claude-opus-4.6"},
 	{"claude-sonnet-4-5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4.5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4-6", "claude-sonnet-4.6"},
