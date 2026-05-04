@@ -508,13 +508,16 @@ func (h *Handler) recordSuccess(inputTokens, outputTokens int, credits float64) 
 }
 
 func (h *Handler) addCallLog(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64) {
-	h.addCallLogWithKey(apiType, originalModel, actualModel, account, tier, inputTokens, outputTokens, stream, credits, reqSummary, respSummary, stopReason, requestID, durationMs, nil)
+	h.addCallLogWithKey(apiType, originalModel, actualModel, account, tier, inputTokens, outputTokens, stream, credits, credits, reqSummary, respSummary, stopReason, requestID, durationMs, nil)
 }
 
-func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64, uc *UserContext) {
+// addCallLogWithKey 写入一条调用日志。
+// credits         = 计费 credits（掺水后；若未掺水 = 上游原值）
+// upstreamCredits = 上游原始 credits（掺水前的真实上游消耗，用于 admin 审计）
+func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account, tier string, inputTokens, outputTokens int, stream bool, credits, upstreamCredits float64, reqSummary, respSummary, stopReason, requestID string, durationMs int64, uc *UserContext) {
 	now := time.Now()
 	cst := time.FixedZone("CST", 8*3600)
-	costUSD := CreditsToCostUSD(credits, ResolveModelPool(actualModel))
+	costUSD := CreditsToCostUSD(credits, ResolveModelPool(originalModel))
 	var paidCostUSD, giftCostUSD float64
 	var paidCredits, giftedCredits float64
 
@@ -549,6 +552,7 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 		OutputTokens:    outputTokens,
 		TotalTokens:     inputTokens + outputTokens,
 		Credits:         credits,
+		UpstreamCredits: upstreamCredits,
 		PaidCredits:     paidCredits,
 		GiftedCredits:   giftedCredits,
 		CostUSD:         costUSD,
@@ -574,7 +578,7 @@ func (h *Handler) addCallLogWithKey(apiType, originalModel, actualModel, account
 
 	// 记录 API Key 使用统计
 	if uc != nil && uc.KeyID != "" {
-		h.recordKeyUsage(uc.KeyID, actualModel, int64(inputTokens+outputTokens), credits, false)
+		h.recordKeyUsage(uc.KeyID, originalModel, int64(inputTokens+outputTokens), credits, false)
 	}
 
 	// 记录 credit 历史用于预测
@@ -629,7 +633,7 @@ func (h *Handler) addCallLogErrorWithKey(apiType, originalModel, actualModel, ac
 
 	// 记录 API Key 错误统计
 	if uc != nil && uc.KeyID != "" {
-		h.recordKeyUsage(uc.KeyID, actualModel, 0, 0, true)
+		h.recordKeyUsage(uc.KeyID, originalModel, 0, 0, true)
 	}
 
 	// 持久化错误日志

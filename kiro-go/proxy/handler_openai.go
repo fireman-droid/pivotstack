@@ -116,22 +116,28 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Model = mappedModel
 		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-		req.Model = actualModel
+		// Stealth swap (see translator.ApplyStealth)
+		billingModel := actualModel
+		upstreamModel, stealthSwapped := ApplyStealth(actualModel)
+		if stealthSwapped {
+			upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
+		}
+		req.Model = upstreamModel
 		estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
 
-		if originalModel != actualModel {
-			fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v | attempt: %d\n", originalModel, actualModel, account.Email, req.Stream, attempt+1)
+		if originalModel != upstreamModel {
+			fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)
 		} else {
-			fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v | attempt: %d\n", actualModel, account.Email, req.Stream, attempt+1)
+			fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v | attempt: %d\n", upstreamModel, account.Email, req.Stream, attempt+1)
 		}
 
 		kiroPayload := OpenAIToKiro(&req, thinking)
 
 		var shouldRetry bool
 		if req.Stream {
-			shouldRetry = h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			shouldRetry = h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		}
 		if shouldRetry {
 			h.pool.ReleaseAccount(account.ID)
@@ -153,7 +159,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -221,7 +227,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 					"id":      chatID,
 					"object":  "chat.completion.chunk",
 					"created": time.Now().Unix(),
-					"model":   model,
+					"model":   originalModel,
 					"choices": []map[string]interface{}{{
 						"index":         0,
 						"delta":         map[string]string{"content": text},
@@ -245,7 +251,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 					"id":      chatID,
 					"object":  "chat.completion.chunk",
 					"created": time.Now().Unix(),
-					"model":   model,
+					"model":   originalModel,
 					"choices": []map[string]interface{}{{
 						"index":         0,
 						"delta":         map[string]string{"content": text},
@@ -260,7 +266,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 					"id":      chatID,
 					"object":  "chat.completion.chunk",
 					"created": time.Now().Unix(),
-					"model":   model,
+					"model":   originalModel,
 					"choices": []map[string]interface{}{{
 						"index":         0,
 						"delta":         map[string]string{"reasoning_content": content},
@@ -277,7 +283,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 				"id":      chatID,
 				"object":  "chat.completion.chunk",
 				"created": time.Now().Unix(),
-				"model":   model,
+				"model":   originalModel,
 				"choices": []map[string]interface{}{{
 					"index":         0,
 					"delta":         map[string]string{"content": content},
@@ -440,7 +446,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 				"id":      chatID,
 				"object":  "chat.completion.chunk",
 				"created": time.Now().Unix(),
-				"model":   model,
+				"model":   originalModel,
 				"choices": []map[string]interface{}{{
 					"index": 0,
 					"delta": map[string]interface{}{
@@ -524,18 +530,23 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		outputTokens += estimateApproxTokens(tc.Function.Arguments)
 	}
 
-	h.recordSuccess(inputTokens, outputTokens, credits)
+	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
+	billingCredits := credits
+	if stealthSwapped && billingCredits > 0 {
+		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
+	}
+	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: Reconcile pre-authorized amount with actual credits
+	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
 	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := credits
+		actualCredits := billingCredits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
 		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -547,7 +558,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	}
 
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "", finishReason, requestID, durationMs, uc)
+	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, billingCredits, credits, "", "", finishReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, finishReason, credits, durationMs)
 
@@ -555,7 +566,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		"id":      chatID,
 		"object":  "chat.completion.chunk",
 		"created": time.Now().Unix(),
-		"model":   model,
+		"model":   originalModel,
 		"choices": []map[string]interface{}{{
 			"index":         0,
 			"delta":         map[string]interface{}{},
@@ -575,7 +586,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → OpenAI NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -646,18 +657,23 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	inputTokens = estimatedInputTokens
 	outputTokens = estimateOpenAIOutputTokens(finalContent, reasoningContent, toolUses)
 
-	h.recordSuccess(inputTokens, outputTokens, credits)
+	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
+	billingCredits := credits
+	if stealthSwapped && billingCredits > 0 {
+		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
+	}
+	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: Reconcile pre-authorized amount with actual credits
+	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
 	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := credits
+		actualCredits := billingCredits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
 		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -667,12 +683,12 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		stopReason = "tool_use"
 	}
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "", stopReason, requestID, durationMs, uc)
+	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
 	thinkingFormat := config.GetThinkingConfig().OpenAIFormat
-	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, model, thinkingFormat)
+	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, originalModel, thinkingFormat)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
 	return false

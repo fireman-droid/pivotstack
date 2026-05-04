@@ -2,7 +2,10 @@
 import { ref } from 'vue'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
-import { Gift, Loader2, Sparkles, ShoppingBag, UserCircle } from 'lucide-vue-next'
+import { Gift, Sparkles, ShoppingBag, UserCircle, AlertCircle } from 'lucide-vue-next'
+import WorldCard from '../../components/world/WorldCard.vue'
+import WorldInput from '../../components/world/WorldInput.vue'
+import WorldButton from '../../components/world/WorldButton.vue'
 
 const auth = useUserAuth()
 const code = ref('')
@@ -29,73 +32,91 @@ async function handleRedeem() {
 
 <template>
   <div class="recharge-page">
-    <div class="recharge-card glass">
-      <div class="card-header">
-        <div class="icon-wrapper">
-          <Gift :size="28" color="#818cf8" />
-        </div>
-        <h3>激活码兑换</h3>
-        <p class="helper-text">请在下方输入您的充值激活码</p>
-      </div>
-
-      <form @submit.prevent="handleRedeem" class="redeem-form">
-        <div class="input-group">
-          <input
-            v-model="code"
-            placeholder="XXXX-XXXX-XXXX-XXXX"
-            class="code-input"
-            maxlength="19"
-            spellcheck="false"
-            autocomplete="off"
-          />
-        </div>
-
-        <button type="submit" :disabled="loading || code.trim().length < 10" class="submit-btn">
-          <Loader2 v-if="loading" :size="18" class="animate-spin" style="margin-right:8px" />
-          <span>{{ loading ? '处理中...' : '立即兑换' }}</span>
-        </button>
-      </form>
-
-      <div v-if="result" class="feedback-msg success">
-        <div class="feedback-content">
-          <Sparkles :size="18" style="margin-right:12px;flex-shrink:0" />
-          <div v-if="result.type === 'balance'">
-            <strong>兑换成功！</strong>
-            <p>账户余额已增加 ${{ (result.amount || 0).toFixed(2) }}</p>
-          </div>
-          <div v-else-if="result.type === 'time'">
-            <strong>兑换成功！</strong>
-            <p>账户有效期已延长 {{ Math.round((result.amount || 0) / 86400) }} 天</p>
-          </div>
-          <div v-else>
-            <strong>兑换成功！</strong>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="error" class="feedback-msg error">
-        <div class="feedback-content">
-          <p>{{ error }}</p>
-        </div>
-      </div>
+    <div class="page-head">
+      <div class="eyebrow">充值中心</div>
+      <h1 class="page-title">激活码兑换</h1>
     </div>
 
-    <!-- Purchase Guide -->
-    <div class="guide-container">
-      <div class="guide-card glass">
-        <ShoppingBag :size="20" class="guide-icon" />
-        <div class="guide-info">
-          <h4>闲鱼购买</h4>
-          <p>前往闲鱼搜索「KiroStack激活码」获取充值卡</p>
+    <WorldCard padding="lg" :elevated="true" variant="talisman" class="recharge-card">
+      <div class="card-icon-wrap">
+        <div class="card-icon">
+          <Gift :size="32" stroke-width="2" />
         </div>
       </div>
-      <div class="guide-card glass">
-        <UserCircle :size="20" class="guide-icon" />
-        <div class="guide-info">
-          <h4>联系管理员</h4>
-          <p>通过管理员直接获取专属激活码</p>
-        </div>
+
+      <div class="card-body">
+        <h2 class="card-title">输入您的激活码</h2>
+        <p class="card-helper">兑换成功后余额或使用时间将自动注入您的账户</p>
+
+        <form @submit.prevent="handleRedeem" class="redeem-form">
+          <WorldInput
+            v-model="code"
+            placeholder="XXXX-XXXX-XXXX-XXXX"
+            :monospace="true"
+            align="center"
+            size="lg"
+          />
+          <WorldButton
+            type="submit"
+            variant="primary"
+            size="md"
+            :loading="loading"
+            :disabled="code.trim().length < 4"
+            :block="true"
+          >
+            <Sparkles v-if="!loading" :size="16" />
+            <span>{{ loading ? '兑换中' : '立即兑换' }}</span>
+          </WorldButton>
+        </form>
+
+        <Transition name="slide-fade">
+          <div v-if="result" class="feedback-msg success">
+            <div class="fb-icon"><Sparkles :size="18" /></div>
+            <div class="fb-text">
+              <div class="fb-title">兑换成功</div>
+              <div v-if="result.type === 'balance'" class="fb-detail">
+                账户余额 +${{ (result.amount || 0).toFixed(2) }}
+              </div>
+              <div v-else-if="result.type === 'time'" class="fb-detail">
+                账户有效期 +{{ Math.round((result.amount || 0) / 86400) }} 天
+              </div>
+              <div v-else class="fb-detail">激活码已应用</div>
+            </div>
+          </div>
+        </Transition>
+
+        <Transition name="slide-fade">
+          <div v-if="error" class="feedback-msg error">
+            <div class="fb-icon"><AlertCircle :size="18" /></div>
+            <div class="fb-text">
+              <div class="fb-title">兑换失败</div>
+              <div class="fb-detail">{{ error }}</div>
+            </div>
+          </div>
+        </Transition>
       </div>
+    </WorldCard>
+
+    <!-- 信息提示 -->
+    <div class="hints">
+      <WorldCard padding="md" class="hint-card">
+        <div class="hint-row">
+          <div class="hint-icon"><ShoppingBag :size="14" /></div>
+          <div class="hint-text">
+            <div class="hint-title">在哪里购买？</div>
+            <div class="hint-sub">联系您的服务商或社群管理员获取激活码</div>
+          </div>
+        </div>
+      </WorldCard>
+      <WorldCard padding="md" class="hint-card">
+        <div class="hint-row">
+          <div class="hint-icon"><UserCircle :size="14" /></div>
+          <div class="hint-text">
+            <div class="hint-title">余额查询</div>
+            <div class="hint-sub">兑换后请前往「概览」页查看账户状态</div>
+          </div>
+        </div>
+      </WorldCard>
     </div>
   </div>
 </template>
@@ -104,217 +125,182 @@ async function handleRedeem() {
 .recharge-page {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2rem;
-  padding: 2rem 1rem;
-  min-height: 100%;
-  animation: fadeIn 0.4s ease-out;
+  gap: 18px;
+  max-width: 640px;
+  margin: 0 auto;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.page-head { margin-bottom: 4px; }
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
 }
-
-.glass {
-  background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+.page-title {
+  font-family: var(--world-font-display);
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 4px 0 0;
+  color: var(--world-text-primary);
+}
+[data-world="daogui"] .page-title {
+  background: linear-gradient(135deg, #f3c66e 0%, var(--world-accent) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .recharge-card {
-  width: 100%;
-  max-width: 480px;
-  border-radius: 12px;
-  padding: 2.5rem;
-}
-
-.card-header {
   text-align: center;
-  margin-bottom: 2.5rem;
+  position: relative;
+  overflow: hidden;
+}
+.recharge-card::before {
+  content: '';
+  position: absolute;
+  top: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 320px;
+  height: 320px;
+  background: radial-gradient(circle, rgba(2, 132, 199, 0.10), transparent 70%);
+  pointer-events: none;
+  border-radius: 50%;
+}
+[data-world="daogui"] .recharge-card::before {
+  background: radial-gradient(circle, rgba(196, 30, 58, 0.18), transparent 70%);
 }
 
-.icon-wrapper {
-  width: 64px;
-  height: 64px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 20px;
+.card-icon-wrap {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.card-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 1rem;
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
+  width: 64px;
+  height: 64px;
+  border-radius: var(--world-radius-2xl);
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
+  color: white;
+  box-shadow: 0 8px 28px -8px rgba(2, 132, 199, 0.5);
+}
+[data-world="daogui"] .card-icon {
+  box-shadow: 0 0 32px rgba(196, 30, 58, 0.4);
 }
 
-h3 {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #f8fafc;
-  margin: 0 0 0.5rem;
+.card-body { position: relative; z-index: 1; }
+.card-title {
+  font-size: 1.125rem;
+  font-weight: 800;
+  margin: 0 0 4px;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
 }
-
-.helper-text {
-  color: #94a3b8;
-  font-size: 0.875rem;
-  margin: 0;
+.card-helper {
+  font-size: 0.8125rem;
+  color: var(--world-text-mute);
+  margin: 0 0 24px;
 }
 
 .redeem-form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 14px;
 }
 
-.code-input {
-  width: 100%;
-  height: 52px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 0 1rem;
-  color: #f8fafc;
-  font-family: ui-monospace, monospace;
-  font-size: 1.25rem;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  transition: all 0.2s;
-  box-sizing: border-box;
+/* Feedback */
+.feedback-msg {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: var(--world-radius-lg);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+.feedback-msg.success {
+  background: rgba(16, 185, 129, 0.10);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--world-success);
+}
+.feedback-msg.error {
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: var(--world-error);
+}
+[data-world="daogui"] .feedback-msg.success {
+  background: rgba(82, 121, 111, 0.12);
+  border-color: rgba(82, 121, 111, 0.32);
+  color: #95b5a8;
+}
+[data-world="daogui"] .feedback-msg.error {
+  background: rgba(196, 30, 58, 0.12);
+  border-color: rgba(196, 30, 58, 0.32);
+  color: #f5707f;
+  box-shadow: 0 0 18px rgba(196, 30, 58, 0.15);
+}
+.fb-icon { flex-shrink: 0; padding-top: 1px; }
+.fb-title {
+  font-size: 0.875rem;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+.fb-detail {
+  font-size: 0.8125rem;
+  color: var(--world-text-mute);
 }
 
-.code-input::placeholder {
-  color: #475569;
-  letter-spacing: 0.05em;
-}
+.slide-fade-enter-active { transition: all 280ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+.slide-fade-leave-active { transition: all 200ms ease-in; }
+.slide-fade-enter-from   { opacity: 0; transform: translateY(-8px); }
+.slide-fade-leave-to     { opacity: 0; transform: translateY(-4px); }
 
-.code-input:focus {
-  outline: none;
-  border-color: #6366f1;
-  background: rgba(99, 102, 241, 0.05);
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+/* Hints */
+.hints {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
-
-.submit-btn {
-  height: 48px;
-  background: linear-gradient(to right, #6366f1, #4f46e5);
-  border: none;
-  border-radius: 8px;
-  color: #fff;
-  font-weight: 600;
-  font-size: 1rem;
+@media (max-width: 600px) {
+  .hints { grid-template-columns: 1fr; }
+}
+.hint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.hint-icon {
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
-}
-
-.submit-btn:hover:not(:disabled) {
-  background: linear-gradient(to right, #4f46e5, #4338ca);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.3);
-}
-
-.submit-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.submit-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.feedback-msg {
-  margin-top: 1rem;
-  padding: 1rem;
-  border-radius: 10px;
-  animation: slideIn 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
-}
-
-.feedback-content {
-  display: flex;
-  align-items: center;
-}
-
-.feedback-content strong {
-  display: block;
-  font-size: 0.9375rem;
-  margin-bottom: 0.125rem;
-}
-
-.feedback-content p {
-  margin: 0;
-  font-size: 0.8125rem;
-  opacity: 0.9;
-}
-
-.feedback-msg.success {
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-  color: #10b981;
-}
-
-.feedback-msg.error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  color: #ef4444;
-}
-
-@keyframes slideIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.guide-container {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1.5rem;
-  width: 100%;
-  max-width: 480px;
-}
-
-.guide-card {
-  border-radius: 14px;
-  padding: 1.25rem;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-
-.guide-icon {
-  color: #6366f1;
+  border-radius: var(--world-radius-md);
+  background: rgba(2, 132, 199, 0.10);
+  color: var(--world-accent);
   flex-shrink: 0;
-  margin-top: 2px;
 }
-
-.guide-info h4 {
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: #f8fafc;
-  margin: 0 0 0.375rem;
+[data-world="daogui"] .hint-icon {
+  background: rgba(196, 30, 58, 0.12);
+  color: var(--world-accent);
 }
-
-.guide-info p {
+.hint-title {
   font-size: 0.8125rem;
-  color: #94a3b8;
-  margin: 0;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  margin-bottom: 2px;
+}
+.hint-sub {
+  font-size: 0.75rem;
+  color: var(--world-text-mute);
   line-height: 1.4;
-}
-
-.animate-spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 480px) {
-  .guide-container { grid-template-columns: 1fr; }
-  .recharge-card { padding: 1.5rem; }
 }
 </style>

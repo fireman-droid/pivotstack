@@ -2,24 +2,33 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
-import { 
-  Key, 
-  Settings, 
-  Wand2, 
-  ShieldAlert, 
-  Lock, 
-  RefreshCw, 
-  Cpu, 
-  Route,
-  Save,
-  Fingerprint,
-  ChevronRight,
-  Info,
-  Trash2,
-  FileX,
-  DollarSign,
-  Zap
+import {
+  Key, Wand2, ShieldAlert, Lock, Cpu, Route, Save, Zap,
+  RefreshCw, FileX, DollarSign, XCircle, Trophy, Gift
 } from 'lucide-vue-next'
+import WorldCard from '../components/world/WorldCard.vue'
+import WorldButton from '../components/world/WorldButton.vue'
+import WorldInput from '../components/world/WorldInput.vue'
+import WorldSegment from '../components/world/WorldSegment.vue'
+import WorldSelect from '../components/world/WorldSelect.vue'
+import WorldModal from '../components/world/WorldModal.vue'
+import Switch from '../components/ui/Switch.vue'
+
+const openaiFormatOptions = [
+  { value: 'reasoning_content', label: 'reasoning_content（标准）' },
+  { value: 'thinking',          label: '<thinking> 标签（Claude 风格）' },
+  { value: 'think',             label: '<think> 标签（OpenAI 风格）' },
+]
+const claudeFormatOptions = [
+  { value: 'thinking',          label: '<thinking> 标签（Claude 风格）' },
+  { value: 'think',             label: '<think> 标签（OpenAI 风格）' },
+  { value: 'reasoning_content', label: '直接明文输出（不带标签）' },
+]
+const endpointOptions = [
+  { value: 'auto',          label: '自动智能负载（推荐）' },
+  { value: 'codewhisperer', label: 'Amazon CodeWhisperer Node' },
+  { value: 'amazonq',       label: 'Amazon Q Business Node' },
+]
 
 const { success, error } = useToast()
 
@@ -33,35 +42,101 @@ const newPassword = ref('')
 const maxConcurrentPerKey = ref(20)
 const maxInFlightPerAccountFree = ref(50)
 const maxInFlightPerAccountPro = ref(50)
-const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false, concurrency: false })
+const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false, concurrency: false, leaderboard: false })
+
+// Abuse monitor
+const flagged = ref([])
+const abuseLoading = ref(false)
+
+const tab = ref('general')
+const tabOptions = [
+  { value: 'general',     label: '常规' },
+  { value: 'thinking',    label: '思考模式' },
+  { value: 'routing',     label: '路由 / 并发' },
+  { value: 'leaderboard', label: '排行榜' },
+  { value: 'abuse',       label: '滥用监控' },
+  { value: 'danger',      label: '危险操作' },
+]
+
+// === 排行榜配置 ===
+const leaderboardEnabled = ref(false)
+const leaderboardFakeUsers = ref(0)
+
+async function loadLeaderboardConfig() {
+  try {
+    const res = await api('/leaderboard/config')
+    if (res.ok) {
+      const d = await res.json()
+      leaderboardEnabled.value = !!d.enabled
+      leaderboardFakeUsers.value = d.fakeUsers || 0
+    }
+  } catch {}
+}
+async function saveLeaderboardConfig() {
+  loading.value.leaderboard = true
+  const res = await api('/leaderboard/config', {
+    method: 'PUT',
+    body: JSON.stringify({
+      enabled: leaderboardEnabled.value,
+      fakeUsers: Number(leaderboardFakeUsers.value) || 0,
+    }),
+  })
+  res.ok ? success('排行榜配置已保存') : error('保存失败')
+  loading.value.leaderboard = false
+}
+
+// === 一键清赠金 ===
+const clearGiftOpen = ref(false)
+const clearGiftConfirm = ref('')
+const clearGiftLoading = ref(false)
+async function doClearAllGift() {
+  if (clearGiftConfirm.value.trim() !== '清除') return
+  clearGiftLoading.value = true
+  try {
+    const res = await api('/apikeys/clear-gift', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    })
+    if (res.ok) {
+      const d = await res.json()
+      success(`已清除 ${d.cleared} 个 Key 的赠金，总计 $${(d.totalGiftCleared || 0).toFixed(2)}`)
+      clearGiftOpen.value = false
+      clearGiftConfirm.value = ''
+    } else {
+      error('清除失败')
+    }
+  } catch {
+    error('清除失败')
+  }
+  clearGiftLoading.value = false
+}
 
 onMounted(async () => {
   try {
-    const [settingsRes, thinkingRes, endpointRes] = await Promise.all([
-      api('/settings'), api('/thinking'), api('/endpoint')
-    ])
-    if (settingsRes.ok) {
-      const d = await settingsRes.json()
+    const [s, t, e] = await Promise.all([api('/settings'), api('/thinking'), api('/endpoint')])
+    if (s.ok) {
+      const d = await s.json()
       requireApiKey.value = d.requireApiKey
       apiKey.value = d.apiKey || ''
     }
-    if (thinkingRes.ok) {
-      const d = await thinkingRes.json()
+    if (t.ok) {
+      const d = await t.json()
       thinkingSuffix.value = d.suffix || '-thinking'
       openaiFormat.value = d.openaiFormat || 'reasoning_content'
       claudeFormat.value = d.claudeFormat || 'thinking'
     }
-    if (endpointRes.ok) {
-      const d = await endpointRes.json()
-      preferredEndpoint.value = d.preferredEndpoint || 'auto'
+    if (e.ok) {
+      preferredEndpoint.value = (await e.json()).preferredEndpoint || 'auto'
     }
-    const concurrencyRes = await api('/concurrency')
-    if (concurrencyRes.ok) {
-      const d = await concurrencyRes.json()
+    const c = await api('/concurrency')
+    if (c.ok) {
+      const d = await c.json()
       maxConcurrentPerKey.value = d.maxConcurrentPerKey || 20
       maxInFlightPerAccountFree.value = d.maxInFlightPerAccountFree || d.maxInFlightPerAccount || 50
       maxInFlightPerAccountPro.value = d.maxInFlightPerAccountPro || d.maxInFlightPerAccount || 50
     }
+    loadFlagged()
+    loadLeaderboardConfig()
   } catch {}
 })
 
@@ -126,236 +201,499 @@ async function resetStats() {
 async function clearLogs() {
   if (!confirm('确定清空所有调用日志？\n\n• API Key 和用户余额不受影响\n• 此操作不可恢复')) return
   const res = await api('/logs', { method: 'DELETE' })
-  if (res.ok) {
-    success('调用日志已清空')
-  } else {
-    error('清空日志失败')
-  }
+  res.ok ? success('调用日志已清空') : error('清空日志失败')
 }
 
 async function resetPricing() {
   if (!confirm('确定重置采购记录？\n\n• 将清空所有 PRO/FREE 号采购记录\n• 售价配置不受影响\n• 此操作不可恢复')) return
-  // Get current pricing, clear cost entries, save back
-  const getRes = await api('/pricing')
-  if (!getRes.ok) { error('获取配置失败'); return }
-  const pricing = await getRes.json()
+  const get = await api('/pricing')
+  if (!get.ok) { error('获取配置失败'); return }
+  const pricing = await get.json()
   pricing.proCostEntries = []
   pricing.freeCostEntries = []
   const res = await api('/pricing', { method: 'PUT', body: JSON.stringify(pricing) })
-  if (res.ok) {
-    success('采购记录已清空，请重新添加真实记录')
-  } else {
-    error('重置失败')
-  }
+  res.ok ? success('采购记录已清空') : error('重置失败')
+}
+
+async function loadFlagged() {
+  abuseLoading.value = true
+  try {
+    const res = await api('/abuse')
+    if (res.ok) flagged.value = await res.json()
+  } catch {}
+  abuseLoading.value = false
+}
+async function clearFlag(keyId) {
+  try {
+    await api(`/abuse/${keyId}/clear`, { method: 'POST' })
+    flagged.value = flagged.value.filter(f => f.keyId !== keyId)
+    success('已清除标记')
+  } catch { error('清除失败') }
 }
 </script>
 
 <template>
-  <div class="max-w-[1600px] mx-auto space-y-10 pb-20">
-    <!-- Centered Header -->
-    <div class="text-center space-y-2 py-4">
-      <h1 class="text-3xl font-black tracking-tighter text-[var(--text)]">系统参数设定</h1>
-      <p class="text-sm text-[var(--text)]-secondary font-medium">配置网关核心行为、安全性及模型输出协议</p>
-    </div>
-
-    <!-- API Security Card -->
-    <section class="modern-card overflow-hidden shadow-sm">
-      <div class="px-8 py-5 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-indigo-500/10 text-indigo-500"><Key class="w-4 h-4" /></div>
-        <h2 class="text-sm font-black uppercase tracking-widest text-[var(--text)]">API 鉴权协议</h2>
+  <div class="settings-page">
+    <header class="page-head">
+      <div class="title-wrap">
+        <div class="eyebrow">系统配置</div>
+        <h1 class="page-title">系统设置</h1>
       </div>
-      <div class="p-8 space-y-8">
-        <label class="flex items-center gap-3 cursor-pointer group w-fit">
-          <div class="relative flex items-center">
-            <input type="checkbox" v-model="requireApiKey" class="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-[var(--border)] bg-[var(--bg)] checked:bg-[var(--primary)] transition-all" />
-            <svg class="absolute h-3.5 w-3.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white left-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          </div>
-          <span class="text-sm font-bold text-[var(--text)]-secondary group-hover:text-[var(--text)] transition-colors">启用全局 API Key 强制验证</span>
-        </label>
+      <WorldSegment v-model="tab" :options="tabOptions" />
+    </header>
 
-        <div class="p-4 bg-[var(--bg)] rounded-2xl border border-[var(--border)] flex items-center justify-between">
-          <div>
-            <div class="text-sm font-bold text-[var(--text)]">商业 Key 管理</div>
-            <div class="text-[11px] text-[var(--text)]-secondary mt-0.5">支持普通卡 / Pro 卡分级，按时间发放，独立监控</div>
+    <!-- 常规：API 鉴权 + 密码 -->
+    <template v-if="tab === 'general'">
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Key :size="16" /><span>API 鉴权</span></h3>
+        </header>
+        <div class="row-block">
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">启用全局 API Key 强制验证</div>
+              <div class="row-hint">未提供 API Key 的请求将被拒绝</div>
+            </div>
+            <Switch v-model="requireApiKey" />
           </div>
-          <router-link to="/apikeys" class="flex items-center gap-2 px-4 py-2 bg-[var(--primary)] text-white rounded-xl text-xs font-bold hover:scale-[1.02] active:scale-95 transition-all">
-            <Key class="w-3.5 h-3.5" /> 管理 Key
-          </router-link>
+          <WorldInput
+            v-model="apiKey"
+            label="全局 API Key"
+            :monospace="true"
+            placeholder="sk-..."
+            hint="留空则会自动生成"
+          />
+          <div class="row-actions">
+            <WorldButton variant="secondary" size="sm" @click="generateApiKey">生成新 Key</WorldButton>
+            <WorldButton variant="primary" size="md" :loading="loading.api" @click="saveApiSettings">
+              <Save :size="14" /><span>保存</span>
+            </WorldButton>
+          </div>
         </div>
+      </WorldCard>
 
-        <button @click="saveApiSettings" :disabled="loading.api" class="flex items-center gap-2 px-6 py-3 bg-[var(--primary)] text-white rounded-xl font-black text-xs shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">
-          <Save class="w-4 h-4" /> 保存鉴权配置
-        </button>
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Lock :size="16" /><span>修改管理密码</span></h3>
+        </header>
+        <div class="row-block">
+          <WorldInput v-model="newPassword" type="password" label="新密码" placeholder="输入新访问密码" />
+          <div class="row-actions">
+            <WorldButton variant="primary" :loading="loading.pwd" @click="changePassword">
+              <Save :size="14" /><span>确认重置密码</span>
+            </WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 思考模式 -->
+    <template v-if="tab === 'thinking'">
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Wand2 :size="16" /><span>Thinking 思考模式</span></h3>
+        </header>
+        <div class="row-block">
+          <WorldInput
+            v-model="thinkingSuffix"
+            label="触发后缀"
+            placeholder="-thinking"
+            :monospace="true"
+            hint="在请求模型名后添加此后缀将强制激活思考路径"
+          />
+          <div class="cfg-grid">
+            <div class="select-cell">
+              <label class="select-label">OpenAI 协议响应格式</label>
+              <WorldSelect v-model="openaiFormat" :options="openaiFormatOptions" size="md" />
+            </div>
+            <div class="select-cell">
+              <label class="select-label">Claude 协议响应格式</label>
+              <WorldSelect v-model="claudeFormat" :options="claudeFormatOptions" size="md" />
+            </div>
+          </div>
+          <div class="row-actions">
+            <WorldButton variant="primary" :loading="loading.thinking" @click="saveThinking">
+              <Save :size="14" /><span>保存配置</span>
+            </WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 路由 / 并发 -->
+    <template v-if="tab === 'routing'">
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Route :size="16" /><span>端点路由</span></h3>
+        </header>
+        <div class="row-block">
+          <div class="select-cell">
+            <label class="select-label">首选连接节点</label>
+            <WorldSelect v-model="preferredEndpoint" :options="endpointOptions" size="md" />
+          </div>
+          <div class="row-actions">
+            <WorldButton variant="primary" :loading="loading.endpoint" @click="saveEndpoint">
+              <Save :size="14" /><span>保存路由</span>
+            </WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Zap :size="16" /><span>并发控制</span></h3>
+        </header>
+        <div class="row-block">
+          <WorldInput v-model.number="maxConcurrentPerKey" type="number"
+                      label="单 Key 最大并发流"
+                      hint="每个 API Key 同时允许的最大并发请求数（默认 20）" />
+          <WorldInput v-model.number="maxInFlightPerAccountFree" type="number"
+                      label="FREE 账号最大并发"
+                      hint="免费号池中每个账号同时处理的最大请求数（默认 50）" />
+          <WorldInput v-model.number="maxInFlightPerAccountPro" type="number"
+                      label="PRO 账号最大并发"
+                      hint="付费号池中每个账号同时处理的最大请求数（默认 50）" />
+          <div class="row-actions">
+            <WorldButton variant="primary" :loading="loading.concurrency" @click="saveConcurrency">
+              <Save :size="14" /><span>保存并发配置</span>
+            </WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 排行榜配置 -->
+    <template v-if="tab === 'leaderboard'">
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><Trophy :size="16" /><span>排行榜</span></h3>
+        </header>
+        <div class="row-block">
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">向用户展示排行榜</div>
+              <div class="row-hint">
+                关闭后用户访问 /user/leaderboard 会返回 404；管理员视图始终可用。
+              </div>
+            </div>
+            <Switch v-model="leaderboardEnabled" />
+          </div>
+          <WorldInput
+            v-model.number="leaderboardFakeUsers"
+            type="number"
+            label="虚拟用户数量"
+            placeholder="0"
+            hint="混入用户视图的虚拟条目数（0-30），用于活跃度引导。每个 UTC 日稳定一份名单。"
+          />
+          <div class="row-actions">
+            <WorldButton variant="primary" :loading="loading.leaderboard" @click="saveLeaderboardConfig">
+              <Save :size="14" /><span>保存配置</span>
+            </WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 滥用监控 -->
+    <template v-if="tab === 'abuse'">
+      <WorldCard padding="lg">
+        <header class="section-head">
+          <h3><ShieldAlert :size="16" /><span>滥用监控</span></h3>
+          <WorldButton variant="secondary" size="sm" @click="loadFlagged">
+            <RefreshCw :size="13" /><span>刷新</span>
+          </WorldButton>
+        </header>
+        <p class="section-hint">被标记的异常 API Key（IP多样性过高、并发异常等）</p>
+
+        <div v-if="abuseLoading" class="empty-row">载入中…</div>
+        <div v-else-if="!flagged.length" class="empty-row">
+          <ShieldAlert :size="32" />
+          <span>当前没有被标记的 Key</span>
+        </div>
+        <div v-else class="flagged-list">
+          <div v-for="item in flagged" :key="item.keyId" class="flagged-item">
+            <div class="flagged-head">
+              <div class="flagged-info">
+                <ShieldAlert :size="16" class="warn-icon" />
+                <div>
+                  <div class="flagged-id">{{ item.keyId }}</div>
+                  <div class="flagged-reason">{{ item.reason || '异常行为' }}</div>
+                </div>
+              </div>
+              <WorldButton variant="secondary" size="sm" @click="clearFlag(item.keyId)">
+                <XCircle :size="13" /><span>清除标记</span>
+              </WorldButton>
+            </div>
+            <div class="flagged-grid">
+              <div class="fg-cell"><span>活跃流</span><strong>{{ item.activeStreams || 0 }}</strong></div>
+              <div class="fg-cell"><span>IP 数</span><strong :class="{ warn: (item.distinctIPs || 0) > 10 }">{{ item.distinctIPs || 0 }}</strong></div>
+              <div class="fg-cell"><span>近期请求</span><strong>{{ item.recentRequests || 0 }}</strong></div>
+              <div class="fg-cell"><span>标记时间</span><strong class="time">{{ item.flaggedAt ? new Date(item.flaggedAt).toLocaleString('zh-CN') : '-' }}</strong></div>
+            </div>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 危险操作 -->
+    <template v-if="tab === 'danger'">
+      <WorldCard padding="lg" class="danger-card">
+        <header class="section-head">
+          <h3 class="danger-title"><ShieldAlert :size="16" /><span>危险操作区</span></h3>
+        </header>
+        <div class="danger-list">
+          <div class="danger-item">
+            <div class="d-info">
+              <FileX :size="20" class="d-icon warn" />
+              <div>
+                <div class="d-title">清空调用日志</div>
+                <div class="d-desc">清除所有历史 API 调用记录。API Key 和用户余额不受影响。</div>
+              </div>
+            </div>
+            <WorldButton variant="danger" size="sm" @click="clearLogs">清空日志</WorldButton>
+          </div>
+          <div class="danger-item">
+            <div class="d-info">
+              <DollarSign :size="20" class="d-icon warn" />
+              <div>
+                <div class="d-title">重置采购记录</div>
+                <div class="d-desc">清空所有 PRO/FREE 号采购成本记录。售价配置不受影响。</div>
+              </div>
+            </div>
+            <WorldButton variant="danger" size="sm" @click="resetPricing">重置采购记录</WorldButton>
+          </div>
+          <div class="danger-item">
+            <div class="d-info">
+              <Cpu :size="20" class="d-icon" />
+              <div>
+                <div class="d-title">重置全局统计</div>
+                <div class="d-desc">清空所有历史请求数、Token 消耗及成本统计。此操作不可逆。</div>
+              </div>
+            </div>
+            <WorldButton variant="danger" size="sm" @click="resetStats">立即执行重置</WorldButton>
+          </div>
+          <div class="danger-item">
+            <div class="d-info">
+              <Gift :size="20" class="d-icon" />
+              <div>
+                <div class="d-title">一键清除所有赠金</div>
+                <div class="d-desc">
+                  将所有 API Key 的 <strong>GiftBalance</strong> 归零（仅清赠金，<strong>不动</strong>付费余额与累计赠送记录）。
+                  执行前需要二次确认。此操作不可逆。
+                </div>
+              </div>
+            </div>
+            <WorldButton variant="danger" size="sm" @click="clearGiftOpen = true">一键清赠金</WorldButton>
+          </div>
+        </div>
+      </WorldCard>
+    </template>
+
+    <!-- 一键清赠金确认 Modal -->
+    <WorldModal v-model="clearGiftOpen" title="确认清除所有赠金" size="sm">
+      <div class="modal-body">
+        <p class="modal-warn">
+          此操作会把所有 API Key 的赠金（GiftBalance）置为 0。
+          已扣费的付费余额（Balance）与历史累计赠送（TotalGifted）<strong>不受影响</strong>。
+        </p>
+        <p class="modal-warn">操作不可逆。请输入「<strong>清除</strong>」以确认：</p>
+        <WorldInput
+          v-model="clearGiftConfirm"
+          placeholder="输入：清除"
+          :monospace="false"
+        />
       </div>
-    </section>
-
-    <!-- Thinking Mode Card -->
-    <section class="modern-card overflow-hidden shadow-sm">
-      <div class="px-8 py-5 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-500"><Wand2 class="w-4 h-4" /></div>
-        <h2 class="text-sm font-black uppercase tracking-widest text-[var(--text)]">Thinking 思考模式配置</h2>
-      </div>
-      <div class="p-8 space-y-8">
-        <div class="space-y-3">
-          <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">触发后缀 / Trigger Suffix</span>
-          <input v-model="thinkingSuffix" placeholder="-thinking" class="w-full h-14 px-5 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-bold outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all" />
-          <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">在请求模型名后添加此后缀将强制激活思考路径映射。</p>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="space-y-3">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">OpenAI 协议响应格式</span>
-            <select v-model="openaiFormat" class="w-full h-14 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-xs font-bold outline-none cursor-pointer hover:border-emerald-500 transition-colors">
-              <option value="reasoning_content">reasoning_content (标准)</option>
-              <option value="thinking">&lt;thinking&gt; 标签 (Claude 风格)</option>
-              <option value="think">&lt;think&gt; 标签 (OpenAI 风格)</option>
-            </select>
-          </div>
-          <div class="space-y-3">
-            <span class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60 pl-1">Claude 协议响应格式</span>
-            <select v-model="claudeFormat" class="w-full h-14 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-xs font-bold outline-none cursor-pointer hover:border-emerald-500 transition-colors">
-              <option value="thinking">&lt;thinking&gt; 标签 (Claude 风格)</option>
-              <option value="think">&lt;think&gt; 标签 (OpenAI 风格)</option>
-              <option value="reasoning_content">直接明文输出 (不带标签)</option>
-            </select>
-          </div>
-        </div>
-
-        <button @click="saveThinking" :disabled="loading.thinking" class="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-xl font-black text-xs shadow-lg shadow-emerald-600/20 hover:scale-[1.02] active:scale-95 transition-all">
-          <Save class="w-4 h-4" /> 应用模型映射规则
-        </button>
-      </div>
-    </section>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-      <!-- Routing Card -->
-      <section class="modern-card overflow-hidden shadow-sm">
-        <div class="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-          <Route class="w-4 h-4 text-amber-500" />
-          <h2 class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]">端点智能路由</h2>
-        </div>
-        <div class="p-6 space-y-6">
-          <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">首选连接节点</span>
-            <select v-model="preferredEndpoint" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none">
-              <option value="auto">自动智能负载 (推荐)</option>
-              <option value="codewhisperer">Amazon CodeWhisperer Node</option>
-              <option value="amazonq">Amazon Q Business Node</option>
-            </select>
-          </div>
-          <button @click="saveEndpoint" :disabled="loading.endpoint" class="w-full py-3 bg-amber-500 text-white rounded-xl font-black text-xs hover:bg-amber-600 transition-all">保存路由</button>
-        </div>
-      </section>
-
-      <!-- Concurrency Control Card -->
-      <section class="modern-card overflow-hidden shadow-sm">
-        <div class="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-          <Zap class="w-4 h-4 text-cyan-500" />
-          <h2 class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]">并发控制</h2>
-        </div>
-        <div class="p-6 space-y-6">
-          <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">单 Key 最大并发流</span>
-            <input v-model.number="maxConcurrentPerKey" type="number" min="1" max="200" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
-            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">每个 API Key 同时允许的最大并发请求数（默认 20）</p>
-          </div>
-          <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">FREE 账号最大并发</span>
-            <input v-model.number="maxInFlightPerAccountFree" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
-            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">免费号池中每个账号同时处理的最大请求数（默认 50）</p>
-          </div>
-          <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">PRO 账号最大并发</span>
-            <input v-model.number="maxInFlightPerAccountPro" type="number" min="1" max="500" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none focus:border-cyan-500" />
-            <p class="text-[10px] text-[var(--text)]-secondary font-medium italic opacity-60 ml-1">付费号池中每个账号同时处理的最大请求数（默认 50）</p>
-          </div>
-          <button @click="saveConcurrency" :disabled="loading.concurrency" class="w-full py-3 bg-cyan-500 text-white rounded-xl font-black text-xs hover:bg-cyan-600 transition-all">保存并发配置</button>
-        </div>
-      </section>
-
-      <!-- Password Card -->
-      <section class="modern-card overflow-hidden shadow-sm">
-        <div class="px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/50 flex items-center gap-3">
-          <Lock class="w-4 h-4 text-[var(--primary)]" />
-          <h2 class="text-[11px] font-black uppercase tracking-widest text-[var(--text)]">安全凭证管理</h2>
-        </div>
-        <div class="p-6 space-y-6">
-          <div class="space-y-3">
-            <span class="text-[10px] font-black uppercase tracking-widest text-[var(--text)]-secondary opacity-60">修改管理令牌</span>
-            <input v-model="newPassword" type="password" placeholder="输入新访问密码" class="w-full h-12 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-black outline-none focus:border-[var(--primary)]" />
-          </div>
-          <button @click="changePassword" :disabled="loading.pwd" class="w-full py-3 bg-slate-900 dark:bg-[var(--primary)] text-white rounded-xl font-black text-xs hover:opacity-90 transition-all">确认重置密码</button>
-        </div>
-      </section>
-    </div>
-
-    <!-- Danger Zone Optimized -->
-    <section class="p-8 rounded-[32px] border-2 border-dashed border-rose-500/20 bg-rose-500/[0.02] space-y-6">
-      <div class="flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-rose-500/10 text-rose-500 animate-pulse"><ShieldAlert class="w-5 h-5" /></div>
-        <h2 class="text-sm font-black uppercase tracking-[0.2em] text-rose-500">危险操作区</h2>
-      </div>
-
-      <!-- 清空调用日志 -->
-      <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
-        <div class="flex items-start gap-4">
-          <div class="p-3 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-500"><FileX class="w-5 h-5" /></div>
-          <div>
-            <h4 class="text-sm font-black text-[var(--text)]">清空调用日志</h4>
-            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">清除所有历史 API 调用记录。API Key 和用户余额不受影响。</p>
-          </div>
-        </div>
-        <button @click="clearLogs" class="px-6 py-3 bg-amber-500 text-white rounded-xl font-black text-xs hover:bg-amber-600 transition-all shadow-xl shadow-amber-500/20 active:scale-95 whitespace-nowrap">
-          清空日志
-        </button>
-      </div>
-
-      <!-- 重置采购记录 -->
-      <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
-        <div class="flex items-start gap-4">
-          <div class="p-3 rounded-full bg-orange-50 dark:bg-orange-900/20 text-orange-500"><DollarSign class="w-5 h-5" /></div>
-          <div>
-            <h4 class="text-sm font-black text-[var(--text)]">重置采购记录</h4>
-            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">清空所有 PRO/FREE 号采购成本记录。售价配置不受影响，清空后需重新添加。</p>
-          </div>
-        </div>
-        <button @click="resetPricing" class="px-6 py-3 bg-orange-500 text-white rounded-xl font-black text-xs hover:bg-orange-600 transition-all shadow-xl shadow-orange-500/20 active:scale-95 whitespace-nowrap">
-          重置采购记录
-        </button>
-      </div>
-      
-      <!-- 重置全局统计 -->
-      <div class="flex flex-col md:flex-row items-center justify-between p-6 bg-white dark:bg-slate-900 border border-rose-500/10 rounded-2xl gap-6 shadow-sm">
-        <div class="flex items-start gap-4">
-          <div class="p-3 rounded-full bg-rose-50 dark:bg-rose-900/20 text-rose-500"><Cpu class="w-5 h-5" /></div>
-          <div>
-            <h4 class="text-sm font-black text-[var(--text)]">重置全局统计流水</h4>
-            <p class="text-[11px] text-[var(--text)]-secondary mt-1 font-medium">警告：这将清空所有历史请求数、Token 消耗及成本统计。此操作不可逆。</p>
-          </div>
-        </div>
-        <button @click="resetStats" class="px-6 py-3 bg-rose-500 text-white rounded-xl font-black text-xs hover:bg-rose-600 transition-all shadow-xl shadow-rose-500/20 active:scale-95 whitespace-nowrap">
-          立即执行重置
-        </button>
-      </div>
-    </section>
-
-    <!-- Version Footer -->
-    <div class="flex flex-col items-center gap-2 pt-10">
-       <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-border/30 text-[9px] font-black text-[var(--text)]-secondary uppercase tracking-widest">
-          引擎版本 v1.0.3
-       </div>
-       <p class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em]">由 Kiro-Stack 核心团队构建</p>
-    </div>
+      <template #footer>
+        <WorldButton variant="secondary" @click="clearGiftOpen = false; clearGiftConfirm = ''">取消</WorldButton>
+        <WorldButton
+          variant="danger"
+          :loading="clearGiftLoading"
+          :disabled="clearGiftConfirm.trim() !== '清除'"
+          @click="doClearAllGift"
+        >
+          确认执行
+        </WorldButton>
+      </template>
+    </WorldModal>
   </div>
 </template>
 
 <style scoped>
-/* 原生选择器美化 */
-select {
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 1rem center;
-  background-size: 1em;
+.settings-page { display: flex; flex-direction: column; gap: 16px; }
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.title-wrap { display: flex; flex-direction: column; gap: 2px; }
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+}
+.page-title {
+  font-family: var(--world-font-display);
+  font-size: 1.5rem;
+  font-weight: 800;
+  margin: 0;
+  color: var(--world-text-primary);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
+}
+.section-hint {
+  margin: 0 0 14px;
+  font-size: 0.8125rem;
+  color: var(--world-text-mute);
+}
+
+.row-block { display: flex; flex-direction: column; gap: 14px; }
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.row-text .row-title { font-size: 0.875rem; font-weight: 700; color: var(--world-text-primary); margin-bottom: 2px; }
+.row-text .row-hint { font-size: 0.75rem; color: var(--world-text-mute); }
+.row-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+.cfg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 720px) { .cfg-grid { grid-template-columns: 1fr; } }
+
+.select-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+  margin-bottom: 6px;
+}
+.select-cell { display: flex; flex-direction: column; }
+.select-cell .world-select { width: 100%; display: flex; }
+.select-cell :deep(.ws-trigger) { width: 100%; }
+
+.empty-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 20px;
+  color: var(--world-text-mute);
+  font-size: 0.875rem;
+}
+
+.flagged-list { display: flex; flex-direction: column; gap: 10px; }
+.flagged-item {
+  padding: 14px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+}
+.flagged-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.flagged-info { display: flex; align-items: center; gap: 12px; }
+.flagged-info .warn-icon { color: var(--world-warning); }
+.flagged-id {
+  font-family: var(--world-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--world-text-primary);
+}
+.flagged-reason {
+  font-size: 0.7rem;
+  color: var(--world-text-mute);
+  margin-top: 2px;
+}
+.flagged-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+@media (max-width: 720px) { .flagged-grid { grid-template-columns: repeat(2, 1fr); } }
+.fg-cell {
+  padding: 8px 10px;
+  background: var(--world-bg-card);
+  border-radius: var(--world-radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fg-cell span {
+  font-size: 0.6rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--world-text-mute);
+}
+.fg-cell strong {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+}
+.fg-cell strong.warn { color: var(--world-warning); }
+.fg-cell strong.time { font-size: 0.72rem; font-family: var(--world-font-mono); }
+
+/* Danger zone */
+.danger-card { border-color: rgba(239, 68, 68, 0.30); }
+.danger-title { color: var(--world-error); }
+.danger-list { display: flex; flex-direction: column; gap: 12px; }
+.danger-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  background: rgba(239, 68, 68, 0.04);
+  border: 1px solid rgba(239, 68, 68, 0.20);
+  border-radius: var(--world-radius-md);
+}
+.d-info { display: flex; align-items: flex-start; gap: 12px; flex: 1; }
+.d-icon { color: var(--world-error); flex-shrink: 0; margin-top: 2px; }
+.d-icon.warn { color: var(--world-warning); }
+.d-title { font-size: 0.875rem; font-weight: 800; color: var(--world-text-primary); }
+.d-desc { font-size: 0.75rem; color: var(--world-text-mute); margin-top: 2px; line-height: 1.5; }
+@media (max-width: 720px) {
+  .danger-item { flex-direction: column; align-items: stretch; }
+}
+
+/* Modal body */
+.modal-body { display: flex; flex-direction: column; gap: 12px; }
+.modal-warn {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--world-text-primary);
+  line-height: 1.6;
+}
+.modal-warn strong { color: var(--world-error); }
 </style>

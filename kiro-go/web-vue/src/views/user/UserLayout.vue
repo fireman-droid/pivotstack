@@ -3,6 +3,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { useUserAuth } from '../../stores/userAuth'
 import { computed, onMounted } from 'vue'
 import { LayoutDashboard, Gift, ScrollText, LogOut, Zap } from 'lucide-vue-next'
+import WorldSwitcher from '../../components/WorldSwitcher.vue'
+import WorldChip from '../../components/world/WorldChip.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -10,24 +12,20 @@ const auth = useUserAuth()
 
 const navItems = [
   { path: '/user/dashboard', label: '概览', icon: LayoutDashboard },
-  { path: '/user/recharge', label: '充值', icon: Gift },
-  { path: '/user/logs', label: '日志', icon: ScrollText },
+  { path: '/user/recharge',  label: '充值', icon: Gift },
+  { path: '/user/logs',      label: '日志', icon: ScrollText },
 ]
 
 const isActivated = computed(() => !!auth.plan)
 const balanceValue = computed(() => Number(auth.balance || 0))
 const isCreditPlan = computed(() => auth.plan === 'credit' || auth.plan === 'hybrid')
-const isTimedPlan = computed(() => auth.plan === 'timed' || auth.plan === 'hybrid')
+const isTimedPlan  = computed(() => auth.plan === 'timed'  || auth.plan === 'hybrid')
 
 const balanceDisplay = computed(() => {
   if (!isCreditPlan.value) return null
   return `$${balanceValue.value.toFixed(2)}`
 })
-
-const balanceBadgeClass = computed(() => {
-  if (balanceValue.value < 1) return 'low'
-  return 'ok'
-})
+const balanceVariant = computed(() => balanceValue.value < 1 ? 'danger' : 'success')
 
 const timeDisplay = computed(() => {
   if (!isTimedPlan.value) return null
@@ -44,16 +42,15 @@ const timeDisplay = computed(() => {
   if (d === 0 && m > 0) t += m + '分'
   return t || '1分'
 })
-
-const timeBadgeClass = computed(() => {
-  if (!isTimedPlan.value) return 'timed'
+const timeVariant = computed(() => {
+  if (!isTimedPlan.value) return 'info'
   const exp = auth.userInfo?.expiresAt || 0
-  if (!exp) return 'timed'
+  if (!exp) return 'info'
   const diff = Math.max(0, exp - Date.now() / 1000)
-  if (diff <= 0) return 'expired'
-  if (diff < 3 * 86400) return 'urgent'
+  if (diff <= 0) return 'neutral'
+  if (diff < 3 * 86400) return 'danger'
   if (diff < 7 * 86400) return 'warning'
-  return 'timed'
+  return 'info'
 })
 
 function handleLogout() {
@@ -61,285 +58,244 @@ function handleLogout() {
   router.replace('/login')
 }
 
-onMounted(() => {
-  auth.refresh()
-})
+onMounted(() => { auth.refresh() })
 </script>
 
 <template>
-  <div class="user-layout">
-    <header class="user-header">
-      <div class="header-left">
-        <div class="brand">
-          <div class="brand-icon">
-            <Zap :size="16" />
-          </div>
-          <span class="brand-text">KiroStack</span>
-        </div>
-        <nav class="header-nav">
-          <router-link
-            v-for="item in navItems"
-            :key="item.path"
-            :to="item.path"
-            :class="['nav-link', { active: route.path === item.path }]"
-          >
-            <component :is="item.icon" :size="16" class="nav-icon-svg" />
-            <span class="nav-label">{{ item.label }}</span>
+  <div class="user-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-left">
+          <router-link to="/user/dashboard" class="brand">
+            <div class="brand-mark">
+              <Zap :size="14" stroke-width="2.6" />
+            </div>
+            <span class="brand-name">KiroStack</span>
           </router-link>
-        </nav>
-      </div>
-      <div class="header-right">
-        <div v-if="!isActivated" class="balance-badge inactive">未激活</div>
-        <div v-if="balanceDisplay" :class="['balance-badge', balanceBadgeClass]">
-          {{ balanceDisplay }}
+          <nav class="nav-row" aria-label="用户导航">
+            <router-link
+              v-for="item in navItems"
+              :key="item.path"
+              :to="item.path"
+              :class="['nav-pill', { active: route.path === item.path }]"
+            >
+              <component :is="item.icon" :size="14" stroke-width="2.2" />
+              <span>{{ item.label }}</span>
+            </router-link>
+          </nav>
         </div>
-        <div v-if="timeDisplay" :class="['time-badge', timeBadgeClass]">
-          {{ timeDisplay }}
+
+        <div class="topbar-right">
+          <WorldChip v-if="!isActivated" variant="neutral">未激活</WorldChip>
+          <WorldChip v-if="balanceDisplay" :variant="balanceVariant" :dot="true">
+            {{ balanceDisplay }}
+          </WorldChip>
+          <WorldChip v-if="timeDisplay" :variant="timeVariant" :pulse="timeVariant === 'danger'">
+            {{ timeDisplay }}
+          </WorldChip>
+          <WorldSwitcher class="hide-on-mobile" />
+          <button class="icon-btn" @click="handleLogout" title="退出登录" aria-label="退出">
+            <LogOut :size="15" />
+          </button>
         </div>
-        <button class="logout-btn" @click="handleLogout" title="退出登录">
-          <LogOut :size="16" />
-        </button>
       </div>
     </header>
 
     <main class="user-main" id="main-content">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <Transition name="page-fade" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
     </main>
 
-    <!-- Mobile bottom nav -->
-    <nav class="mobile-nav">
+    <nav class="mobile-tabbar" aria-label="移动端导航">
       <router-link
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        :class="['mobile-nav-item', { active: route.path === item.path }]"
+        :class="['tabbar-item', { active: route.path === item.path }]"
       >
-        <component :is="item.icon" :size="20" />
-        <span class="nav-label">{{ item.label }}</span>
+        <span class="tabbar-icon">
+          <component :is="item.icon" :size="18" stroke-width="2.2" />
+        </span>
+        <span class="tabbar-label">{{ item.label }}</span>
       </router-link>
     </nav>
   </div>
 </template>
 
 <style scoped>
-.user-layout {
-  min-height: 100vh;
-  background: #0f172a;
-  color: #f8fafc;
+.user-shell {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--world-text-primary);
+  background: var(--world-bg-main);
+  font-family: var(--world-font-sans);
+  position: relative;
 }
+.user-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.5;
+}
+[data-world="daogui"] .user-shell::before { opacity: 0.06; }
 
-.user-header {
+.topbar {
+  flex-shrink: 0;
+  z-index: 100;
+  padding: 0 16px;
+  margin-top: 16px;
+}
+.topbar-inner {
+  max-width: 1200px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1.5rem;
-  height: 60px;
-  background: rgba(15, 23, 42, 0.8);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  height: 56px;
+  padding: 0 16px;
+  border-radius: var(--world-radius-2xl);
+  background: var(--world-glass-bg-strong);
+  backdrop-filter: blur(var(--world-glass-blur));
+  -webkit-backdrop-filter: blur(var(--world-glass-blur));
+  border: 1px solid var(--world-glass-border);
+  box-shadow: var(--world-shadow-md);
 }
+[data-world="daogui"] .topbar-inner { border-color: rgba(184, 134, 11, 0.22); }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
+.topbar-left { display: flex; align-items: center; gap: 28px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; text-decoration: none; }
+.brand-mark {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--world-radius-md);
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
+  color: white;
 }
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.brand-icon {
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, #6366f1, #818cf8);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
-}
-
-.brand-text {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 1.1rem;
-  font-weight: 700;
-  background: linear-gradient(135deg, #818cf8, #c084fc);
+[data-world="daogui"] .brand-mark { box-shadow: 0 0 14px rgba(196, 30, 58, 0.4); }
+.brand-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
   -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
   white-space: nowrap;
+  font-family: var(--world-font-display);
 }
 
-.header-nav {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.nav-link {
-  display: flex;
+.nav-row { display: flex; gap: 4px; }
+.nav-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--world-radius-lg);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
   text-decoration: none;
-  color: #64748b;
-  font-size: 0.875rem;
-  font-weight: 500;
-  transition: all 0.2s;
-  border-left: 2px solid transparent;
+  transition: all 200ms var(--world-transition-fast, cubic-bezier(0.4, 0, 0.2, 1));
 }
-
-.nav-link:hover {
-  color: #f8fafc;
-  background: rgba(255, 255, 255, 0.06);
+.nav-pill:hover { color: var(--world-text-primary); background: var(--world-overlay-light); }
+.nav-pill.active {
+  color: white;
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
 }
+[data-world="daogui"] .nav-pill.active { box-shadow: 0 4px 14px -4px rgba(196, 30, 58, 0.5); }
 
-.nav-link.active {
-  color: #818cf8;
-  background: rgba(99, 102, 241, 0.1);
-  border-left-color: #6366f1;
-}
+.topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-.nav-icon-svg {
-  flex-shrink: 0;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.balance-badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
-  font-weight: 600;
-  font-size: 0.8125rem;
-}
-
-.balance-badge.ok {
-  background: rgba(34, 197, 94, 0.12);
-  color: #22c55e;
-  border: 1px solid rgba(34, 197, 94, 0.2);
-}
-
-.balance-badge.low {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.balance-badge.inactive {
-  background: rgba(100, 116, 139, 0.12);
-  color: #94a3b8;
-  border: 1px solid rgba(100, 116, 139, 0.2);
-}
-
-.time-badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 20px;
-  font-weight: 600;
-  font-size: 0.8125rem;
-}
-
-.time-badge.timed {
-  background: rgba(99, 102, 241, 0.12);
-  color: #818cf8;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-}
-
-.time-badge.warning {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.2);
-}
-
-.time-badge.urgent {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.time-badge.expired {
-  background: rgba(100, 116, 139, 0.12);
-  color: #94a3b8;
-  border: 1px solid rgba(100, 116, 139, 0.2);
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-.logout-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #64748b;
-  border-radius: 8px;
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: var(--world-radius-md);
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-mute);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 200ms ease;
 }
-
-.logout-btn:hover {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.06);
+.icon-btn:hover {
+  color: var(--world-error);
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .user-main {
-  padding: 1.5rem;
+  flex: 1;
+  overflow-y: auto;
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
-  padding-bottom: 5rem;
+  padding: 28px 24px 96px;
 }
 
-.mobile-nav {
+.mobile-tabbar {
   display: none;
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 0.5rem;
-  justify-content: space-around;
+  bottom: 12px; left: 12px; right: 12px;
   z-index: 100;
+  background: var(--world-glass-bg-strong);
+  backdrop-filter: blur(var(--world-glass-blur));
+  -webkit-backdrop-filter: blur(var(--world-glass-blur));
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-2xl);
+  padding: 8px;
+  justify-content: space-around;
+  box-shadow: var(--world-shadow-md);
 }
+[data-world="daogui"] .mobile-tabbar { border-color: rgba(184, 134, 11, 0.22); }
 
-.mobile-nav-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
+.tabbar-item {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px; padding: 8px 4px;
+  border-radius: var(--world-radius-lg);
+  color: var(--world-text-mute);
   text-decoration: none;
-  color: #64748b;
   font-size: 0.7rem;
-  padding: 0.4rem 1rem;
-  border-radius: 8px;
-  transition: all 0.2s;
+  font-weight: 700;
+  transition: all 200ms ease;
 }
+.tabbar-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: var(--world-radius-md);
+  transition: all 220ms ease;
+}
+.tabbar-item.active { color: var(--world-accent); }
+.tabbar-item.active .tabbar-icon {
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
+  color: white;
+}
+[data-world="daogui"] .tabbar-item.active .tabbar-icon { box-shadow: 0 0 12px rgba(196, 30, 58, 0.5); }
 
-.mobile-nav-item.active {
-  color: #818cf8;
-}
+.page-fade-enter-active { transition: all 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+.page-fade-leave-active { transition: all 180ms ease; }
+.page-fade-enter-from   { opacity: 0; transform: translateY(8px); }
+.page-fade-leave-to     { opacity: 0; }
 
 @media (max-width: 768px) {
-  .header-nav { display: none; }
-  .mobile-nav { display: flex; }
-  .user-main { padding: 1rem; padding-bottom: 5rem; }
+  .topbar { top: 8px; padding: 0 8px; margin-top: 8px; }
+  .topbar-inner { padding: 0 12px; height: 52px; }
+  .nav-row { display: none; }
+  .brand-name { display: none; }
+  .hide-on-mobile { display: none; }
+  .mobile-tabbar { display: flex; }
+  .user-main { padding: 20px 16px 96px; }
+  .topbar-right { gap: 6px; }
+  .icon-btn { width: 28px; height: 28px; }
 }
 </style>

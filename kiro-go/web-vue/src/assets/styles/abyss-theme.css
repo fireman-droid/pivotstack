@@ -44,6 +44,55 @@
   }
 }
 
+/* ==================== 新增动画（Phase B） ==================== */
+
+/* talisman-pulse - 符箓朱印外溢脉冲（道诡按钮、card hover） */
+@keyframes talisman-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(196, 30, 58, 0); }
+  50%      { box-shadow: 0 0 0 6px rgba(196, 30, 58, 0.18); }
+}
+
+/* ink-bleed - 墨晕扩散（hover 描边） */
+@keyframes ink-bleed {
+  0%   { background-size: 0% 100%; }
+  100% { background-size: 100% 100%; }
+}
+
+/* tendril-sway - 触手轻颤（道诡装饰元素） */
+@keyframes tendril-sway {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50%      { transform: translateY(-4px) rotate(1deg); }
+}
+
+/* medical-scan - 医疗扫描线（reality 焦点态） */
+@keyframes medical-scan {
+  0%   { transform: translateX(-100%); opacity: 0.6; }
+  100% { transform: translateX(100%);  opacity: 0; }
+}
+
+/* paper-flutter - 纸张轻颤（道诡卡片悬停） */
+@keyframes paper-flutter {
+  0%, 100% { transform: rotate(-0.5deg); }
+  50%      { transform: rotate(0.5deg); }
+}
+
+/* xinpan-bloom - 心蟠绽放（主题切换/Login 入场） */
+@keyframes xinpan-bloom {
+  0%   { transform: scale(0) rotate(-180deg); opacity: 0; }
+  60%  { transform: scale(1.05) rotate(0deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+/* heartbeat - 心电节律（reality loading） */
+@keyframes heartbeat {
+  0%, 100% { transform: scaleY(1); }
+  10%      { transform: scaleY(0.3); }
+  20%      { transform: scaleY(2.4); }
+  30%      { transform: scaleY(0.5); }
+  40%      { transform: scaleY(1.6); }
+  50%      { transform: scaleY(1); }
+}
+
 /* Tailwind v4 dark 模式变体 */
 @variant dark (&:where(.dark, .dark *));
 
@@ -74,11 +123,11 @@
   background: var(--world-bg-main);
 }
 
-/* 符纸卡片（撕裂边缘 - 仅 madness） */
+/* 符纸卡片（普通圆角，不再撕纸斜边） */
 .rune-card {
   background: rgba(26, 26, 26, 0.85);
   border: 1px solid var(--world-border, #4a1a4a);
-  clip-path: polygon(0 2%, 100% 0, 98% 95%, 2% 100%);
+  border-radius: var(--world-radius-lg, 8px);
   backdrop-filter: blur(8px);
 }
 

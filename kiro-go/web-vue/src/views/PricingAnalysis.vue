@@ -23,13 +23,6 @@ const showFreeForm = ref(false)
 const proForm = ref({ count: 1, costCNY: 60, credits: 1500 })
 const freeForm = ref({ count: 100, costCNY: 9 })
 
-function ensureLinePolicies() {
-  if (!pricing.value) return
-  if (!pricing.value.linePolicies) pricing.value.linePolicies = {}
-  if (!pricing.value.linePolicies.kiro) pricing.value.linePolicies.kiro = { allowTimed: true, allowCredit: true }
-  if (!pricing.value.linePolicies.ecom) pricing.value.linePolicies.ecom = { allowTimed: true, allowCredit: true }
-}
-
 async function fetchAll() {
   try {
     const [profitRes, analysisRes, keysRes, pricingRes] = await Promise.all([
@@ -41,10 +34,7 @@ async function fetchAll() {
     if (profitRes.ok) profit.value = await profitRes.json()
     if (analysisRes.ok) analysis.value = await analysisRes.json()
     if (keysRes.ok) keys.value = await keysRes.json()
-    if (pricingRes.ok) {
-      pricing.value = await pricingRes.json()
-      ensureLinePolicies()
-    }
+    if (pricingRes.ok) pricing.value = await pricingRes.json()
   } catch (e) { console.error('fetch error:', e) }
   finally { loading.value = false }
 }
@@ -203,7 +193,7 @@ function fmtDate(ts) {
         </div>
 
         <!-- 售价 -->
-        <div v-if="pricing" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div v-if="pricing" class="grid grid-cols-2 gap-4 mb-6">
           <div>
             <label class="block text-[10px] text-[var(--text)]/40 mb-1 font-bold">FREE 池售价 ($/credit)</label>
             <input v-model.number="pricing.freePoolPriceUSD" type="number" step="0.01" min="0"
@@ -214,39 +204,8 @@ function fmtDate(ts) {
             <input v-model.number="pricing.proPoolPriceUSD" type="number" step="0.01" min="0"
               class="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-sm text-[var(--text)] focus:border-[var(--primary)] outline-none" />
           </div>
-          <div>
-            <label class="block text-[10px] text-[var(--text)]/40 mb-1 font-bold">ECOM 线路售价 (¥/point)</label>
-            <input v-model.number="pricing.ecomPointPrice" type="number" step="0.001" min="0"
-              class="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-sm text-[var(--text)] focus:border-[var(--primary)] outline-none" />
-          </div>
         </div>
-        <div v-if="pricing" class="mb-6">
-          <div class="text-[10px] text-[var(--text)]/40 mb-2 font-bold">线路策略（访问判定）</div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div class="bg-[var(--bg)]/50 border border-[var(--border)] rounded-xl p-3 space-y-2">
-              <div class="text-xs font-black text-[var(--text)]">KIRO 线路</div>
-              <label class="flex items-center justify-between text-xs text-[var(--text)]/70">
-                <span>允许时间卡</span>
-                <input type="checkbox" v-model="pricing.linePolicies.kiro.allowTimed" />
-              </label>
-              <label class="flex items-center justify-between text-xs text-[var(--text)]/70">
-                <span>允许余额卡</span>
-                <input type="checkbox" v-model="pricing.linePolicies.kiro.allowCredit" />
-              </label>
-            </div>
-            <div class="bg-[var(--bg)]/50 border border-[var(--border)] rounded-xl p-3 space-y-2">
-              <div class="text-xs font-black text-[var(--text)]">ECOM 线路</div>
-              <label class="flex items-center justify-between text-xs text-[var(--text)]/70">
-                <span>允许时间卡</span>
-                <input type="checkbox" v-model="pricing.linePolicies.ecom.allowTimed" />
-              </label>
-              <label class="flex items-center justify-between text-xs text-[var(--text)]/70">
-                <span>允许余额卡</span>
-                <input type="checkbox" v-model="pricing.linePolicies.ecom.allowCredit" />
-              </label>
-            </div>
-          </div>
-        </div>
+
         <!-- PRO 成本记录 -->
         <div class="mb-4">
           <div class="flex items-center justify-between mb-2">

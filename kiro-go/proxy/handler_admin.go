@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
-	"kiro-api-proxy/pool"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,6 +132,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetPricing(w, r)
 	case path == "/pricing" && r.Method == "PUT":
 		h.apiUpdatePricing(w, r)
+	case path == "/stealth" && r.Method == "GET":
+		h.apiGetStealth(w, r)
+	case path == "/stealth" && r.Method == "PUT":
+		h.apiUpdateStealth(w, r)
 	case path == "/profit" && r.Method == "GET":
 		h.apiGetProfit(w, r)
 	case path == "/cost-entry" && r.Method == "POST":
@@ -153,20 +156,18 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/abuse/") && strings.HasSuffix(path, "/clear") && r.Method == "POST":
 		keyID := strings.TrimSuffix(strings.TrimPrefix(path, "/abuse/"), "/clear")
 		h.apiClearAbuse(w, r, keyID)
-	// ==================== EcomAgent Management ====================
-	case path == "/ecom/accounts" && r.Method == "GET":
-		h.apiGetEcomAccounts(w, r)
-	case path == "/ecom/accounts" && r.Method == "POST":
-		h.apiImportEcomAccounts(w, r)
-	case strings.HasPrefix(path, "/ecom/accounts/") && strings.HasSuffix(path, "/toggle") && r.Method == "POST":
-		id := strings.TrimSuffix(strings.TrimPrefix(path, "/ecom/accounts/"), "/toggle")
-		h.apiToggleEcomAccount(w, r, id)
-	case strings.HasPrefix(path, "/ecom/accounts/") && r.Method == "DELETE":
-		h.apiDeleteEcomAccount(w, r, strings.TrimPrefix(path, "/ecom/accounts/"))
-	case path == "/ecom/stats" && r.Method == "GET":
-		h.apiGetEcomStats(w, r)
-	case path == "/ecom/refresh" && r.Method == "POST":
-		h.apiRefreshEcomAccounts(w, r)
+
+	// ==================== Engagement / Insights ====================
+	case path == "/inactive-keys" && r.Method == "GET":
+		h.apiInactiveKeys(w, r)
+	case path == "/leaderboard" && r.Method == "GET":
+		h.apiAdminLeaderboard(w, r)
+	case path == "/leaderboard/config" && r.Method == "GET":
+		h.apiGetLeaderboardConfig(w, r)
+	case path == "/leaderboard/config" && r.Method == "PUT":
+		h.apiUpdateLeaderboardConfig(w, r)
+	case path == "/apikeys/clear-gift" && r.Method == "POST":
+		h.apiClearAllGift(w, r)
 
 	default:
 		w.WriteHeader(404)
@@ -187,7 +188,7 @@ func (h *Handler) apiGetAccounts(w http.ResponseWriter, _ *http.Request) {
 		result[i] = map[string]interface{}{
 			"id": a.ID, "email": a.Email, "userId": a.UserId, "nickname": a.Nickname,
 			"authMethod": a.AuthMethod, "provider": a.Provider, "region": a.Region,
-			"enabled": a.Enabled, "banStatus": a.BanStatus, "banReason": a.BanReason, "banTime": a.BanTime,
+			"enabled": a.Enabled, "allowOverQuota": a.AllowOverQuota, "banStatus": a.BanStatus, "banReason": a.BanReason, "banTime": a.BanTime,
 			"expiresAt": a.ExpiresAt, "hasToken": a.AccessToken != "", "machineId": a.MachineId, "weight": a.Weight,
 			"subscriptionType": a.SubscriptionType, "subscriptionTitle": a.SubscriptionTitle, "daysRemaining": a.DaysRemaining,
 			"usageCurrent": a.UsageCurrent, "usageLimit": a.UsageLimit, "usagePercent": a.UsagePercent,
@@ -296,6 +297,9 @@ func (h *Handler) apiUpdateAccount(w http.ResponseWriter, r *http.Request, id st
 	}
 	if v, ok := updates["enabled"].(bool); ok {
 		existing.Enabled = v
+	}
+	if v, ok := updates["allowOverQuota"].(bool); ok {
+		existing.AllowOverQuota = v
 	}
 	if v, ok := updates["nickname"].(string); ok {
 		existing.Nickname = v
@@ -1043,6 +1047,29 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// GET /admin/api/stealth
+func (h *Handler) apiGetStealth(w http.ResponseWriter, _ *http.Request) {
+	json.NewEncoder(w).Encode(config.GetStealth())
+}
+
+// PUT /admin/api/stealth
+func (h *Handler) apiUpdateStealth(w http.ResponseWriter, r *http.Request) {
+	var s config.StealthConfig
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdateStealth(s); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	AuditLog("stealth_update", "admin", fmt.Sprintf("enabled=%v opus=%.2f sonnet=%.2f opusTarget=%s sonnetTarget=%s",
+		s.Enabled, s.OpusFakeRatio, s.SonnetFakeRatio, s.OpusFakeTarget, s.SonnetFakeTarget))
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
 // GET /admin/api/profit
 func (h *Handler) apiGetProfit(w http.ResponseWriter, _ *http.Request) {
 	h.callLogsMu.RLock()
@@ -1153,7 +1180,6 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		Type   string  `json:"type"`   // "balance" | "days"
 		Amount float64 `json:"amount"` // CNY (for balance) or seconds (for days/time)
 		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
-		Line   string  `json:"line"`   // "kiro" | "ecom" (auto-set on redeem)
 		Count  int     `json:"count"`  // how many codes to generate
 		Note   string  `json:"note"`
 	}
@@ -1189,9 +1215,6 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		}
 		if (req.Type == "days" || req.Type == "time") && (req.Tier == "free" || req.Tier == "pro") {
 			ac.Tier = req.Tier
-		}
-		if req.Line == "kiro" || req.Line == "ecom" {
-			ac.Line = req.Line
 		}
 		if err := config.AddActivationCode(ac); err != nil {
 			w.WriteHeader(500)
@@ -1236,6 +1259,138 @@ func (h *Handler) apiClearAbuse(w http.ResponseWriter, _ *http.Request, keyID st
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// ==================== Engagement / Insights handlers ====================
+
+// apiInactiveKeys returns API keys idle for >= ?days (default 30).
+// daysIdle is computed from LastUsed; if LastUsed=0 (never used), CreatedAt is the anchor.
+func (h *Handler) apiInactiveKeys(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 3650 {
+			days = v
+		}
+	}
+	keys := config.GetAllApiKeys()
+	// merge in-memory stats
+	h.apiKeyStatsMu.RLock()
+	for i := range keys {
+		if stats, ok := h.apiKeyStats[keys[i].ID]; ok {
+			keys[i].LastUsed = stats.LastUsed
+			keys[i].Requests = stats.Requests
+		}
+	}
+	h.apiKeyStatsMu.RUnlock()
+
+	now := time.Now().Unix()
+	type inactiveKey struct {
+		ID          string  `json:"id"`
+		Note        string  `json:"note"`
+		LastUsed    int64   `json:"lastUsed"`
+		CreatedAt   int64   `json:"createdAt"`
+		DaysIdle    int     `json:"daysIdle"`
+		NeverUsed   bool    `json:"neverUsed"`
+		Balance     float64 `json:"balance"`
+		GiftBalance float64 `json:"giftBalance"`
+		Requests    int64   `json:"requests"`
+		Enabled     bool    `json:"enabled"`
+	}
+	out := make([]inactiveKey, 0)
+	for _, k := range keys {
+		anchor := k.LastUsed
+		never := false
+		if anchor == 0 {
+			anchor = k.CreatedAt
+			never = true
+		}
+		if anchor == 0 {
+			continue
+		}
+		idle := int((now - anchor) / 86400)
+		if idle < days {
+			continue
+		}
+		out = append(out, inactiveKey{
+			ID:          k.ID,
+			Note:        k.Note,
+			LastUsed:    k.LastUsed,
+			CreatedAt:   k.CreatedAt,
+			DaysIdle:    idle,
+			NeverUsed:   never,
+			Balance:     k.Balance,
+			GiftBalance: k.GiftBalance,
+			Requests:    k.Requests,
+			Enabled:     k.Enabled,
+		})
+	}
+	// sort by daysIdle DESC
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].DaysIdle > out[i].DaysIdle {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"days":  days,
+		"count": len(out),
+		"keys":  out,
+	})
+}
+
+// GET /admin/api/leaderboard/config
+func (h *Handler) apiGetLeaderboardConfig(w http.ResponseWriter, _ *http.Request) {
+	enabled, fakeUsers := config.GetLeaderboardConfig()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled":   enabled,
+		"fakeUsers": fakeUsers,
+	})
+}
+
+// PUT /admin/api/leaderboard/config
+func (h *Handler) apiUpdateLeaderboardConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled   bool `json:"enabled"`
+		FakeUsers int  `json:"fakeUsers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdateLeaderboardConfig(req.Enabled, req.FakeUsers); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	AuditLog("leaderboard_config_update", "admin", fmt.Sprintf("enabled=%v fakeUsers=%d", req.Enabled, req.FakeUsers))
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// POST /admin/api/apikeys/clear-gift
+// Body must contain {"confirm": true}. Zeros GiftBalance on every key (does NOT touch Balance / TotalGifted).
+func (h *Handler) apiClearAllGift(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if !req.Confirm {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "confirm=true is required"})
+		return
+	}
+	count, total := config.ClearAllGiftBalances()
+	AuditLog("clear_all_gift", "admin", fmt.Sprintf("cleared=%d totalGiftCleared=$%.4f", count, total))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":          true,
+		"cleared":          count,
+		"totalGiftCleared": total,
+	})
+}
+
 // generateActivationCode creates a code like KIRO-XXXX-XXXX-XXXX
 func generateActivationCode() string {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1
@@ -1249,127 +1404,4 @@ func generateActivationCode() string {
 		return string(b)
 	}
 	return "KIRO-" + seg() + "-" + seg() + "-" + seg()
-}
-
-// ==================== EcomAgent Admin APIs ====================
-
-// GET /admin/api/ecom/accounts
-func (h *Handler) apiGetEcomAccounts(w http.ResponseWriter, _ *http.Request) {
-	accounts := config.GetEcomAccounts()
-	ecomPool := pool.GetEcomPool()
-	poolAccounts := ecomPool.GetAllAccounts()
-	statsMap := make(map[string]config.EcomAccount)
-	for _, a := range poolAccounts {
-		statsMap[a.ID] = a
-	}
-	result := make([]map[string]interface{}, len(accounts))
-	for i, a := range accounts {
-		stats := statsMap[a.ID]
-		result[i] = map[string]interface{}{
-			"id":               a.ID,
-			"email":            a.Email,
-			"accountId":        a.AccountId,
-			"apiKey":           maskKey(a.ApiKey),
-			"enabled":          a.Enabled,
-			"requestCount":     stats.RequestCount,
-			"errorCount":       stats.ErrorCount,
-			"totalTokens":      stats.TotalTokens,
-			"lastUsed":         stats.LastUsed,
-			"upstreamRequests": a.UpstreamRequests,
-			"upstreamTokens":   a.UpstreamTokens,
-			"requestLimit":     a.RequestLimit,
-			"tokenLimit":       a.TokenLimit,
-			"upstreamPlan":     a.UpstreamPlan,
-			"lastRefresh":      a.LastRefresh,
-			"hasAccessToken":   a.AccessToken != "",
-		}
-	}
-	json.NewEncoder(w).Encode(result)
-}
-
-// POST /admin/api/ecom/accounts — batch import
-func (h *Handler) apiImportEcomAccounts(w http.ResponseWriter, r *http.Request) {
-	// Accept the JSON format from user's registration tool
-	var rawAccounts []struct {
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		Status      string `json:"status"`
-		ApiKey      string `json:"api_key"`
-		AccountId   string `json:"account_id"`
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&rawAccounts); err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON: " + err.Error()})
-		return
-	}
-
-	// Filter only successful accounts with api_key
-	var ecomAccounts []config.EcomAccount
-	for _, raw := range rawAccounts {
-		if raw.Status != "success" || raw.ApiKey == "" {
-			continue
-		}
-		ecomAccounts = append(ecomAccounts, config.EcomAccount{
-			Email:       raw.Email,
-			Password:    raw.Password,
-			ApiKey:      raw.ApiKey,
-			AccountId:   raw.AccountId,
-			AccessToken: raw.AccessToken,
-			Enabled:     true,
-		})
-	}
-
-	imported, skipped, err := config.ImportEcomAccounts(ecomAccounts)
-	if err != nil {
-		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	pool.GetEcomPool().Reload()
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"imported": imported,
-		"skipped":  skipped,
-		"filtered": len(rawAccounts) - len(ecomAccounts),
-	})
-}
-
-// DELETE /admin/api/ecom/accounts/{id}
-func (h *Handler) apiDeleteEcomAccount(w http.ResponseWriter, _ *http.Request, id string) {
-	if err := config.DeleteEcomAccount(id); err != nil {
-		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	pool.GetEcomPool().Reload()
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-// POST /admin/api/ecom/accounts/{id}/toggle
-func (h *Handler) apiToggleEcomAccount(w http.ResponseWriter, _ *http.Request, id string) {
-	if err := config.ToggleEcomAccount(id); err != nil {
-		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	pool.GetEcomPool().Reload()
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-// GET /admin/api/ecom/stats
-func (h *Handler) apiGetEcomStats(w http.ResponseWriter, _ *http.Request) {
-	ecomPool := pool.GetEcomPool()
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"total":     ecomPool.Count(),
-		"available": ecomPool.AvailableCount(),
-	})
-}
-
-// maskKey shows first 8 and last 4 chars of a key
-func maskKey(key string) string {
-	if len(key) <= 12 {
-		return key
-	}
-	return key[:8] + "..." + key[len(key)-4:]
 }

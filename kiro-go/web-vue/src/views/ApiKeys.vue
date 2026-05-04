@@ -5,11 +5,16 @@ import { useToast } from '../composables/useToast'
 import { copyToClipboard } from '../utils/clipboard'
 import {
   Plus, Trash2, Copy, Eye, EyeOff, Key,
-  ToggleLeft, ToggleRight, Pencil, Search,
-  ChevronDown, X, Check, Save, Clock, Wallet
+  Pencil, Search, X, Save, Clock, Wallet,
+  ChevronDown
 } from 'lucide-vue-next'
+import WorldCard from '../components/world/WorldCard.vue'
+import WorldButton from '../components/world/WorldButton.vue'
+import WorldInput from '../components/world/WorldInput.vue'
+import WorldChip from '../components/world/WorldChip.vue'
+import WorldModal from '../components/world/WorldModal.vue'
 
-const { success, error: toastError } = useToast()
+const { success, error: toastErr } = useToast()
 
 const keys = ref([])
 const loading = ref(false)
@@ -19,24 +24,22 @@ const expandedId = ref(null)
 const searchQuery = ref('')
 const editingId = ref(null)
 const editForm = reactive({ note: '', balance: 0, giftBalance: 0, expiresAt: 0 })
-
 const form = ref({ note: '' })
+
+const CNY_PER_USD = 0.05  // 1$ face value = ¥0.05
 
 async function loadKeys() {
   loading.value = true
   try {
     const res = await api('/apikeys')
     if (res.ok) keys.value = await res.json()
-  } catch { toastError('加载失败') }
+  } catch { toastErr('加载失败') }
   loading.value = false
 }
 
 async function createKey() {
   try {
-    const res = await api('/apikeys', {
-      method: 'POST',
-      body: JSON.stringify({ note: form.value.note })
-    })
+    const res = await api('/apikeys', { method: 'POST', body: JSON.stringify({ note: form.value.note }) })
     if (res.ok) {
       const newKey = await res.json()
       keys.value.unshift(newKey)
@@ -45,17 +48,15 @@ async function createKey() {
       form.value = { note: '' }
       success('API Key 已创建')
     }
-  } catch { toastError('创建失败') }
+  } catch { toastErr('创建失败') }
 }
 
 async function toggleKey(k) {
   try {
-    await api(`/apikeys/${k.id}`, {
-      method: 'PUT', body: JSON.stringify({ enabled: !k.enabled })
-    })
+    await api(`/apikeys/${k.id}`, { method: 'PUT', body: JSON.stringify({ enabled: !k.enabled }) })
     k.enabled = !k.enabled
     success(k.enabled ? '已启用' : '已禁用')
-  } catch { toastError('操作失败') }
+  } catch { toastErr('操作失败') }
 }
 
 async function deleteKey(k) {
@@ -64,34 +65,27 @@ async function deleteKey(k) {
     await api(`/apikeys/${k.id}`, { method: 'DELETE' })
     keys.value = keys.value.filter(x => x.id !== k.id)
     success('已删除')
-  } catch { toastError('删除失败') }
+  } catch { toastErr('删除失败') }
 }
-
-const CNY_PER_USD = 0.05 // $1 face value = ¥0.05
 
 function startEdit(k) {
   editingId.value = k.id
   editForm.note = k.note || ''
-  editForm.balance = ((k.balance || 0) * CNY_PER_USD).toFixed(2) // $ → ¥ for admin input
+  editForm.balance     = ((k.balance || 0) * CNY_PER_USD).toFixed(2)
   editForm.giftBalance = ((k.giftBalance || 0) * CNY_PER_USD).toFixed(2)
   editForm.expiresAt = k.expiresAt || 0
 }
-
-function cancelEdit() {
-  editingId.value = null
-}
+function cancelEdit() { editingId.value = null }
 
 async function saveEdit(k) {
   try {
     const body = {
       note: editForm.note,
-      balance: Number(editForm.balance) / CNY_PER_USD, // ¥ → $ face value
+      balance: Number(editForm.balance) / CNY_PER_USD,
       giftBalance: Number(editForm.giftBalance) / CNY_PER_USD,
       expiresAt: Number(editForm.expiresAt),
     }
-    const res = await api(`/apikeys/${k.id}`, {
-      method: 'PUT', body: JSON.stringify(body)
-    })
+    const res = await api(`/apikeys/${k.id}`, { method: 'PUT', body: JSON.stringify(body) })
     if (res.ok) {
       k.note = editForm.note
       k.balance = body.balance
@@ -100,32 +94,22 @@ async function saveEdit(k) {
       editingId.value = null
       success('已保存')
     }
-  } catch { toastError('保存失败') }
+  } catch { toastErr('保存失败') }
 }
 
 function toggleExpand(k) {
   expandedId.value = expandedId.value === k.id ? null : k.id
 }
-
-function copyText(text) {
-  copyToClipboard(text)
-  success('已复制')
-}
-
-function maskKey(key) {
-  if (!key) return ''
-  return key.slice(0, 7) + '••••••••' + key.slice(-4)
-}
-
+function copyText(text) { copyToClipboard(text); success('已复制') }
+function maskKey(k) { if (!k) return ''; return k.slice(0, 7) + '••••••••' + k.slice(-4) }
 function formatDate(ts) {
   if (!ts) return '-'
   return new Date(ts * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
-
 function timeRemaining(expiresAt) {
-  if (!expiresAt) return { text: '永不过期', class: 'ok' }
+  if (!expiresAt) return { text: '永不过期', variant: 'success' }
   const diff = expiresAt - Date.now() / 1000
-  if (diff <= 0) return { text: '已过期', class: 'danger' }
+  if (diff <= 0) return { text: '已过期', variant: 'danger' }
   const days = Math.floor(diff / 86400)
   const hours = Math.floor((diff % 86400) / 3600)
   const mins = Math.max(1, Math.ceil((diff % 3600) / 60))
@@ -133,29 +117,10 @@ function timeRemaining(expiresAt) {
   if (days > 0) text += `${days}天`
   if (hours > 0) text += `${hours}小时`
   if (days === 0 && mins > 0) text += `${mins}分钟`
-  const cls = days < 3 ? (days < 1 ? 'danger' : 'warning') : 'ok'
-  return { text: text || '1分钟', class: cls }
+  const variant = days < 1 ? 'danger' : days < 3 ? 'warning' : 'success'
+  return { text: text || '1分钟', variant }
 }
-
-function subscriptionInfo(k) {
-  const parts = []
-  if (k.expiresAt) {
-    const tr = timeRemaining(k.expiresAt)
-    parts.push({ label: '剩余', value: tr.text, class: tr.class })
-  }
-  if (k.balance !== undefined && k.balance !== null) {
-    const cls = k.balance < 1 ? 'danger' : 'ok'
-    parts.push({ label: '余额', value: `$${k.balance.toFixed(2)}`, class: cls })
-  }
-  return parts
-}
-
-// 编辑 expiresAt 辅助
-function expiresAtDisplay(ts) {
-  if (!ts) return '未设置'
-  return new Date(ts * 1000).toLocaleString('zh-CN')
-}
-
+function expiresAtDisplay(ts) { if (!ts) return '未设置'; return new Date(ts * 1000).toLocaleString('zh-CN') }
 function addTime(amount) {
   const now = Math.floor(Date.now() / 1000)
   const base = editForm.expiresAt > now ? editForm.expiresAt : now
@@ -176,270 +141,410 @@ onMounted(loadKeys)
 </script>
 
 <template>
-  <div class="space-y-5 max-w-[1400px] mx-auto pb-20">
+  <div class="apikeys-page">
     <!-- Header -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div class="space-y-1">
-        <h1 class="text-2xl font-black tracking-tight text-[var(--text)]">API Key 管理</h1>
-        <p class="text-sm text-[var(--text-secondary)] font-medium flex items-center gap-2">
-          <Key class="w-3.5 h-3.5 text-[var(--primary)]" />
-          共 {{ keys.length }} 个 · {{ keys.filter(k => k.enabled).length }} 个活跃
-        </p>
+    <header class="page-head">
+      <div class="title-wrap">
+        <div class="eyebrow">API 密钥管理</div>
+        <h1 class="page-title">Key 管理</h1>
       </div>
-      <button @click="showCreate = true"
-        class="flex items-center gap-2 px-5 py-2.5 bg-[var(--primary)] text-white rounded-xl text-sm font-bold shadow-lg shadow-[var(--primary)]/20 hover:scale-[1.02] active:scale-95 transition-all">
-        <Plus class="w-4 h-4" /> 创建 Key
-      </button>
-    </div>
+      <div class="head-actions">
+        <WorldChip variant="info" size="sm">
+          共 {{ keys.length }} 个 · {{ keys.filter(k => k.enabled).length }} 活跃
+        </WorldChip>
+        <WorldButton variant="primary" size="md" @click="showCreate = true">
+          <Plus :size="14" /><span>创建 Key</span>
+        </WorldButton>
+      </div>
+    </header>
 
     <!-- Search -->
-    <div class="relative">
-      <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)]" />
-      <input v-model="searchQuery" placeholder="搜索备注、Key 或 ID..."
-        class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all" />
-    </div>
-
-    <!-- Create Modal -->
-    <Teleport to="body">
-      <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="showCreate = false">
-        <div class="fixed inset-0 bg-black/50 backdrop-blur-sm"></div>
-        <div class="relative w-full max-w-lg bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
-          <div class="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between">
-            <h3 class="text-sm font-black text-[var(--text)]">创建 API Key</h3>
-            <button @click="showCreate = false" class="p-1 hover:bg-[var(--bg)] rounded-lg"><X class="w-4 h-4" /></button>
-          </div>
-          <div class="p-6 space-y-4">
-            <p class="text-xs text-[var(--text-secondary)] leading-relaxed">
-              创建后需通过兑换激活码来充值时间或余额，才能开始使用。
-            </p>
-            <div class="space-y-2">
-              <label class="text-[11px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注（用户名）</label>
-              <input v-model="form.note" placeholder="用户名 / 用途说明"
-                class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
-            </div>
-          </div>
-          <div class="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-3">
-            <button @click="showCreate = false" class="px-4 py-2 text-sm font-bold text-[var(--text-secondary)] hover:text-[var(--text)]">取消</button>
-            <button @click="createKey" class="px-5 py-2 bg-[var(--primary)] text-white rounded-xl text-sm font-bold hover:scale-[1.02] active:scale-95 transition-all">确认创建</button>
-          </div>
-        </div>
+    <WorldCard padding="md" class="search-card">
+      <div class="search-wrap">
+        <Search :size="14" class="search-icon" />
+        <input
+          v-model="searchQuery"
+          class="search-input"
+          placeholder="搜索备注、Key 或 ID"
+          spellcheck="false"
+        />
+        <button v-if="searchQuery" @click="searchQuery = ''" class="clear-btn"><X :size="12" /></button>
       </div>
-    </Teleport>
+    </WorldCard>
 
-    <!-- Key List -->
-    <div class="space-y-3">
-      <div v-for="k in filteredKeys" :key="k.id" class="modern-card overflow-hidden transition-all"
-        :class="{ 'opacity-50': !k.enabled }">
-        <!-- Main Row -->
-        <div class="p-5 flex items-center gap-4 cursor-pointer" @click="toggleExpand(k)">
-          <!-- Icon -->
-          <div class="shrink-0">
-            <div class="w-10 h-10 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center">
-              <Key class="w-5 h-5 text-[var(--primary)]" />
-            </div>
-          </div>
-
-          <!-- Info -->
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="text-sm font-bold text-[var(--text)] truncate">{{ k.note || 'Unnamed Key' }}</span>
-              <span v-if="!k.enabled" class="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[9px] font-bold">禁用</span>
-            </div>
-            <div class="flex items-center gap-3 text-[10px] text-[var(--text-secondary)]">
-              <span class="font-mono">{{ showKeyId === k.id ? k.key : maskKey(k.key) }}</span>
-              <button @click.stop="showKeyId = showKeyId === k.id ? null : k.id" class="hover:text-[var(--primary)]">
-                <Eye v-if="showKeyId !== k.id" class="w-3 h-3" />
-                <EyeOff v-else class="w-3 h-3" />
+    <!-- Key list -->
+    <div class="keys-list">
+      <WorldCard
+        v-for="k in filteredKeys"
+        :key="k.id"
+        padding="none"
+        class="key-card"
+        :class="{ 'is-disabled': !k.enabled }"
+      >
+        <!-- Main row -->
+        <div class="key-main" @click="toggleExpand(k)">
+          <div class="key-icon"><Key :size="18" /></div>
+          <div class="key-info">
+            <div class="key-name">{{ k.note || (k.id || '').slice(0, 8) }}</div>
+            <div class="key-meta">
+              <code class="key-display">{{ showKeyId === k.id ? k.key : maskKey(k.key) }}</code>
+              <button class="micro-btn" @click.stop="showKeyId = showKeyId === k.id ? null : k.id" :title="showKeyId === k.id ? '隐藏' : '显示'">
+                <Eye v-if="showKeyId !== k.id" :size="12" />
+                <EyeOff v-else :size="12" />
               </button>
-              <button @click.stop="copyText(k.key)" class="hover:text-[var(--primary)]">
-                <Copy class="w-3 h-3" />
+              <button class="micro-btn" @click.stop="copyText(k.key)" title="复制">
+                <Copy :size="12" />
               </button>
             </div>
           </div>
-
-          <!-- Subscription Info -->
-          <div class="hidden md:flex items-center gap-4 shrink-0">
-            <template v-for="(item, idx) in subscriptionInfo(k)" :key="idx">
-              <div class="text-center min-w-[60px]">
-                <div class="text-xs font-bold"
-                  :class="{
-                    'text-emerald-500': item.class === 'ok',
-                    'text-amber-500': item.class === 'warning',
-                    'text-rose-500': item.class === 'danger'
-                  }">{{ item.value }}</div>
-                <div class="text-[9px] text-[var(--text-secondary)]">{{ item.label }}</div>
-              </div>
-            </template>
-          </div>
-
-          <!-- Actions -->
-          <div class="flex items-center gap-1 shrink-0">
-            <button @click.stop="toggleKey(k)" class="p-2 rounded-lg hover:bg-[var(--bg)] transition-colors" :title="k.enabled ? '禁用' : '启用'">
-              <ToggleRight v-if="k.enabled" class="w-4 h-4 text-emerald-500" />
-              <ToggleLeft v-else class="w-4 h-4 text-[var(--text-secondary)]" />
-            </button>
-            <button @click.stop="startEdit(k); expandedId = k.id" class="p-2 rounded-lg hover:bg-[var(--bg)] transition-colors" title="编辑">
-              <Pencil class="w-4 h-4 text-[var(--text-secondary)]" />
-            </button>
-            <button @click.stop="deleteKey(k)" class="p-2 rounded-lg hover:bg-rose-500/10 transition-colors" title="删除">
-              <Trash2 class="w-4 h-4 text-rose-500" />
-            </button>
-            <ChevronDown class="w-4 h-4 text-[var(--text-secondary)] transition-transform" :class="{ 'rotate-180': expandedId === k.id }" />
+          <div class="key-quick">
+            <WorldChip
+              v-if="k.expiresAt"
+              :variant="timeRemaining(k.expiresAt).variant"
+              size="sm"
+            >
+              <Clock :size="11" />
+              {{ timeRemaining(k.expiresAt).text }}
+            </WorldChip>
+            <WorldChip
+              v-if="k.balance !== undefined && k.balance !== null"
+              :variant="(k.balance || 0) < 1 ? 'danger' : 'success'"
+              size="sm"
+            >
+              <Wallet :size="11" />
+              ${{ (k.balance || 0).toFixed(2) }}
+            </WorldChip>
+            <WorldChip :variant="k.enabled ? 'success' : 'neutral'" size="sm" :dot="true">
+              {{ k.enabled ? '启用' : '禁用' }}
+            </WorldChip>
+            <ChevronDown :size="14" class="key-expand-icon" :class="{ rotated: expandedId === k.id }" />
           </div>
         </div>
 
-        <!-- Expanded Detail / Edit -->
-        <div v-if="expandedId === k.id" class="border-t border-[var(--border)]">
-          <!-- Edit Mode -->
-          <div v-if="editingId === k.id" class="p-5 space-y-4 bg-[var(--bg)]/50">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-bold text-[var(--primary)]">✏️ 编辑信息</span>
-              <div class="flex gap-2">
-                <button @click="cancelEdit" class="px-3 py-1.5 text-xs font-bold text-[var(--text-secondary)] hover:text-[var(--text)] rounded-lg hover:bg-[var(--card)]">取消</button>
-                <button @click="saveEdit(k)" class="px-3 py-1.5 text-xs font-bold text-white bg-[var(--primary)] rounded-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-1">
-                  <Save class="w-3 h-3" /> 保存
-                </button>
+        <!-- Expanded -->
+        <Transition name="expand">
+          <div v-if="expandedId === k.id" class="key-expanded">
+            <!-- Edit mode -->
+            <div v-if="editingId === k.id" class="edit-grid">
+              <WorldInput v-model="editForm.note" label="备注" />
+              <WorldInput v-model.number="editForm.balance"     type="number" label="付费余额（¥）" />
+              <WorldInput v-model.number="editForm.giftBalance" type="number" label="赠送余额（¥）" />
+              <div class="time-block">
+                <label class="time-label">到期时间</label>
+                <div class="time-display">{{ expiresAtDisplay(editForm.expiresAt) }}</div>
+                <div class="time-quick">
+                  <button @click="addTime(86400)">+1 天</button>
+                  <button @click="addTime(7 * 86400)">+7 天</button>
+                  <button @click="addTime(30 * 86400)">+30 天</button>
+                  <button @click="editForm.expiresAt = 0">永不过期</button>
+                </div>
+              </div>
+              <div class="edit-actions">
+                <WorldButton variant="ghost" size="sm" @click="cancelEdit">
+                  <X :size="13" /><span>取消</span>
+                </WorldButton>
+                <WorldButton variant="primary" size="sm" @click="saveEdit(k)">
+                  <Save :size="13" /><span>保存</span>
+                </WorldButton>
               </div>
             </div>
+            <!-- View mode -->
+            <div v-else class="info-grid">
+              <div class="info-cell"><span class="info-label">Key ID</span><span class="info-val mono">{{ k.id }}</span></div>
+              <div class="info-cell"><span class="info-label">创建时间</span><span class="info-val">{{ formatDate(k.createdAt) }}</span></div>
+              <div class="info-cell"><span class="info-label">最后使用</span><span class="info-val">{{ k.lastUsed ? formatDate(k.lastUsed) : '从未使用' }}</span></div>
+              <div class="info-cell"><span class="info-label">总请求</span><span class="info-val">{{ (k.requests || 0).toLocaleString() }}</span></div>
+              <div class="info-cell"><span class="info-label">消耗 Credit</span><span class="info-val">{{ (k.credits || 0).toFixed(4) }}</span></div>
+              <div class="info-cell"><span class="info-label">套餐</span><span class="info-val">{{ k.plan || '—' }}</span></div>
+              <div class="info-cell"><span class="info-label">付费余额</span><span class="info-val">${{ (k.balance || 0).toFixed(4) }}</span></div>
+              <div class="info-cell"><span class="info-label">赠送余额</span><span class="info-val">${{ (k.giftBalance || 0).toFixed(4) }}</span></div>
+              <div class="info-cell"><span class="info-label">累计充值</span><span class="info-val">${{ (k.totalRecharged || 0).toFixed(2) }}</span></div>
+              <div class="info-cell"><span class="info-label">累计赠送</span><span class="info-val">${{ (k.totalGifted || 0).toFixed(2) }}</span></div>
+              <div class="info-cell"><span class="info-label">到期时间</span><span class="info-val">{{ k.expiresAt ? formatDate(k.expiresAt) : '永不过期' }}</span></div>
 
-            <!-- Note -->
-            <div class="space-y-1">
-              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">备注</label>
-              <input v-model="editForm.note" class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
-            </div>
-
-            <!-- Balance -->
-            <div class="space-y-1">
-              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">激活余额 (¥)</label>
-              <input v-model.number="editForm.balance" type="number" step="0.01"
-                class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
-            </div>
-
-            <!-- GiftBalance -->
-            <div class="space-y-1">
-              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">赠送余额 (¥)</label>
-              <input v-model.number="editForm.giftBalance" type="number" step="0.01"
-                class="w-full h-9 px-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-sm outline-none focus:border-[var(--primary)]" />
-            </div>
-
-            <!-- ExpiresAt -->
-            <div class="space-y-2">
-              <label class="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">到期时间</label>
-              <div class="text-xs text-[var(--text-secondary)] mb-1">
-                当前：{{ editForm.expiresAt ? expiresAtDisplay(editForm.expiresAt) : '未设置（永不过期）' }}
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <button @click="addTime(3600)" class="time-btn">+1小时</button>
-                <button @click="addTime(86400)" class="time-btn">+1天</button>
-                <button @click="addTime(3 * 86400)" class="time-btn">+3天</button>
-                <button @click="addTime(7 * 86400)" class="time-btn">+7天</button>
-                <button @click="addTime(30 * 86400)" class="time-btn">+30天</button>
-                <button @click="editForm.expiresAt = Math.floor(Date.now()/1000)" class="time-btn danger">重置为0</button>
-                <button @click="editForm.expiresAt = 0" class="time-btn danger">永不过期</button>
+              <div class="actions-row">
+                <WorldButton variant="secondary" size="sm" @click="toggleKey(k)">
+                  <span>{{ k.enabled ? '禁用' : '启用' }}</span>
+                </WorldButton>
+                <WorldButton variant="secondary" size="sm" @click="startEdit(k)">
+                  <Pencil :size="13" /><span>编辑</span>
+                </WorldButton>
+                <WorldButton variant="danger" size="sm" @click="deleteKey(k)">
+                  <Trash2 :size="13" /><span>删除</span>
+                </WorldButton>
               </div>
             </div>
           </div>
+        </Transition>
+      </WorldCard>
 
-          <!-- View Mode -->
-          <div v-else class="p-5 bg-[var(--bg)]/50">
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div class="info-cell">
-                <div class="info-label">激活余额</div>
-                <div class="info-value" :class="(k.balance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
-                  ${{ (k.balance || 0).toFixed(2) }}
-                </div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">赠送余额</div>
-                <div class="info-value" :class="(k.giftBalance || 0) < 1 ? 'text-rose-500' : 'text-emerald-500'">
-                  ${{ (k.giftBalance || 0).toFixed(2) }}
-                </div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">到期时间</div>
-                <div class="info-value" :class="{
-                  'text-emerald-500': timeRemaining(k.expiresAt).class === 'ok',
-                  'text-amber-500': timeRemaining(k.expiresAt).class === 'warning',
-                  'text-rose-500': timeRemaining(k.expiresAt).class === 'danger'
-                }">
-                  {{ timeRemaining(k.expiresAt).text }}
-                </div>
-                <div v-if="k.expiresAt" class="text-[9px] text-[var(--text-secondary)] mt-0.5">{{ formatDate(k.expiresAt) }}</div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">创建时间</div>
-                <div class="info-value">{{ formatDate(k.createdAt) }}</div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">最后使用</div>
-                <div class="info-value">{{ k.lastUsed ? formatDate(k.lastUsed) : '从未' }}</div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">累积充值</div>
-                <div class="info-value text-[var(--primary)]">${{ (k.totalRecharged || 0).toFixed(2) }}</div>
-              </div>
-              <div class="info-cell">
-                <div class="info-label">累积赠送</div>
-                <div class="info-value text-[var(--primary)]">${{ (k.totalGifted || 0).toFixed(2) }}</div>
-              </div>
-            </div>
-
-
-
-          </div>
+      <WorldCard v-if="!loading && !filteredKeys.length" padding="lg">
+        <div class="empty-row">
+          <Key :size="32" />
+          <span>{{ searchQuery ? '没有匹配的 Key' : '暂无 Key' }}</span>
         </div>
+      </WorldCard>
+    </div>
+
+    <!-- Create modal -->
+    <WorldModal v-model="showCreate" title="创建 API Key" size="md">
+      <div class="create-body">
+        <p class="hint">创建后需通过兑换激活码来充值余额或时间，才能开始使用。</p>
+        <WorldInput
+          v-model="form.note"
+          label="备注（用户名 / 用途说明）"
+          placeholder="user-001"
+        />
       </div>
-    </div>
-
-    <!-- Empty -->
-    <div v-if="!loading && !filteredKeys.length" class="text-center py-16">
-      <Key class="w-10 h-10 text-[var(--text-secondary)] opacity-20 mx-auto mb-3" />
-      <div class="text-sm font-bold text-[var(--text-secondary)]">{{ searchQuery ? '没有匹配的 Key' : '还没有 API Key' }}</div>
-      <button v-if="!searchQuery" @click="showCreate = true" class="mt-3 text-sm text-[var(--primary)] font-bold hover:underline">创建第一个 Key</button>
-    </div>
+      <template #footer>
+        <WorldButton variant="ghost" @click="showCreate = false">取消</WorldButton>
+        <WorldButton variant="primary" @click="createKey">确认创建</WorldButton>
+      </template>
+    </WorldModal>
   </div>
 </template>
 
 <style scoped>
-.time-btn {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-secondary);
+.apikeys-page { display: flex; flex-direction: column; gap: 14px; }
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.title-wrap { display: flex; flex-direction: column; gap: 2px; }
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+}
+.page-title {
+  font-family: var(--world-font-display);
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--world-text-primary);
+}
+.head-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+.search-card { padding: 10px 14px; }
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--world-text-mute);
+}
+.search-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 32px 0 36px;
+  background: transparent;
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  color: var(--world-text-primary);
+  font-size: 0.8125rem;
+  outline: none;
+  font-family: var(--world-font-sans);
+  transition: border-color 200ms;
+}
+.search-input:focus { border-color: var(--world-accent); }
+.clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--world-text-mute);
   cursor: pointer;
-  transition: all 0.15s;
-}
-.time-btn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: rgba(99, 102, 241, 0.05);
-}
-.time-btn.danger {
-  color: #ef4444;
-}
-.time-btn.danger:hover {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.05);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
+.keys-list { display: flex; flex-direction: column; gap: 8px; }
+
+.key-card { transition: all 220ms ease; }
+.key-card.is-disabled { opacity: 0.6; }
+
+.key-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  cursor: pointer;
+  transition: background 200ms;
+}
+.key-main:hover {
+  background: var(--world-overlay-light);
+}
+
+.key-icon {
+  width: 38px; height: 38px;
+  border-radius: var(--world-radius-md);
+  background: var(--world-overlay-light);
+  color: var(--world-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.key-info { flex: 1; min-width: 0; }
+.key-name {
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  margin-bottom: 4px;
+}
+.key-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--world-font-mono);
+  font-size: 0.7rem;
+  color: var(--world-text-mute);
+}
+.key-display {
+  font-family: var(--world-font-mono);
+  font-size: 0.7rem;
+}
+.micro-btn {
+  width: 22px; height: 22px;
+  border-radius: var(--world-radius-sm);
+  background: transparent;
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-mute);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 200ms ease;
+}
+.micro-btn:hover { color: var(--world-accent); border-color: var(--world-accent); }
+
+.key-quick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.key-expand-icon {
+  color: var(--world-text-mute);
+  transition: transform 240ms ease;
+}
+.key-expand-icon.rotated { transform: rotate(180deg); }
+
+.key-expanded {
+  border-top: 1px solid var(--world-divider);
+  padding: 18px;
+  background: var(--world-overlay-light);
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
 .info-cell {
-  padding: 0.75rem;
-  background: var(--card);
-  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 .info-label {
-  font-size: 0.625rem;
-  font-weight: 700;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  margin-bottom: 0.25rem;
+  color: var(--world-text-mute);
 }
-.info-value {
-  font-size: 0.875rem;
+.info-val {
+  font-size: 0.85rem;
   font-weight: 700;
+  color: var(--world-text-primary);
 }
+.info-val.mono { font-family: var(--world-font-mono); font-size: 0.78rem; word-break: break-all; }
+.actions-row {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--world-divider);
+}
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.edit-grid .time-block { grid-column: 1 / -1; }
+.edit-grid .edit-actions { grid-column: 1 / -1; display: flex; gap: 10px; justify-content: flex-end; }
+
+.time-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+  margin-bottom: 6px;
+}
+.time-display {
+  font-family: var(--world-font-mono);
+  font-size: 0.85rem;
+  color: var(--world-text-primary);
+  padding: 8px 12px;
+  background: var(--world-bg-card);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  margin-bottom: 8px;
+}
+.time-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.time-quick button {
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-sm);
+  color: var(--world-text-mute);
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+.time-quick button:hover { color: var(--world-accent); border-color: var(--world-accent); }
+
+.empty-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px;
+  color: var(--world-text-mute);
+  font-size: 0.875rem;
+}
+
+.create-body { display: flex; flex-direction: column; gap: 12px; }
+.hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--world-text-mute);
+  line-height: 1.5;
+}
+
+.expand-enter-active, .expand-leave-active { transition: all 320ms ease; max-height: 600px; overflow: hidden; }
+.expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; }
 </style>

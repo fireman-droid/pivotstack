@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,10 +58,11 @@ type Account struct {
 	Weight int `json:"weight,omitempty"` // 0 or 1 = normal, 2+ = higher priority
 
 	// Account status
-	Enabled   bool   `json:"enabled"`             // Whether account is active in the pool
-	BanStatus string `json:"banStatus,omitempty"` // Ban status: "ACTIVE", "BANNED", "SUSPENDED"
-	BanReason string `json:"banReason,omitempty"` // Reason for ban/suspension
-	BanTime   int64  `json:"banTime,omitempty"`   // Timestamp when ban was detected
+	Enabled        bool   `json:"enabled"`                  // Whether account is active in the pool
+	AllowOverQuota bool   `json:"allowOverQuota,omitempty"` // Allow this account to be selected even when quota is exhausted
+	BanStatus      string `json:"banStatus,omitempty"`      // Ban status: "ACTIVE", "BANNED", "SUSPENDED"
+	BanReason      string `json:"banReason,omitempty"`      // Reason for ban/suspension
+	BanTime        int64  `json:"banTime,omitempty"`        // Timestamp when ban was detected
 
 	// Subscription information
 	SubscriptionType  string `json:"subscriptionType,omitempty"`  // Tier: FREE, PRO, PRO_PLUS, or POWER
@@ -97,7 +97,6 @@ type ApiKeyInfo struct {
 	Key            string           `json:"key"`
 	Tier           string           `json:"tier,omitempty"` // "free" | "pro" (set via activation code)
 	Plan           string           `json:"plan"`           // "timed" | "credit" | "hybrid"
-	Line           string           `json:"line,omitempty"` // "kiro"(default) | "ecom" — selects which account pool to use
 	ExpiresAt      int64            `json:"expiresAt"`      // Unix seconds, 0 = never
 	Enabled        bool             `json:"enabled"`
 	Balance        float64          `json:"balance,omitempty"`        // USD balance (paid via activation codes)
@@ -120,37 +119,12 @@ type ActivationCode struct {
 	Type          string  `json:"type"`                    // "balance" | "days"
 	Amount        float64 `json:"amount"`                  // balance: USD face value; days: number of days
 	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days)
-	Line          string  `json:"line,omitempty"`          // "kiro" | "ecom" — auto-set key line on redeem
 	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
 	Used          bool    `json:"used"`
 	UsedBy        string  `json:"usedBy,omitempty"` // ApiKey ID
 	UsedAt        int64   `json:"usedAt,omitempty"`
 	CreatedAt     int64   `json:"createdAt"`
 	Note          string  `json:"note,omitempty"`
-}
-
-// EcomAccount represents an EcomAgent upstream account.
-// These accounts are used in the EcomAgent pool for load-balanced proxying to api.ecomagent.in.
-type EcomAccount struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Password    string `json:"password,omitempty"`
-	ApiKey      string `json:"apiKey"`                // Bearer token for api.ecomagent.in API calls
-	AccountId   string `json:"accountId"`             // EcomAgent account UUID
-	AccessToken string `json:"accessToken,omitempty"` // EcomAgent dashboard JWT (for usage queries)
-	Enabled     bool   `json:"enabled"`
-	// Runtime statistics (local proxy stats)
-	RequestCount int   `json:"requestCount,omitempty"`
-	ErrorCount   int   `json:"errorCount,omitempty"`
-	TotalTokens  int   `json:"totalTokens,omitempty"`
-	LastUsed     int64 `json:"lastUsed,omitempty"`
-	// Upstream usage (from EcomAgent dashboard API: ecomagent.in)
-	UpstreamRequests int    `json:"upstreamRequests,omitempty"` // used requests (from /api/account-usage)
-	UpstreamTokens   int    `json:"upstreamTokens,omitempty"`   // used tokens (from /api/account-usage)
-	RequestLimit     string `json:"requestLimit,omitempty"`     // request limit e.g. "100" (from /api/subscription)
-	TokenLimit       string `json:"tokenLimit,omitempty"`       // token limit e.g. "10M" (from /api/subscription)
-	UpstreamPlan     string `json:"upstreamPlan,omitempty"`     // subscription plan name e.g. "free_trial"
-	LastRefresh      int64  `json:"lastRefresh,omitempty"`      // last upstream refresh timestamp
 }
 
 // CostEntry represents a single account purchase record.
@@ -165,17 +139,10 @@ type CostEntry struct {
 const FreeAccountCredits = 550.0 // fixed credits per FREE account
 const CNYPerUSDFace = 0.05       // $1 face value = ¥0.05 real CNY
 
-type LinePolicy struct {
-	AllowTimed  bool `json:"allowTimed"`
-	AllowCredit bool `json:"allowCredit"`
-}
-
 // PricingConfig holds credit-based pricing.
 type PricingConfig struct {
 	FreePoolPriceUSD float64 `json:"freePoolPriceUSD"` // face-value USD per credit for FREE pool (default: 0.40)
 	ProPoolPriceUSD  float64 `json:"proPoolPriceUSD"`  // face-value USD per credit for PRO pool (default: 2.00)
-	EcomPointPrice   float64 `json:"ecomPointPrice"`   // CNY price per Ecom point (default: 0.02)
-	LinePolicies     map[string]LinePolicy `json:"linePolicies,omitempty"`
 
 	ProCostEntries  []CostEntry `json:"proCostEntries,omitempty"`
 	FreeCostEntries []CostEntry `json:"freeCostEntries,omitempty"`
@@ -257,56 +224,7 @@ func GetPricing() PricingConfig {
 	if p.ProPoolPriceUSD == 0 {
 		p.ProPoolPriceUSD = 2.00
 	}
-	if p.EcomPointPrice == 0 {
-		p.EcomPointPrice = 0.02
-	}
-	p.LinePolicies = normalizeLinePolicies(p.LinePolicies)
 	return p
-}
-
-func defaultLinePolicies() map[string]LinePolicy {
-	return map[string]LinePolicy{
-		"kiro": {AllowTimed: true, AllowCredit: true},
-		"ecom": {AllowTimed: true, AllowCredit: true},
-	}
-}
-
-func normalizeLinePolicies(p map[string]LinePolicy) map[string]LinePolicy {
-	defaults := defaultLinePolicies()
-	if p == nil {
-		return defaults
-	}
-	out := map[string]LinePolicy{}
-	for k, v := range p {
-		line := strings.ToLower(strings.TrimSpace(k))
-		if line == "" {
-			continue
-		}
-		out[line] = v
-	}
-	for k, v := range defaults {
-		if _, ok := out[k]; !ok {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-func getLinePolicy(line string) LinePolicy {
-	line = strings.ToLower(strings.TrimSpace(line))
-	if line == "" {
-		line = "kiro"
-	}
-	policies := normalizeLinePolicies(GetPricing().LinePolicies)
-	if policy, ok := policies[line]; ok {
-		return policy
-	}
-	return policies["kiro"]
-}
-
-func GetEcomPointPrice() float64 {
-	p := GetPricing()
-	return p.EcomPointPrice
 }
 
 // AddCostEntry adds a cost entry to PRO or FREE list.
@@ -359,9 +277,9 @@ type Config struct {
 	RequireApiKey   bool             `json:"requireApiKey"`    // Whether to enforce API key validation
 	ApiKeys         []ApiKeyInfo     `json:"apiKeys,omitempty"`
 	Accounts        []Account        `json:"accounts"`
-	EcomAccounts    []EcomAccount    `json:"ecomAccounts,omitempty"` // EcomAgent upstream accounts
 	ActivationCodes []ActivationCode `json:"activationCodes,omitempty"`
 	Pricing         PricingConfig    `json:"pricing,omitempty"`
+	Stealth         StealthConfig    `json:"stealth,omitempty"`
 
 	// Thinking mode configuration for extended reasoning output
 	ThinkingSuffix       string `json:"thinkingSuffix,omitempty"`       // Model suffix to trigger thinking mode (default: "-thinking")
@@ -377,17 +295,65 @@ type Config struct {
 	MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree,omitempty"` // Per FREE account max in-flight requests (default: 50)
 	MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro,omitempty"`  // Per PRO account max in-flight requests (default: 50)
 
-	// Ecom abuse limits (configurable from admin UI)
-	EcomMaxConcurrentPerKey int `json:"ecomMaxConcurrentPerKey,omitempty"` // Per Ecom API key max concurrent streams (default: 5)
-	EcomMaxIPsPerKey        int `json:"ecomMaxIPsPerKey,omitempty"`        // Per Ecom API key max distinct IPs (default: 3)
-	EcomMaxDailyRequests    int `json:"ecomMaxDailyRequests,omitempty"`    // Per Ecom API key max requests per day (default: 100)
-
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
 	SuccessRequests int     `json:"successRequests,omitempty"` // Successful requests count
 	FailedRequests  int     `json:"failedRequests,omitempty"`  // Failed requests count
 	TotalTokens     int     `json:"totalTokens,omitempty"`     // Total tokens processed
 	TotalCredits    float64 `json:"totalCredits,omitempty"`    // Total credits consumed
+
+	// Leaderboard configuration
+	LeaderboardEnabled   bool `json:"leaderboardEnabled,omitempty"`   // Whether to expose user-side leaderboard
+	LeaderboardFakeUsers int  `json:"leaderboardFakeUsers,omitempty"` // Number of synthetic entries mixed into user-side top (0 = disabled, max 30)
+}
+
+// GetLeaderboardConfig returns leaderboard settings (enabled, fakeUsers).
+func GetLeaderboardConfig() (bool, int) {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	n := cfg.LeaderboardFakeUsers
+	if n < 0 {
+		n = 0
+	}
+	if n > 30 {
+		n = 30
+	}
+	return cfg.LeaderboardEnabled, n
+}
+
+// UpdateLeaderboardConfig updates leaderboard settings.
+func UpdateLeaderboardConfig(enabled bool, fakeUsers int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if fakeUsers < 0 {
+		fakeUsers = 0
+	}
+	if fakeUsers > 30 {
+		fakeUsers = 30
+	}
+	cfg.LeaderboardEnabled = enabled
+	cfg.LeaderboardFakeUsers = fakeUsers
+	return Save()
+}
+
+// ClearAllGiftBalances zeros GiftBalance on every key (does NOT touch Balance or TotalGifted).
+// Returns (count, totalCleared).
+func ClearAllGiftBalances() (int, float64) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	count := 0
+	var total float64
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].GiftBalance > 0 {
+			total += cfg.ApiKeys[i].GiftBalance
+			cfg.ApiKeys[i].GiftBalance = 0
+			count++
+		}
+	}
+	if count > 0 {
+		_ = Save()
+	}
+	return count, total
 }
 
 // AccountInfo contains account metadata retrieved from Kiro API.
@@ -418,56 +384,6 @@ var (
 	cfgLock sync.RWMutex
 	cfgPath string
 )
-
-func getEcomAccountsSidecarPath() string {
-	if cfgPath == "" {
-		return filepath.Join(".", "ecom_accounts.json")
-	}
-	return filepath.Join(GetDataDir(), "ecom_accounts.json")
-}
-
-func saveEcomAccountsSidecar(accounts []EcomAccount) error {
-	if accounts == nil {
-		accounts = []EcomAccount{}
-	}
-	data, err := json.MarshalIndent(accounts, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(getEcomAccountsSidecarPath(), data, 0600)
-}
-
-func loadEcomAccountsSidecar() ([]EcomAccount, error) {
-	data, err := os.ReadFile(getEcomAccountsSidecarPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []EcomAccount{}, nil
-		}
-		return nil, err
-	}
-	var accounts []EcomAccount
-	if err := json.Unmarshal(data, &accounts); err != nil {
-		return nil, err
-	}
-	return accounts, nil
-}
-
-func restoreEcomAccountsIfNeeded(c *Config) {
-	if len(c.EcomAccounts) > 0 {
-		_ = saveEcomAccountsSidecar(c.EcomAccounts)
-		return
-	}
-	accounts, err := loadEcomAccountsSidecar()
-	if err != nil {
-		fmt.Printf("[Config] Failed to load ecom sidecar: %v\n", err)
-		return
-	}
-	if len(accounts) == 0 {
-		return
-	}
-	c.EcomAccounts = accounts
-	fmt.Printf("[Config] Restored %d Ecom accounts from sidecar %s\n", len(accounts), getEcomAccountsSidecarPath())
-}
 
 // Init initializes the configuration system with the specified file path.
 // If the file doesn't exist, a default configuration is created.
@@ -526,7 +442,6 @@ func Load() error {
 		migrated = true
 	}
 	cfg = &c
-	restoreEcomAccountsIfNeeded(cfg)
 	if migrated {
 		return Save()
 	}
@@ -540,27 +455,7 @@ func Save() error {
 	if err != nil {
 		return err
 	}
-
-	dir := filepath.Dir(cfgPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	bakPath := cfgPath + ".bak"
-	if existing, err := os.ReadFile(cfgPath); err == nil {
-		_ = os.WriteFile(bakPath, existing, 0600)
-	}
-
-	tmpPath := cfgPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, cfgPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-
-	return saveEcomAccountsSidecar(cfg.EcomAccounts)
+	return os.WriteFile(cfgPath, data, 0600)
 }
 
 // SetPassword updates the admin password.
@@ -694,54 +589,6 @@ func UpdateApiKey(id string, key ApiKeyInfo) error {
 	return nil
 }
 
-type ApiKeyPatch struct {
-	Plan        *string
-	ExpiresAt   *int64
-	Enabled     *bool
-	Balance     *float64
-	GiftBalance *float64
-	Note        *string
-	Line        *string
-	Tier        *string
-}
-
-func PatchApiKey(id string, patch ApiKeyPatch) error {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-
-	for i := range cfg.ApiKeys {
-		if cfg.ApiKeys[i].ID != id {
-			continue
-		}
-		if patch.Plan != nil {
-			cfg.ApiKeys[i].Plan = *patch.Plan
-		}
-		if patch.ExpiresAt != nil {
-			cfg.ApiKeys[i].ExpiresAt = *patch.ExpiresAt
-		}
-		if patch.Enabled != nil {
-			cfg.ApiKeys[i].Enabled = *patch.Enabled
-		}
-		if patch.Balance != nil {
-			cfg.ApiKeys[i].Balance = *patch.Balance
-		}
-		if patch.GiftBalance != nil {
-			cfg.ApiKeys[i].GiftBalance = *patch.GiftBalance
-		}
-		if patch.Note != nil {
-			cfg.ApiKeys[i].Note = *patch.Note
-		}
-		if patch.Line != nil {
-			cfg.ApiKeys[i].Line = *patch.Line
-		}
-		if patch.Tier != nil {
-			cfg.ApiKeys[i].Tier = *patch.Tier
-		}
-		return Save()
-	}
-	return fmt.Errorf("api key not found: %s", id)
-}
-
 func UpdateApiKeyStatsNoSave(id string, lastUsed, requests, errors, tokens int64, credits float64, models map[string]int64) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -789,6 +636,38 @@ func findAccountByEmailLocked(email string) int {
 	return -1
 }
 
+func normalizeIdentityKey(email, authMethod, provider string) string {
+	emailLower := strings.ToLower(strings.TrimSpace(email))
+	if emailLower == "" {
+		return ""
+	}
+	providerLower := strings.ToLower(strings.TrimSpace(provider))
+	authLower := strings.ToLower(strings.TrimSpace(authMethod))
+	if authLower == "" && providerLower != "" {
+		authLower = "social"
+	}
+	if authLower == "social" || authLower == "google" || authLower == "github" {
+		if providerLower != "" {
+			return "social|" + emailLower + "|" + providerLower
+		}
+		return "social|" + emailLower
+	}
+	return "idc|" + emailLower
+}
+
+func findAccountByIdentityLocked(email, authMethod, provider string) int {
+	key := normalizeIdentityKey(email, authMethod, provider)
+	if key == "" {
+		return -1
+	}
+	for i, a := range cfg.Accounts {
+		if normalizeIdentityKey(a.Email, a.AuthMethod, a.Provider) == key {
+			return i
+		}
+	}
+	return -1
+}
+
 func FindAccountByEmail(email string) *Account {
 	cfgLock.RLock()
 	defer cfgLock.RUnlock()
@@ -803,19 +682,23 @@ func FindAccountByEmail(email string) *Account {
 func AddAccount(account Account) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
-	if idx := findAccountByEmailLocked(account.Email); idx >= 0 {
-		return fmt.Errorf("duplicate: account with email %s already exists (id: %s)", account.Email, cfg.Accounts[idx].ID)
+	if idx := findAccountByIdentityLocked(account.Email, account.AuthMethod, account.Provider); idx >= 0 {
+		return fmt.Errorf("duplicate: account with same identity already exists (id: %s)", cfg.Accounts[idx].ID)
 	}
 	cfg.Accounts = append(cfg.Accounts, account)
 	return Save()
 }
 
-// AddOrUpdateAccount adds a new account, or updates credentials if one with the same email exists.
+// AddOrUpdateAccount adds a new account, or updates credentials if one with the same identity exists.
+// Identity rule:
+//   - social accounts: email + provider
+//   - non-social accounts: email
+//
 // Returns (accountID, isNew, error).
 func AddOrUpdateAccount(account Account) (string, bool, error) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
-	if idx := findAccountByEmailLocked(account.Email); idx >= 0 {
+	if idx := findAccountByIdentityLocked(account.Email, account.AuthMethod, account.Provider); idx >= 0 {
 		existing := &cfg.Accounts[idx]
 		if account.AccessToken != "" {
 			existing.AccessToken = account.AccessToken
@@ -831,6 +714,12 @@ func AddOrUpdateAccount(account Account) (string, bool, error) {
 		}
 		if account.ExpiresAt > 0 {
 			existing.ExpiresAt = account.ExpiresAt
+		}
+		if account.AuthMethod != "" {
+			existing.AuthMethod = account.AuthMethod
+		}
+		if account.Provider != "" {
+			existing.Provider = account.Provider
 		}
 		existing.Enabled = true
 		if existing.BanStatus != "" && existing.BanStatus != "ACTIVE" {
@@ -895,23 +784,23 @@ func ImportAccounts(accounts []Account) (int, int, error) {
 	imported := 0
 	skipped := 0
 	existingIDs := make(map[string]bool)
-	existingEmails := make(map[string]bool)
+	existingIdentities := make(map[string]bool)
 
-	// Build map of existing account IDs and emails
+	// Build map of existing account IDs and identities
 	for _, a := range cfg.Accounts {
 		existingIDs[a.ID] = true
-		if a.Email != "" {
-			existingEmails[strings.ToLower(a.Email)] = true
+		if key := normalizeIdentityKey(a.Email, a.AuthMethod, a.Provider); key != "" {
+			existingIdentities[key] = true
 		}
 	}
 
-	// Import new accounts (skip duplicates by ID or email)
+	// Import new accounts (skip duplicates by ID or identity)
 	for _, account := range accounts {
 		if existingIDs[account.ID] {
 			skipped++
 			continue
 		}
-		if account.Email != "" && existingEmails[strings.ToLower(account.Email)] {
+		if key := normalizeIdentityKey(account.Email, account.AuthMethod, account.Provider); key != "" && existingIdentities[key] {
 			skipped++
 			continue
 		}
@@ -923,8 +812,8 @@ func ImportAccounts(accounts []Account) (int, int, error) {
 
 		cfg.Accounts = append(cfg.Accounts, account)
 		existingIDs[account.ID] = true
-		if account.Email != "" {
-			existingEmails[strings.ToLower(account.Email)] = true
+		if key := normalizeIdentityKey(account.Email, account.AuthMethod, account.Provider); key != "" {
+			existingIdentities[key] = true
 		}
 		imported++
 	}
@@ -1014,47 +903,6 @@ func UpdateConcurrencyConfig(perKey, perAccountFree, perAccountPro int) error {
 	if perAccountPro > 0 {
 		cfg.MaxInFlightPerAccountPro = perAccountPro
 	}
-	return Save()
-}
-
-// GetEcomAbuseConfig returns (maxConcurrentPerKey, maxIPsPerKey, maxDailyRequests) with safe defaults.
-func GetEcomAbuseConfig() (int, int, int) {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-
-	maxConcurrent := cfg.EcomMaxConcurrentPerKey
-	if maxConcurrent <= 0 {
-		maxConcurrent = 5
-	}
-
-	maxIPs := cfg.EcomMaxIPsPerKey
-	if maxIPs <= 0 {
-		maxIPs = 3
-	}
-
-	maxDaily := cfg.EcomMaxDailyRequests
-	if maxDaily <= 0 {
-		maxDaily = 100
-	}
-
-	return maxConcurrent, maxIPs, maxDaily
-}
-
-// UpdateEcomAbuseConfig updates Ecom abuse limits and persists to disk.
-func UpdateEcomAbuseConfig(maxConcurrentPerKey, maxIPsPerKey, maxDailyRequests int) error {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-
-	if maxConcurrentPerKey > 0 {
-		cfg.EcomMaxConcurrentPerKey = maxConcurrentPerKey
-	}
-	if maxIPsPerKey > 0 {
-		cfg.EcomMaxIPsPerKey = maxIPsPerKey
-	}
-	if maxDailyRequests > 0 {
-		cfg.EcomMaxDailyRequests = maxDailyRequests
-	}
-
 	return Save()
 }
 
@@ -1213,7 +1061,6 @@ func UpdatePreferredEndpoint(endpoint string) error {
 func UpdatePricing(p PricingConfig) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
-	p.LinePolicies = normalizeLinePolicies(p.LinePolicies)
 	cfg.Pricing = p
 	return Save()
 }
@@ -1239,14 +1086,14 @@ func FindApiKeyByID(id string) *ApiKeyInfo {
 // DeductKeyBalance atomically deducts amount from an API key's balance.
 // It prioritizes burning `Balance` (paid) first. If insufficient, it burns `GiftBalance`.
 // Returns (success, remainingTotalBalance, paidAmountDeducted, giftedAmountDeducted).
-func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, float64, error) {
+func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, float64) {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	for i, k := range cfg.ApiKeys {
 		if k.ID == keyID {
 			totalBalance := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
 			if totalBalance < amount {
-				return false, totalBalance, 0, 0, nil
+				return false, totalBalance, 0, 0
 			}
 
 			var paidDeducted, giftedDeducted float64
@@ -1267,13 +1114,11 @@ func DeductKeyBalance(keyID string, amount float64) (bool, float64, float64, flo
 			}
 
 			remainingTotal := cfg.ApiKeys[i].Balance + cfg.ApiKeys[i].GiftBalance
-			if err := Save(); err != nil {
-				return false, remainingTotal, paidDeducted, giftedDeducted, err
-			}
-			return true, remainingTotal, paidDeducted, giftedDeducted, nil
+			Save()
+			return true, remainingTotal, paidDeducted, giftedDeducted
 		}
 	}
-	return false, 0, 0, 0, fmt.Errorf("api key not found: %s", keyID)
+	return false, 0, 0, 0
 }
 
 // AddKeyBalance adds paid balance to an API key. Reverses a deduction (used by RefundPreAuth).
@@ -1337,48 +1182,24 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 		return "key_disabled", fmt.Errorf("api key is disabled")
 	}
 	now := time.Now().Unix()
-	policy := getLinePolicy(info.Line)
-
-	hasTimed := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
+	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
 	hasBalance := info.Balance > 0 || info.GiftBalance > 0
-	hasCreditPlan := info.Plan == "credit" || info.Plan == "hybrid"
+	hasCreditPlan := info.Plan == "credit"
+
+	// 如果没有 Plan 但有余额（赠送或付费），则视为隐式 credit 计划
+	// 用户不需要激活码即可使用管理员赠送的余额
 	if info.Plan == "" && hasBalance {
 		hasCreditPlan = true
 	}
 
-	if hasTimed && policy.AllowTimed {
-		return "", nil
-	}
-	if hasBalance && hasCreditPlan && policy.AllowCredit {
-		return "", nil
-	}
-
-	if info.Plan == "" {
-		if info.Line == "ecom" {
-			return "not_activated", fmt.Errorf("EcomAgent key not activated, please redeem a time or balance card")
+	if !hasDayCard && !hasBalance && !hasCreditPlan {
+		if info.Plan == "" {
+			return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
 		}
-		return "not_activated", fmt.Errorf("api key not activated, please redeem an activation code")
+		return "key_expired", fmt.Errorf("api key expired and insufficient balance")
 	}
-
-	if info.Line == "ecom" {
-		if !policy.AllowTimed && !policy.AllowCredit {
-			return "line_policy_denied", fmt.Errorf("EcomAgent line is currently unavailable for this key plan")
-		}
-		if info.Plan == "timed" && !hasTimed {
-			return "ecom_expired", fmt.Errorf("EcomAgent time card expired")
-		}
-		return "ecom_expired", fmt.Errorf("EcomAgent access expired and insufficient balance")
-	}
-
-	if !policy.AllowTimed && !policy.AllowCredit {
-		return "line_policy_denied", fmt.Errorf("line policy currently denies access")
-	}
-	if info.Plan == "timed" && !hasTimed {
-		return "key_expired", fmt.Errorf("time card expired")
-	}
-	return "key_expired", fmt.Errorf("api key expired and insufficient balance")
+	return "", nil
 }
-
 
 // ValidateKeyAccessForModel checks if a key can access a model in the given pool.
 // Returns action: "free" (no charge), "deduct" (charge balance), or error.
@@ -1444,12 +1265,6 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 				return "", fmt.Errorf("activation code has expired")
 			}
 
-			// Backup for rollback on persist failure
-			prevCodes := make([]ActivationCode, len(cfg.ActivationCodes))
-			copy(prevCodes, cfg.ActivationCodes)
-			prevKeys := make([]ApiKeyInfo, len(cfg.ApiKeys))
-			copy(prevKeys, cfg.ApiKeys)
-
 			// Process balance/time addition before deleting
 			switch ac.Type {
 			case "balance":
@@ -1485,10 +1300,6 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 						if ac.Tier != "" {
 							cfg.ApiKeys[j].Tier = ac.Tier
 						}
-						// Auto-set line for ecom time cards
-						if ac.Line != "" {
-							cfg.ApiKeys[j].Line = ac.Line
-						}
 						break
 					}
 				}
@@ -1499,11 +1310,7 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			// Delete the code permanently instead of marking it used
 			cfg.ActivationCodes = append(cfg.ActivationCodes[:i], cfg.ActivationCodes[i+1:]...)
 
-			if err := Save(); err != nil {
-				cfg.ActivationCodes = prevCodes
-				cfg.ApiKeys = prevKeys
-				return "", err
-			}
+			Save()
 			return ac.Type, nil
 		}
 	}
@@ -1524,7 +1331,7 @@ func DeleteActivationCode(codeStr string) error {
 }
 
 // CleanupUsedCodes completely removes all voided/used activation codes from the storage.
-func CleanupUsedCodes() (int, error) {
+func CleanupUsedCodes() int {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 
@@ -1541,191 +1348,8 @@ func CleanupUsedCodes() (int, error) {
 
 	if removedCount > 0 {
 		cfg.ActivationCodes = activeCodes
-		if err := Save(); err != nil {
-			return 0, err
-		}
+		_ = Save()
 	}
 
-	return removedCount, nil
-}
-
-// ==================== EcomAgent Accounts ====================
-
-// GetEcomAccounts returns all EcomAgent accounts.
-func GetEcomAccounts() []EcomAccount {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-	accounts := make([]EcomAccount, len(cfg.EcomAccounts))
-	copy(accounts, cfg.EcomAccounts)
-	return accounts
-}
-
-// GetEnabledEcomAccounts returns only enabled EcomAgent accounts.
-func GetEnabledEcomAccounts() []EcomAccount {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-	var accounts []EcomAccount
-	for _, a := range cfg.EcomAccounts {
-		if a.Enabled {
-			accounts = append(accounts, a)
-		}
-	}
-	return accounts
-}
-
-// ImportEcomAccounts imports EcomAgent accounts from a JSON array.
-// Duplicates (same AccountId) are updated with new access_token if provided.
-func ImportEcomAccounts(accounts []EcomAccount) (int, int, error) {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-
-	imported := 0
-	skipped := 0
-	// Build index of existing accounts by AccountId
-	existingIdx := make(map[string]int) // accountId -> index in cfg.EcomAccounts
-	for i, a := range cfg.EcomAccounts {
-		existingIdx[a.AccountId] = i
-	}
-
-	changed := false
-	for _, account := range accounts {
-		if idx, exists := existingIdx[account.AccountId]; exists {
-			// Account already exists — update access_token if provided
-			updated := false
-			if account.AccessToken != "" && cfg.EcomAccounts[idx].AccessToken != account.AccessToken {
-				cfg.EcomAccounts[idx].AccessToken = account.AccessToken
-				updated = true
-			}
-			if account.Password != "" && cfg.EcomAccounts[idx].Password == "" {
-				cfg.EcomAccounts[idx].Password = account.Password
-				updated = true
-			}
-			if updated {
-				changed = true
-			}
-			skipped++
-			continue
-		}
-		if account.ID == "" {
-			account.ID = GenerateMachineId()
-		}
-		if !account.Enabled {
-			account.Enabled = true // default to enabled on import
-		}
-		cfg.EcomAccounts = append(cfg.EcomAccounts, account)
-		existingIdx[account.AccountId] = len(cfg.EcomAccounts) - 1
-		imported++
-		changed = true
-	}
-
-	if changed {
-		if err := Save(); err != nil {
-			return imported, skipped, err
-		}
-	}
-	return imported, skipped, nil
-}
-
-// DeleteEcomAccount deletes an EcomAgent account by ID.
-func DeleteEcomAccount(id string) error {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	for i, a := range cfg.EcomAccounts {
-		if a.ID == id {
-			cfg.EcomAccounts = append(cfg.EcomAccounts[:i], cfg.EcomAccounts[i+1:]...)
-			return Save()
-		}
-	}
-	return nil
-}
-
-// DeleteAllEcomAccounts removes all EcomAgent accounts.
-func DeleteAllEcomAccounts() (int, error) {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	count := len(cfg.EcomAccounts)
-	cfg.EcomAccounts = []EcomAccount{}
-	return count, Save()
-}
-
-// ToggleEcomAccount toggles the enabled status of an EcomAgent account.
-func ToggleEcomAccount(id string) error {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	for i, a := range cfg.EcomAccounts {
-		if a.ID == id {
-			cfg.EcomAccounts[i].Enabled = !a.Enabled
-			return Save()
-		}
-	}
-	return fmt.Errorf("ecom account not found: %s", id)
-}
-
-// UpdateEcomAccountStatsNoSave updates EcomAgent account stats without writing to disk.
-func UpdateEcomAccountStatsNoSave(id string, requestCount, errorCount, totalTokens int, lastUsed int64) {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	for i, a := range cfg.EcomAccounts {
-		if a.ID == id {
-			cfg.EcomAccounts[i].RequestCount = requestCount
-			cfg.EcomAccounts[i].ErrorCount = errorCount
-			cfg.EcomAccounts[i].TotalTokens = totalTokens
-			cfg.EcomAccounts[i].LastUsed = lastUsed
-			return
-		}
-	}
-}
-
-// ==================== ApiKey Line ====================
-
-// GetKeyLine returns the line ("kiro" or "ecom") for an API key. Defaults to "kiro".
-func GetKeyLine(keyID string) string {
-	cfgLock.RLock()
-	defer cfgLock.RUnlock()
-	for _, k := range cfg.ApiKeys {
-		if k.ID == keyID {
-			if k.Line == "" {
-				return "kiro"
-			}
-			return k.Line
-		}
-	}
-	return "kiro"
-}
-
-// SetKeyLine sets the line ("kiro" or "ecom") for an API key.
-func SetKeyLine(keyID, line string) error {
-	if line != "kiro" && line != "ecom" {
-		return fmt.Errorf("invalid line: %s (must be 'kiro' or 'ecom')", line)
-	}
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	for i, k := range cfg.ApiKeys {
-		if k.ID == keyID {
-			cfg.ApiKeys[i].Line = line
-			return Save()
-		}
-	}
-	return fmt.Errorf("api key not found: %s", keyID)
-}
-
-// UpdateEcomAccountUpstream updates upstream usage data for an EcomAgent account.
-func UpdateEcomAccountUpstream(id string, requests, tokens int, requestLimit, tokenLimit, plan string) error {
-	cfgLock.Lock()
-	defer cfgLock.Unlock()
-	for i, a := range cfg.EcomAccounts {
-		if a.ID == id {
-			cfg.EcomAccounts[i].UpstreamRequests = requests
-			cfg.EcomAccounts[i].UpstreamTokens = tokens
-			cfg.EcomAccounts[i].RequestLimit = requestLimit
-			cfg.EcomAccounts[i].TokenLimit = tokenLimit
-			cfg.EcomAccounts[i].UpstreamPlan = plan
-			cfg.EcomAccounts[i].LastRefresh = time.Now().Unix()
-			if err := Save(); err != nil {
-				return err
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("ecom account not found: %s", id)
+	return removedCount
 }

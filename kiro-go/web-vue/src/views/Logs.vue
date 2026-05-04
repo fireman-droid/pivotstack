@@ -4,21 +4,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import {
-  RotateCw,
-  Trash2,
-  Zap,
-  AlertCircle,
-  Search,
-  Monitor,
-  Cpu,
-  History,
-  ChevronDown,
-  X,
-  Radio,
-  Key
+  RotateCw, Trash2, Search, History, ChevronLeft, ChevronRight,
+  Radio, X, CheckCircle2, XCircle, Cpu, Key, Clock
 } from 'lucide-vue-next'
+import WorldCard from '../components/world/WorldCard.vue'
+import WorldButton from '../components/world/WorldButton.vue'
+import WorldChip from '../components/world/WorldChip.vue'
+import WorldSegment from '../components/world/WorldSegment.vue'
+import WorldSelect from '../components/world/WorldSelect.vue'
+import WorldTimeline from '../components/world/WorldTimeline.vue'
 
-const { success, error: toastError } = useToast()
+const { success, error: toastErr } = useToast()
 const route = useRoute()
 const router = useRouter()
 const logs = ref([])
@@ -34,7 +30,6 @@ const totalLogs = ref(0)
 const pageSize = ref(50)
 let eventSource = null
 
-// Persist filters to URL
 watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
   const q = {}
   if (s !== 'all') q.status = s
@@ -43,24 +38,19 @@ watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
   router.replace({ query: q }).catch(() => {})
 })
 
-// 通过 SSE 实时接收日志
 function connectSSE() {
   const password = document.cookie.match(/admin_password=([^;]+)/)?.[1] || ''
   const url = `${location.origin}/admin/api/sse/logs?password=${encodeURIComponent(password)}`
-  
   eventSource = new EventSource(url)
-  
   eventSource.addEventListener('log', (e) => {
     try {
       const entry = JSON.parse(e.data)
-      
-      // 过滤不需要显示的 SSE 日志
       if (statusFilter.value === 'error' && !entry.error && entry.status !== 'error') return
       if (statusFilter.value === 'success' && (entry.error || entry.status === 'error')) return
       if (keyFilter.value !== 'all' && entry.api_key_id !== keyFilter.value) return
       if (searchQuery.value) {
         const q = searchQuery.value.toLowerCase()
-        const matches = 
+        const matches =
           entry.actual_model?.toLowerCase().includes(q) ||
           entry.original_model?.toLowerCase().includes(q) ||
           entry.account?.toLowerCase().includes(q) ||
@@ -69,10 +59,9 @@ function connectSSE() {
           entry.stop_reason?.toLowerCase().includes(q)
         if (!matches) return
       }
-
       totalLogs.value++
       if (currentPage.value !== 1) return
-      const exists = logs.value.some(l => 
+      const exists = logs.value.some(l =>
         l.time === entry.time && l.actual_model === entry.actual_model && l.account === entry.account
       )
       if (!exists) {
@@ -83,24 +72,15 @@ function connectSSE() {
       }
     } catch {}
   })
-  
-  eventSource.onopen = () => {
-    sseConnected.value = true
-  }
-  
+  eventSource.onopen = () => { sseConnected.value = true }
   eventSource.onerror = () => {
     sseConnected.value = false
-    // 3 秒后重连
     setTimeout(() => {
-      if (eventSource) {
-        eventSource.close()
-        connectSSE()
-      }
+      if (eventSource) { eventSource.close(); connectSSE() }
     }, 3000)
   }
 }
 
-// 加载 API Keys 列表（用于筛选下拉）
 async function loadApiKeys() {
   try {
     const res = await api('/apikeys')
@@ -108,18 +88,13 @@ async function loadApiKeys() {
   } catch {}
 }
 
-// 分页加载日志
 async function loadLogs(page = 1) {
   loading.value = true
   try {
-    const params = new URLSearchParams({
-      page,
-      limit: pageSize.value
-    })
+    const params = new URLSearchParams({ page, limit: pageSize.value })
     if (statusFilter.value !== 'all') params.append('status', statusFilter.value)
     if (keyFilter.value !== 'all') params.append('key', keyFilter.value)
     if (searchQuery.value) params.append('search', searchQuery.value)
-
     const res = await api(`/logs?${params.toString()}`)
     if (res.ok) {
       const d = await res.json()
@@ -127,9 +102,7 @@ async function loadLogs(page = 1) {
       totalLogs.value = d.total || 0
       currentPage.value = d.page || 1
     }
-  } catch {
-    toastError('无法加载日志')
-  }
+  } catch { toastErr('无法加载日志') }
   loading.value = false
 }
 
@@ -146,15 +119,9 @@ async function clearLogs() {
   try {
     await api('/logs', { method: 'DELETE' })
     logs.value = []
-    expandedIndex.value = -1
+    totalLogs.value = 0
     success('日志已清空')
-  } catch {
-    toastError('清空失败')
-  }
-}
-
-function toggleExpand(i) {
-  expandedIndex.value = expandedIndex.value === i ? -1 : i
+  } catch { toastErr('清空失败') }
 }
 
 function formatDuration(ms) {
@@ -163,329 +130,345 @@ function formatDuration(ms) {
   return (ms / 1000).toFixed(1) + 's'
 }
 
-function getApiKeyDisplay(keyId) {
-  if (!keyId) return '未关联'
-  const keyObj = apiKeys.value.find(k => k.id === keyId)
-  if (keyObj) {
-    return keyObj.note || keyObj.key?.slice(0, 10) + '...'
+function formatLogTime(t) {
+  if (!t) return '-'
+  // log.time 可能是 ISO 字符串或 unix 秒
+  let d
+  if (typeof t === 'string') {
+    d = new Date(t)
+  } else if (typeof t === 'number') {
+    d = new Date(t < 1e12 ? t * 1000 : t)
+  } else {
+    return '-'
   }
-  return keyId
+  if (isNaN(d.getTime())) return '-'
+  // 同一天内显示 时:分:秒，跨天显示 月-日 时:分
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate()
+  if (sameDay) {
+    return d.toLocaleTimeString('zh-CN', { hour12: false })
+  }
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}`
 }
 
-const filteredLogs = computed(() => logs.value)
+function getApiKeyDisplay(keyId) {
+  if (!keyId) return '未关联'
+  const k = apiKeys.value.find(x => x.id === keyId)
+  if (k) return k.note || (k.key || '').slice(0, 10) + '...'
+  return keyId
+}
 
 let searchTimeout = null
 watch(searchQuery, () => {
   if (searchTimeout) clearTimeout(searchTimeout)
-  searchTimeout = setTimeout(() => {
-    goToPage(1)
-  }, 500)
+  searchTimeout = setTimeout(() => goToPage(1), 500)
 })
-
-watch([statusFilter, keyFilter], () => {
-  goToPage(1)
-})
-
-const errorCount = computed(() => totalLogs.value > 0 ? logs.value.filter(l => l.error || l.status === 'error').length : 0)
+watch([statusFilter, keyFilter], () => goToPage(1))
 
 onMounted(async () => {
   await Promise.all([loadLogs(), loadApiKeys()])
   connectSSE()
 })
-
 onUnmounted(() => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  if (eventSource) { eventSource.close(); eventSource = null }
 })
+
+const statusOpts = [
+  { value: 'all',     label: '全部' },
+  { value: 'success', label: '成功' },
+  { value: 'error',   label: '错误' },
+]
+
+const keyOptions = computed(() => [
+  { value: 'all', label: '全部 API Key' },
+  ...apiKeys.value.map(k => ({
+    value: k.id,
+    label: k.note || k.id.slice(0, 8),
+    hint: k.note ? k.id.slice(0, 6) : null,
+  })),
+])
+
+const items = computed(() => logs.value.map((log, i) => ({
+  id: log.request_id || `${log.time}-${i}`,
+  time: formatLogTime(log.time),
+  status: (log.error || log.status === 'error') ? 'danger' : 'success',
+  raw: log,
+})))
 </script>
 
 <template>
-  <div class="space-y-6 max-w-[1600px] mx-auto pb-20">
-    <!-- Header -->
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div class="space-y-1">
-        <h1 class="text-2xl font-black tracking-tight text-[var(--text)] flex items-center gap-3">
-          使用日志
-          <span v-if="sseConnected" class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> 实时
-          </span>
-          <span v-else class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-500/10 text-amber-500 text-[10px] font-bold">
-            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> 离线
-          </span>
-        </h1>
-        <p class="text-sm text-[var(--text-secondary)] font-medium flex items-center gap-2">
-          <History class="w-3.5 h-3.5 text-indigo-500" />
-          API 调用记录 · 共 {{ logs.length }} 条
-          <span v-if="errorCount" class="text-rose-500">· {{ errorCount }} 个错误</span>
-        </p>
+  <div class="logs-page">
+    <header class="page-head">
+      <div class="title-wrap">
+        <div class="eyebrow"><History :size="11" /> 调用记录</div>
+        <h1 class="page-title">使用日志</h1>
       </div>
-      <div class="flex items-center gap-2">
-        <button @click="loadLogs(currentPage)" :disabled="loading" class="flex items-center gap-2 px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold hover:bg-[var(--bg)] transition-all active:scale-95">
-          <RotateCw class="w-4 h-4 text-[var(--primary)]" :class="{ 'animate-spin': loading }" /> 刷新
-        </button>
-        <button @click="clearLogs" class="flex items-center gap-2 px-4 py-2 bg-rose-500/10 text-rose-500 rounded-xl text-sm font-bold hover:bg-rose-500 hover:text-white transition-all">
-          <Trash2 class="w-4 h-4" /> 清空
-        </button>
+      <div class="head-actions">
+        <WorldChip v-if="sseConnected" variant="success" :dot="true" :pulse="true">
+          <Radio :size="11" /> 实时
+        </WorldChip>
+        <WorldChip v-else variant="warning" :dot="true">离线</WorldChip>
+        <WorldButton variant="secondary" size="sm" @click="loadLogs(currentPage)">
+          <RotateCw :size="13" /><span>刷新</span>
+        </WorldButton>
+        <WorldButton variant="danger" size="sm" @click="clearLogs">
+          <Trash2 :size="13" /><span>清空</span>
+        </WorldButton>
       </div>
-    </div>
+    </header>
 
-    <!-- Filter Bar -->
-    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-      <div class="relative flex-1 group">
-        <Search class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)] group-focus-within:text-[var(--primary)] transition-colors" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="搜索模型、账号或错误信息..."
-          class="w-full h-10 pl-11 pr-4 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-[var(--primary)] transition-all"
+    <!-- Filters -->
+    <WorldCard padding="md">
+      <div class="filter-row">
+        <div class="search-wrap">
+          <Search :size="14" class="search-icon" />
+          <input
+            v-model="searchQuery"
+            class="search-input"
+            placeholder="搜索模型、账号、错误信息或 request_id"
+          />
+          <button v-if="searchQuery" @click="searchQuery = ''" class="clear-btn"><X :size="12" /></button>
+        </div>
+        <WorldSegment v-model="statusFilter" :options="statusOpts" size="sm" />
+        <WorldSelect
+          v-model="keyFilter"
+          :options="keyOptions"
+          size="sm"
+          searchable
+          placeholder="筛选 API Key"
+          align="end"
         />
       </div>
-      <div v-if="apiKeys.length" class="relative">
-        <Key class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-secondary)] pointer-events-none" />
-        <select v-model="keyFilter"
-          class="select-arrow h-10 pl-9 pr-8 bg-[var(--card)] border border-[var(--border)] rounded-xl text-xs font-bold outline-none appearance-none cursor-pointer hover:border-[var(--primary)] transition-colors"
-        >
-          <option value="all">全部 Key</option>
-          <option v-for="k in apiKeys" :key="k.id" :value="k.id">
-            {{ k.note || k.key?.slice(0, 10) + '...' }}
-          </option>
-        </select>
-      </div>
-      <div class="flex items-center bg-[var(--card)] border border-[var(--border)] rounded-xl p-0.5">
-        <button v-for="f in [{v:'all',l:'全部'},{v:'success',l:'成功'},{v:'error',l:'失败'}]" :key="f.v"
-          @click="statusFilter = f.v"
-          class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all"
-          :class="statusFilter === f.v ? 'bg-[var(--primary)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text)]'"
-        >{{ f.l }}</button>
-      </div>
-    </div>
+    </WorldCard>
 
-    <!-- Log Table -->
-    <div class="modern-card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse min-w-[900px]">
-          <thead>
-            <tr class="bg-[var(--bg)]/50 border-b border-[var(--border)]">
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">时间</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">状态</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">模型</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)]">使用方</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">Credit</th>
-              <th class="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] text-right">耗时</th>
-              <th class="px-6 py-4 w-10"></th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-[var(--border)]/50">
-            <template v-for="(log, i) in filteredLogs" :key="i">
-              <!-- Main Row -->
-              <tr
-                class="transition-colors cursor-pointer"
-                :class="log.error ? 'hover:bg-rose-500/[0.03]' : 'hover:bg-[var(--primary)]/[0.02]'"
-                @click="toggleExpand(i)"
-              >
-                <td class="px-6 py-4 whitespace-nowrap">
-                  <div class="text-xs font-bold">{{ log.time?.split(' ')[1] }}</div>
-                  <div class="text-[9px] text-[var(--text-secondary)]">{{ log.time?.split(' ')[0] }}</div>
-                </td>
+    <!-- Timeline -->
+    <WorldCard padding="md">
+      <WorldTimeline :items="items" empty-text="暂无日志">
+        <template #title="{ item }">
+          <span class="model-row">
+            <code class="orig-model">{{ item.raw.original_model || '—' }}</code>
+            <span v-if="item.raw.actual_model && item.raw.actual_model !== item.raw.original_model" class="arrow">→</span>
+            <code v-if="item.raw.actual_model && item.raw.actual_model !== item.raw.original_model" class="actual-model">
+              {{ item.raw.actual_model }}
+            </code>
+          </span>
+        </template>
+        <template #body="{ item }">
+          <div class="log-meta-row">
+            <span v-if="item.raw.api_key_id" class="meta-cell"><Key :size="11" />{{ getApiKeyDisplay(item.raw.api_key_id) }}</span>
+            <span v-if="item.raw.account" class="meta-cell"><Cpu :size="11" />{{ item.raw.account }}</span>
+            <span class="meta-cell"><Clock :size="11" />{{ formatDuration(item.raw.duration_ms) }}</span>
+            <span class="meta-cell">{{ ((item.raw.input_tokens || 0) + (item.raw.output_tokens || 0)).toLocaleString() }} tok</span>
+            <!-- 掺水前/后 + 金额 -->
+            <span
+              v-if="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits"
+              class="meta-cell credits-pre"
+              title="上游真实消耗（掺水前）"
+            >
+              <span class="cr-label">掺水前</span>{{ item.raw.upstream_credits.toFixed(4) }} cr
+            </span>
+            <span
+              v-if="item.raw.credits"
+              class="meta-cell credits-post"
+              :title="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits ? '计费 credits（掺水后放大到 originalModel 口径）' : '计费 credits'"
+            >
+              <span v-if="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits" class="cr-label">掺水后</span>
+              {{ item.raw.credits.toFixed(4) }} cr
+            </span>
+            <span v-if="item.raw.cost_usd" class="meta-cell credits-cost" title="实际扣费金额">
+              ${{ item.raw.cost_usd.toFixed(4) }}
+            </span>
+            <WorldChip
+              :variant="item.raw.error || item.raw.status === 'error' ? 'danger' : 'success'"
+              size="sm" :dot="true"
+            >
+              <component :is="item.raw.error || item.raw.status === 'error' ? XCircle : CheckCircle2" :size="11" />
+              {{ item.raw.error || item.raw.status === 'error' ? 'ERROR' : (item.raw.stop_reason || 'OK') }}
+            </WorldChip>
+          </div>
+          <div v-if="item.raw.error" class="err-detail">{{ item.raw.error }}</div>
+        </template>
+      </WorldTimeline>
+    </WorldCard>
 
-                <td class="px-6 py-4">
-                  <span v-if="log.error"
-                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-rose-500/10 text-rose-500 text-[10px] font-bold border border-rose-500/10">
-                    <AlertCircle class="w-3 h-3" /> 失败
-                  </span>
-                  <span v-else
-                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold border border-emerald-500/10">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 成功
-                  </span>
-                  <span v-if="log.stop_reason" class="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold"
-                    :class="{
-                      'bg-sky-500/10 text-sky-400': log.stop_reason === 'end_turn' || log.stop_reason === 'stop',
-                      'bg-amber-500/10 text-amber-400': log.stop_reason === 'tool_use' || log.stop_reason === 'tool_calls',
-                      'bg-rose-500/10 text-rose-400': log.stop_reason === 'max_tokens'
-                    }">
-                    {{ log.stop_reason }}
-                  </span>
-                </td>
-
-                <td class="px-6 py-4">
-                  <div class="text-xs font-bold text-[var(--primary)]">{{ log.actual_model }}</div>
-                  <div v-if="log.original_model !== log.actual_model" class="text-[9px] text-[var(--text-secondary)]">← {{ log.original_model }}</div>
-                </td>
-
-                <td class="px-6 py-4">
-                  <div class="flex items-center gap-2">
-                    <div class="w-6 h-6 shrink-0 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                      <Monitor class="w-3 h-3 text-indigo-500" />
-                    </div>
-                    <div class="min-w-0 flex flex-col gap-0.5">
-                      <div class="text-xs font-bold truncate max-w-[150px]" :title="log.account">{{ log.account?.split('@')[0] }}</div>
-                      <div class="flex items-center gap-1 text-[9px] text-[var(--text-secondary)]" :title="log.api_type + ' | Key: ' + getApiKeyDisplay(log.api_key_id)">
-                        <Key class="w-2.5 h-2.5 shrink-0" v-if="log.api_key_id" />
-                        <span class="truncate max-w-[130px] font-mono">{{ log.api_key_id ? getApiKeyDisplay(log.api_key_id) : (log.api_type || 'REST') }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </td>
-
-                <td class="px-6 py-4 text-right">
-                  <div class="flex items-center justify-end gap-1">
-                    <Cpu class="w-3 h-3 text-amber-500" />
-                    <span class="text-xs font-bold">{{ log.credits?.toFixed(4) || '0' }}</span>
-                  </div>
-                  <div class="text-[9px] text-[var(--text-secondary)]">${{ (log.cost_usd || 0).toFixed(4) }}</div>
-                </td>
-
-                <td class="px-6 py-4 text-right">
-                  <div class="flex items-center justify-end gap-1.5">
-                    <Zap class="w-3 h-3 text-amber-500" />
-                    <span class="text-xs font-bold">{{ formatDuration(log.duration_ms) }}</span>
-                  </div>
-                  <div class="text-[9px] text-[var(--text-secondary)]">
-                    {{ log.stream ? 'Stream' : 'Block' }}
-                    <span v-if="log.request_id" class="ml-1 opacity-50">#{{ log.request_id }}</span>
-                  </div>
-                </td>
-
-                <td class="px-6 py-4">
-                  <ChevronDown
-                    class="w-4 h-4 text-[var(--text-secondary)] transition-transform duration-200"
-                    :class="{ 'rotate-180': expandedIndex === i }"
-                  />
-                </td>
-              </tr>
-
-              <!-- Expanded Detail Row -->
-              <tr v-if="expandedIndex === i">
-                <td colspan="7" class="px-6 py-0">
-                  <div class="py-4 space-y-3">
-                    <!-- Error Detail -->
-                    <div v-if="log.error" class="p-4 bg-rose-500/5 border border-rose-500/10 rounded-xl">
-                      <div class="flex items-center gap-2 mb-2">
-                        <AlertCircle class="w-4 h-4 text-rose-500" />
-                        <span class="text-xs font-bold text-rose-500">错误详情</span>
-                      </div>
-                      <pre class="text-xs text-rose-400 font-mono whitespace-pre-wrap break-all leading-relaxed">{{ log.error }}</pre>
-                    </div>
-
-                    <!-- Request Detail -->
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求模型</div>
-                        <div class="text-xs font-bold font-mono">{{ log.original_model }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">实际模型</div>
-                        <div class="text-xs font-bold font-mono text-[var(--primary)]">{{ log.actual_model }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">完整账号</div>
-                        <div class="text-xs font-bold font-mono">{{ log.account || '-' }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">请求时间</div>
-                        <div class="text-xs font-bold">{{ log.time }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">来源 API Key</div>
-                        <div class="text-xs font-bold">{{ apiKeys.find(k => k.id === log.api_key_id)?.note || log.api_key_id || '未关联/内置' }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl opacity-50">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Request ID</div>
-                        <div class="text-xs font-bold font-mono text-sky-400">{{ log.request_id || '-' }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Stop Reason</div>
-                        <div class="text-xs font-bold font-mono" :class="{
-                          'text-emerald-400': log.stop_reason === 'end_turn' || log.stop_reason === 'stop',
-                          'text-amber-400': log.stop_reason === 'tool_use' || log.stop_reason === 'tool_calls',
-                          'text-rose-400': log.stop_reason === 'max_tokens'
-                        }">{{ log.stop_reason || '-' }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">耗时</div>
-                        <div class="text-xs font-bold font-mono">{{ formatDuration(log.duration_ms) }}</div>
-                      </div>
-                      <div class="p-3 bg-[var(--bg)] rounded-xl">
-                        <div class="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-1">Credits</div>
-                        <div class="text-xs font-bold font-mono text-amber-400">{{ log.credits?.toFixed(2) || '0' }}</div>
-                      </div>
-                    </div>
-                    <!-- API Key Info -->
-                    <div v-if="log.api_key_id" class="flex items-center gap-3 p-3 bg-[var(--bg)] rounded-xl">
-                      <Key class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
-                      <span class="text-[10px] font-bold text-[var(--text-secondary)]">API Key:</span>
-                      <span class="text-[10px] font-bold font-mono text-[var(--text)]">{{ log.api_key_id.slice(0, 8) }}...</span>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Empty State -->
-      <div v-if="!filteredLogs.length" class="px-6 py-16 text-center">
-        <History class="w-10 h-10 text-[var(--text-secondary)] opacity-20 mx-auto mb-3" />
-        <div class="text-sm font-bold text-[var(--text-secondary)]">{{ searchQuery || statusFilter !== 'all' ? '没有匹配的日志' : '暂无调用记录' }}</div>
-      </div>
-
-      <!-- Pagination -->
-      <div v-if="totalPages > 1" class="px-6 py-4 bg-[var(--bg)]/50 border-t border-[var(--border)] flex items-center justify-between">
-        <span class="text-[10px] font-bold text-[var(--text-secondary)]">
-          共 {{ totalLogs }} 条 · 第 {{ currentPage }}/{{ totalPages }} 页
-        </span>
-        <div class="flex items-center gap-1">
-          <button @click="goToPage(1)" :disabled="currentPage <= 1"
-            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
-            :class="currentPage <= 1 ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
-            首页
-          </button>
-          <button @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1"
-            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
-            :class="currentPage <= 1 ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
-            ‹ 上一页
-          </button>
-          <template v-for="p in totalPages" :key="p">
-            <button v-if="p === 1 || p === totalPages || (p >= currentPage - 2 && p <= currentPage + 2)"
-              @click="goToPage(p)"
-              class="w-7 h-7 rounded-lg text-[10px] font-bold transition-all"
-              :class="p === currentPage ? 'bg-[var(--primary)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--card)]'">
-              {{ p }}
-            </button>
-            <span v-else-if="p === currentPage - 3 || p === currentPage + 3" class="text-[var(--text-secondary)]/30 text-xs px-1">…</span>
-          </template>
-          <button @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages"
-            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
-            :class="currentPage >= totalPages ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
-            下一页 ›
-          </button>
-          <button @click="goToPage(totalPages)" :disabled="currentPage >= totalPages"
-            class="px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all"
-            :class="currentPage >= totalPages ? 'text-[var(--text-secondary)]/30 cursor-not-allowed' : 'text-[var(--text-secondary)] hover:bg-[var(--card)] hover:text-[var(--text)]'">
-            末页
-          </button>
-        </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="px-6 py-3 bg-[var(--bg)]/50 border-t border-[var(--border)] flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
-        <span>显示 {{ filteredLogs.length }} / {{ totalLogs }} 条记录</span>
-        <span>点击任意行查看详情</span>
-      </div>
+    <!-- Pagination -->
+    <div v-if="totalLogs > pageSize" class="pagination">
+      <WorldButton variant="ghost" size="sm" :disabled="currentPage <= 1" @click="goToPage(currentPage - 1)">
+        <ChevronLeft :size="14" /><span>上一页</span>
+      </WorldButton>
+      <span class="page-info">
+        第 {{ currentPage }} / {{ totalPages }} 页 · 共 {{ totalLogs }} 条
+      </span>
+      <WorldButton variant="ghost" size="sm" :disabled="currentPage >= totalPages" @click="goToPage(currentPage + 1)">
+        <span>下一页</span><ChevronRight :size="14" />
+      </WorldButton>
     </div>
   </div>
 </template>
 
 <style scoped>
-.overflow-x-auto::-webkit-scrollbar { height: 4px; }
-.overflow-x-auto::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
-.select-arrow {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.5rem center;
-  background-size: 1em;
+.logs-page { display: flex; flex-direction: column; gap: 14px; }
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.title-wrap { display: flex; flex-direction: column; gap: 2px; }
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.page-title {
+  font-family: var(--world-font-display);
+  font-size: 1.5rem;
+  font-weight: 800;
+  margin: 0;
+  color: var(--world-text-primary);
+}
+.head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.search-wrap { position: relative; display: flex; align-items: center; flex: 1; min-width: 240px; }
+.search-icon { position: absolute; left: 12px; color: var(--world-text-mute); }
+.search-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 32px 0 36px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  color: var(--world-text-primary);
+  font-size: 0.8125rem;
+  font-family: var(--world-font-sans);
+  outline: none;
+  transition: border-color 200ms;
+}
+.search-input:focus { border-color: var(--world-accent); }
+.clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--world-text-mute);
+  cursor: pointer;
+}
+
+.model-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.orig-model {
+  font-family: var(--world-font-mono);
+  font-size: 0.85rem;
+  color: var(--world-text-primary);
+  font-weight: 700;
+}
+.arrow { color: var(--world-text-dim); font-size: 0.75rem; }
+.actual-model {
+  font-family: var(--world-font-mono);
+  font-size: 0.78rem;
+  color: var(--world-warning);
+  font-weight: 700;
+  padding: 1px 6px;
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--world-radius-sm);
+}
+[data-world="daogui"] .orig-model { color: var(--world-paper-aged); }
+
+.log-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.meta-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-family: var(--world-font-mono);
+  color: var(--world-text-mute);
+}
+.cr-label {
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: var(--world-radius-sm);
+  margin-right: 2px;
+}
+.credits-pre .cr-label {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--world-text-secondary);
+}
+.credits-pre {
+  text-decoration: line-through;
+  text-decoration-color: rgba(148, 163, 184, 0.5);
+  opacity: 0.85;
+}
+.credits-post .cr-label {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--world-warning);
+}
+.credits-post {
+  color: var(--world-warning);
+  font-weight: 700;
+}
+.credits-cost {
+  color: var(--world-success);
+  font-weight: 700;
+}
+[data-world="daogui"] .credits-post { color: #f3c66e; }
+[data-world="daogui"] .credits-cost { color: #95b5a8; }
+.err-detail {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid var(--world-error);
+  border-radius: var(--world-radius-sm);
+  font-size: 0.72rem;
+  color: var(--world-error);
+  font-family: var(--world-font-mono);
+  word-break: break-all;
+}
+[data-world="daogui"] .err-detail { background: rgba(196, 30, 58, 0.10); color: #f5707f; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+.page-info {
+  font-size: 0.78rem;
+  color: var(--world-text-mute);
+  font-family: var(--world-font-mono);
 }
 </style>

@@ -6,9 +6,15 @@ import { userApi } from '../../api/user'
 import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
 import {
   AlertTriangle, Gift, Wallet, Clock, Activity,
-  Copy, Check, LayoutGrid
+  Copy, Check, LayoutGrid, ServerCog
 } from 'lucide-vue-next'
 import { copyToClipboard } from '../../utils/clipboard'
+import WorldCard from '../../components/world/WorldCard.vue'
+import WorldStat from '../../components/world/WorldStat.vue'
+import WorldTable from '../../components/world/WorldTable.vue'
+import WorldButton from '../../components/world/WorldButton.vue'
+import WorldChip from '../../components/world/WorldChip.vue'
+import WorldLoader from '../../components/world/WorldLoader.vue'
 
 const router = useRouter()
 const auth = useUserAuth()
@@ -30,18 +36,17 @@ onMounted(async () => {
 })
 
 const info = computed(() => auth.userInfo || {})
-const isActivated = computed(() => !!info.value.plan || Number(info.value.giftBalance || 0) > 0)
-const isTimedPlan = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
+const isTimedPlan  = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
 const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid' || (!info.value.plan && totalBalanceValue.value > 0))
-const balanceValue = computed(() => Number(info.value.balance || 0))
+const balanceValue     = computed(() => Number(info.value.balance || 0))
 const giftBalanceValue = computed(() => Number(info.value.giftBalance || 0))
-const totalBalanceValue = computed(() => balanceValue.value + giftBalanceValue.value)
+const totalBalanceValue= computed(() => balanceValue.value + giftBalanceValue.value)
 
 const timeRemaining = computed(() => {
-  if (!isTimedPlan.value) return { label: '-', unit: '' }
-  if (!info.value.expiresAt || info.value.expiresAt === 0) return { label: '∞', unit: '' }
+  if (!isTimedPlan.value) return ''
+  if (!info.value.expiresAt || info.value.expiresAt === 0) return '∞'
   const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
-  if (diff <= 0) return { label: '已过期', unit: '' }
+  if (diff <= 0) return '已过期'
   const days = Math.floor(diff / 86400)
   const hours = Math.floor((diff % 86400) / 3600)
   const mins = Math.max(1, Math.ceil((diff % 3600) / 60))
@@ -49,34 +54,35 @@ const timeRemaining = computed(() => {
   if (days > 0) text += `${days}天`
   if (hours > 0) text += `${hours}小时`
   if (days === 0 && mins > 0) text += `${mins}分钟`
-  return { label: text || '1分钟', unit: '' }
+  return text || '1分钟'
 })
 
 const expiryDate = computed(() => {
   if (!info.value.expiresAt || info.value.expiresAt === 0) return '永久有效'
   const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
   if (diff < 86400) {
-    // 不到1天，显示具体时间
     return '到期：' + new Date(info.value.expiresAt * 1000).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' })
   }
   return '到期：' + new Date(info.value.expiresAt * 1000).toLocaleDateString('zh-CN')
 })
 
-const timeClass = computed(() => {
-  if (!isTimedPlan.value || !info.value.expiresAt) return 'ok'
+const timeVariant = computed(() => {
+  if (!isTimedPlan.value || !info.value.expiresAt) return 'primary'
   const diff = Math.max(0, info.value.expiresAt - Date.now() / 1000)
   if (diff <= 0) return 'danger'
   if (diff < 3 * 86400) return 'danger'
   if (diff < 7 * 86400) return 'warning'
-  return 'ok'
+  return 'success'
 })
 
-const statusColor = computed(() => {
+const balanceVariant = computed(() => totalBalanceValue.value < 1 ? 'danger' : 'success')
+
+const statusVariant = computed(() => {
   const s = info.value.status
-  if (s === 'active') return '#22c55e'
-  if (s === 'key_expired') return '#ef4444'
-  if (s === 'insufficient_balance') return '#f59e0b'
-  return '#64748b'
+  if (s === 'active') return 'success'
+  if (s === 'key_expired') return 'danger'
+  if (s === 'insufficient_balance') return 'warning'
+  return 'primary'
 })
 
 const statusText = computed(() => {
@@ -92,6 +98,12 @@ const topModels = computed(() => {
   return Object.entries(usage.value.models)
     .sort((a, b) => b[1].requests - a[1].requests)
     .slice(0, 5)
+    .map(([name, stats]) => ({
+      model: name,
+      requests: stats.requests,
+      inputK: (stats.inputTokens / 1000).toFixed(1),
+      outputK: (stats.outputTokens / 1000).toFixed(1),
+    }))
 })
 
 const baseUrl = computed(() => `${location.protocol}//${location.host}`)
@@ -101,538 +113,299 @@ function copyUrl() {
   copied.value = true
   setTimeout(() => copied.value = false, 2000)
 }
-
-function goRecharge() {
-  router.push('/user/recharge')
-}
+function goRecharge() { router.push('/user/recharge') }
 </script>
 
 <template>
   <div class="dashboard" v-if="!loading">
-    <!-- Header -->
-    <div class="header-section">
-      <h2 class="page-title">账户概览</h2>
-    </div>
+    <!-- 标题 -->
+    <header class="page-head">
+      <div class="title-wrap">
+        <div class="eyebrow">用户中心</div>
+        <h1 class="page-title">账户概览</h1>
+      </div>
+      <PlanStatusBadge
+        :plan="info.plan"
+        :tier="info.tier"
+        :balance="info.balance"
+        :expires-at="info.expiresAt"
+      />
+    </header>
 
-    <!-- Activation Banner -->
-    <div v-if="!info.plan && giftBalanceValue <= 0" class="activate-banner glass">
-      <div class="banner-content">
-        <div class="icon-box">
-          <AlertTriangle :size="24" color="#818cf8" />
-        </div>
-        <div class="text-box">
+    <!-- 未激活提示 -->
+    <WorldCard v-if="!info.plan && giftBalanceValue <= 0" padding="md" variant="talisman" class="activate-banner">
+      <div class="banner-row">
+        <div class="banner-icon"><AlertTriangle :size="22" /></div>
+        <div class="banner-text">
           <h3>账号尚未激活</h3>
           <p>请兑换激活码来获取余额或时间，开始使用 API 服务</p>
         </div>
+        <WorldButton variant="primary" size="md" @click="goRecharge">
+          <Gift :size="14" /><span>前往充值</span>
+        </WorldButton>
       </div>
-      <button @click="goRecharge" class="activate-btn">
-        <Gift :size="16" style="margin-right:6px" />前往充值
-      </button>
+    </WorldCard>
+
+    <!-- 4 张状态卡片 -->
+    <div class="stat-row">
+      <WorldStat
+        v-if="isCreditPlan"
+        label="账户余额"
+        :value="`$${totalBalanceValue.toFixed(2)}`"
+        :hint="giftBalanceValue > 0 ? `付费 $${balanceValue.toFixed(2)} · 赠送 $${giftBalanceValue.toFixed(2)}` : (totalBalanceValue < 1 ? '余额不足' : '账户正常')"
+        :variant="balanceVariant"
+        :icon="Wallet"
+      />
+
+      <WorldStat
+        v-if="isTimedPlan"
+        label="剩余时间"
+        :value="timeRemaining"
+        :hint="expiryDate"
+        :variant="timeVariant"
+        :icon="Clock"
+      />
+
+      <WorldStat
+        label="累计请求"
+        :value="(info.requests || 0).toLocaleString()"
+        :hint="`Token ${((info.tokens || 0) / 1000).toFixed(1)}K`"
+        variant="info"
+        :icon="Activity"
+      />
+
+      <WorldStat
+        label="服务状态"
+        :value="statusText"
+        :variant="statusVariant"
+        :icon="ServerCog"
+      />
     </div>
 
-    <!-- Stat Cards -->
-    <div class="stat-cards">
-      <!-- Balance -->
-      <div v-if="isCreditPlan" class="stat-card glass">
-        <div class="stat-header">
-          <span class="stat-label">当前余额</span>
-          <Wallet :size="18" class="stat-icon" />
-        </div>
-        <div class="stat-value balance">${{ totalBalanceValue.toFixed(2) }}</div>
-        <div class="stat-sub" :style="{ color: totalBalanceValue < 1 ? '#ef4444' : '#22c55e' }">
-          {{ totalBalanceValue < 1 ? '⚠ 余额不足' : '✓ 账户正常' }}
-        </div>
-        <div v-if="giftBalanceValue > 0" class="stat-detail">
-          付费余额 ${{ balanceValue.toFixed(2) }} · 赠送余额 ${{ giftBalanceValue.toFixed(2) }}
-        </div>
-        <div v-if="(info.totalRecharged || 0) > 0 || (info.totalGifted || 0) > 0" class="stat-detail">
-          累积充值 ${{ (info.totalRecharged || 0).toFixed(2) }} · 累积赠送 ${{ (info.totalGifted || 0).toFixed(2) }}
-        </div>
-      </div>
-
-      <!-- Time Remaining -->
-      <div v-if="isTimedPlan" class="stat-card glass">
-        <div class="stat-header">
-          <span class="stat-label">剩余时间</span>
-          <Clock :size="18" class="stat-icon" />
-        </div>
-        <div class="stat-value">{{ timeRemaining.label }}<small v-if="timeRemaining.unit">{{ timeRemaining.unit }}</small></div>
-        <div class="stat-sub" :class="timeClass">{{ expiryDate }}</div>
-      </div>
-
-      <!-- Requests -->
-      <div class="stat-card glass">
-        <div class="stat-header">
-          <span class="stat-label">累计请求</span>
-          <Activity :size="18" class="stat-icon" />
-        </div>
-        <div class="stat-value">{{ (info.requests || 0).toLocaleString() }}</div>
-        <div class="stat-sub muted">消耗 Token：{{ ((info.tokens || 0) / 1000).toFixed(1) }}K</div>
-      </div>
-
-      <!-- Status -->
-      <div class="stat-card glass">
-        <div class="stat-header">
-          <span class="stat-label">服务状态</span>
-          <div class="status-dot-pulse" :style="{ '--color': statusColor }"></div>
-        </div>
-        <div class="stat-value" :style="{ color: statusColor, fontSize: '1.25rem' }">
-          {{ info.status === 'active' ? '正常运行' : info.statusMessage || info.status || '未知' }}
-        </div>
-        <PlanStatusBadge :plan="info.plan" :tier="info.tier" :balance="info.balance" :expires-at="info.expiresAt" style="margin-top:8px" />
-      </div>
-    </div>
-
-    <!-- Model Usage + API Access -->
-    <div class="grid-layout">
-      <div class="section glass usage-section" v-if="topModels.length > 0">
+    <!-- 模型消耗 + API 接入 -->
+    <div class="dash-grid">
+      <WorldCard padding="md" class="grid-col-7" v-if="topModels.length > 0">
         <h3 class="section-title">
-          <LayoutGrid :size="16" style="margin-right:8px" />模型消耗排行
+          <LayoutGrid :size="16" />
+          <span>模型消耗排行</span>
         </h3>
-        <div class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>模型</th>
-                <th class="text-right">请求</th>
-                <th class="text-right">输入(K)</th>
-                <th class="text-right">输出(K)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="[model, stats] in topModels" :key="model">
-                <td class="model-name">{{ model }}</td>
-                <td class="text-right">{{ stats.requests }}</td>
-                <td class="text-right">{{ (stats.inputTokens / 1000).toFixed(1) }}</td>
-                <td class="text-right">{{ (stats.outputTokens / 1000).toFixed(1) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <WorldTable
+          :columns="[
+            { key: 'model',   label: '模型', mono: true },
+            { key: 'requests',label: '请求数', align: 'right' },
+            { key: 'inputK',  label: '输入(K)', align: 'right' },
+            { key: 'outputK', label: '输出(K)', align: 'right' },
+          ]"
+          :rows="topModels"
+          :compact="true"
+          empty-text="暂无调用记录"
+        />
+      </WorldCard>
 
-      <div class="section glass access-section">
-        <h3 class="section-title">API 接入配置</h3>
-        <div class="api-config">
-          <div class="config-item">
+      <WorldCard padding="md" class="grid-col-5">
+        <h3 class="section-title">
+          <ServerCog :size="16" />
+          <span>API 接入配置</span>
+        </h3>
+        <div class="api-cfg">
+          <div class="cfg-item">
             <label>接口地址 (Base URL)</label>
             <div class="copy-box">
               <code>{{ baseUrl }}</code>
-              <button @click="copyUrl" class="copy-btn" :class="{ copied }">
+              <button @click="copyUrl" class="copy-btn" :class="{ copied }" aria-label="复制">
                 <Check v-if="copied" :size="14" />
                 <Copy v-else :size="14" />
               </button>
             </div>
           </div>
-          <div class="config-item">
-            <label>协议兼容性</label>
-            <div class="tag-cloud">
-              <span class="tech-tag">OpenAI</span>
-              <span class="tech-tag">Claude</span>
+          <div class="cfg-item">
+            <label>协议兼容</label>
+            <div class="chip-row">
+              <WorldChip variant="info" size="sm">OpenAI</WorldChip>
+              <WorldChip variant="info" size="sm">Claude</WorldChip>
             </div>
           </div>
         </div>
-      </div>
+      </WorldCard>
     </div>
 
-    <!-- Pricing -->
-    <div class="section glass pricing-section" v-if="pricing">
-      <h3 class="section-title">计费标准</h3>
-      <div class="table-container">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>账号池</th>
-              <th class="text-right">单价 ($/credit)</th>
-              <th class="text-right">支持模型</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td class="model-name">FREE 池</td>
-              <td class="text-right">${{ pricing.freePoolPriceUSD || 0.04 }}</td>
-              <td class="text-right">sonnet-4.5</td>
-            </tr>
-            <tr>
-              <td class="model-name">PRO 池</td>
-              <td class="text-right">${{ pricing.proPoolPriceUSD || 0.20 }}</td>
-              <td class="text-right">sonnet-4.6, opus-4.6</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <!-- 计费标准 -->
+    <WorldCard v-if="pricing" padding="md">
+      <h3 class="section-title">
+        <Wallet :size="16" />
+        <span>计费标准</span>
+      </h3>
+      <WorldTable
+        :columns="[
+          { key: 'pool',  label: '账号池', mono: true },
+          { key: 'price', label: '单价 ($/credit)', align: 'right' },
+          { key: 'models',label: '支持模型', align: 'right', mono: true },
+        ]"
+        :rows="[
+          { pool: 'FREE 池', price: '$' + (pricing.freePoolPriceUSD || 0.04), models: 'sonnet-4.5' },
+          { pool: 'PRO 池',  price: '$' + (pricing.proPoolPriceUSD  || 0.20), models: 'sonnet-4.6, opus-4.6' },
+        ]"
+        :compact="true"
+      />
+    </WorldCard>
   </div>
 
-  <div v-else class="loading-state">
-    <div class="spinner"></div>
-    <span>载入数据中...</span>
+  <div v-else class="loading-wrap">
+    <WorldLoader :size="48" label="载入数据中" />
   </div>
-
-
 </template>
 
 <style scoped>
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
-  animation: fadeIn 0.4s ease-out;
+  gap: 18px;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.header-section {
+.page-head {
   display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: center;
-}
-
-.page-title {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin: 0;
-  color: #f8fafc;
-}
-
-
-
-.glass {
-  background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-}
-
-.activate-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1.5rem 2rem;
-  border-color: rgba(99, 102, 241, 0.2);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
-  gap: 1rem;
+  gap: 12px;
   flex-wrap: wrap;
 }
-
-.banner-content {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
+.title-wrap { display: flex; flex-direction: column; gap: 2px; }
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+}
+.page-title {
+  font-family: var(--world-font-display);
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--world-text-primary);
+}
+[data-world="daogui"] .page-title {
+  background: linear-gradient(135deg, var(--world-text-primary) 0%, var(--world-paper-aged) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
-.icon-box {
-  width: 52px;
-  height: 52px;
-  background: rgba(99, 102, 241, 0.1);
-  border-radius: 14px;
+.activate-banner :deep(.world-card),
+.activate-banner { padding: 16px 18px; }
+.banner-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.banner-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--world-radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--world-warning);
   flex-shrink: 0;
 }
-
-.text-box h3 {
-  margin: 0 0 0.25rem;
-  font-size: 1.125rem;
-  font-family: 'Space Grotesk', sans-serif;
-  color: #f8fafc;
+.banner-text { flex: 1; }
+.banner-text h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
 }
-
-.text-box p {
+.banner-text p {
   margin: 0;
-  font-size: 0.875rem;
-  color: #94a3b8;
-}
-
-.activate-btn {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 1.5rem;
-  background: #6366f1;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.activate-btn:hover {
-  background: #4f46e5;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-}
-
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1.5rem;
-}
-
-.stat-card {
-  padding: 1.5rem;
-}
-
-.stat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
-}
-
-.stat-label {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #94a3b8;
-}
-
-.stat-icon {
-  color: #64748b;
-}
-
-.stat-value {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 2rem;
-  font-weight: 700;
-  color: #f8fafc;
-  margin-bottom: 0.5rem;
-}
-
-.stat-value.balance {
-  background: linear-gradient(135deg, #22c55e, #10b981);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.stat-value small {
-  font-size: 1rem;
-  margin-left: 0.25rem;
-  color: #64748b;
-  -webkit-text-fill-color: #64748b;
-}
-
-.stat-sub {
   font-size: 0.8125rem;
+  color: var(--world-text-mute);
 }
 
-.stat-sub.ok { color: #22c55e; }
-.stat-sub.warning { color: #f59e0b; }
-.stat-sub.danger { color: #ef4444; }
-.stat-sub.muted { color: #64748b; }
-
-.stat-detail {
-  font-size: 0.75rem;
-  color: #64748b;
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.status-dot-pulse {
-  width: 10px;
-  height: 10px;
-  background: var(--color);
-  border-radius: 50%;
-  position: relative;
-}
-
-.status-dot-pulse::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: var(--color);
-  border-radius: 50%;
-  animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
-@keyframes ping {
-  75%, 100% { transform: scale(2.5); opacity: 0; }
-}
-
-.grid-layout {
+.stat-row {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 1.5rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 920px) {
+  .stat-row { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .stat-row { grid-template-columns: 1fr; }
+  .banner-row { flex-direction: column; align-items: flex-start; }
 }
 
-.section {
-  padding: 1.5rem;
+.dash-grid {
+  display: flex;
+  gap: 14px;
+}
+.grid-col-7 { flex: 7 1 0; min-width: 0; }
+.grid-col-5 { flex: 5 1 0; min-width: 0; }
+@media (max-width: 920px) {
+  .dash-grid { flex-direction: column; }
+  .grid-col-7, .grid-col-5 { flex: 1 1 auto; }
 }
 
 .section-title {
   display: flex;
   align-items: center;
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 1rem;
-  font-weight: 700;
-  color: #f8fafc;
-  margin: 0 0 1.5rem;
+  gap: 8px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  margin: 0 0 14px;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
 }
+[data-world="daogui"] .section-title { color: var(--world-paper-aged); }
 
-.table-container {
-  overflow-x: auto;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.data-table th {
-  text-align: left;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #64748b;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  white-space: nowrap;
-}
-
-.data-table td {
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
-  color: #cbd5e1;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.data-table th.text-right,
-.data-table td.text-right {
-  text-align: right;
-}
-
-.data-table tr:last-child td {
-  border-bottom: none;
-}
-
-.data-table tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.model-name {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color: #a855f7;
-  font-weight: 600;
-}
-
-.text-right { text-align: right; }
-
-.api-config {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
-
-.config-item label {
+.api-cfg { display: flex; flex-direction: column; gap: 14px; }
+.cfg-item label {
   display: block;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #64748b;
-  margin-bottom: 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--world-text-mute);
+  margin-bottom: 6px;
 }
-
 .copy-box {
   display: flex;
   align-items: center;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  padding: 0.25rem 0.25rem 0.25rem 1rem;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  font-family: var(--world-font-mono);
 }
-
 .copy-box code {
   flex: 1;
-  font-family: ui-monospace, monospace;
   font-size: 0.8125rem;
-  color: #22c55e;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--world-text-primary);
+  word-break: break-all;
 }
-
 .copy-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
+  width: 28px; height: 28px;
+  border-radius: var(--world-radius-sm);
+  background: transparent;
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-mute);
+  cursor: pointer;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: none;
-  border-radius: 6px;
-  color: #94a3b8;
-  cursor: pointer;
-  transition: all 0.2s;
+  transition: all 200ms ease;
   flex-shrink: 0;
 }
+.copy-btn:hover { color: var(--world-accent); border-color: var(--world-accent); }
+.copy-btn.copied { color: var(--world-success); border-color: var(--world-success); }
+.chip-row { display: flex; gap: 6px; }
 
-.copy-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #f8fafc;
-}
-
-.copy-btn.copied {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.1);
-}
-
-.tag-cloud {
+.loading-wrap {
+  min-height: 50vh;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.tech-tag {
-  padding: 0.25rem 0.625rem;
-  border-radius: 6px;
-  background: rgba(99, 102, 241, 0.1);
-  color: #818cf8;
-  font-size: 0.75rem;
-  font-weight: 600;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-}
-
-.loading-state {
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 400px;
-  color: #64748b;
-  gap: 1rem;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid rgba(99, 102, 241, 0.1);
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 1024px) {
-  .grid-layout { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 640px) {
-  .activate-banner { padding: 1.25rem; }
-  .banner-content { flex-direction: column; text-align: center; align-items: center; }
-  .activate-btn { width: 100%; justify-content: center; }
-  .stat-cards { grid-template-columns: 1fr; }
 }
 </style>

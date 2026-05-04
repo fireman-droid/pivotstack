@@ -4,21 +4,15 @@ import { useAccountsStore } from '../stores/accounts'
 import { useToast } from '../composables/useToast'
 import { api } from '../api/admin'
 import { formatNum, formatTokenExpiry, maskEmail, getSubBadge } from '../utils/format'
-import { 
-  RefreshCw, 
-  Copy, 
-  Trash2, 
-  Power, 
-  ShieldCheck, 
-  ShieldAlert, 
-  Activity, 
-  Clock, 
-  Zap,
-  Weight,
-  MoreVertical,
-  Check
+import {
+  RefreshCw, Copy, Trash2, Power, ShieldAlert, Activity,
+  Clock, Zap, Check
 } from 'lucide-vue-next'
 import { copyToClipboard } from '../utils/clipboard'
+import WorldCard from './world/WorldCard.vue'
+import WorldChip from './world/WorldChip.vue'
+import WorldButton from './world/WorldButton.vue'
+import Switch from './ui/Switch.vue'
 
 const props = defineProps({ account: Object })
 const store = useAccountsStore()
@@ -30,6 +24,7 @@ const privacyMode = ref(localStorage.getItem('privacyMode') !== 'false')
 const isSelected = () => store.selectedIds.has(props.account.id)
 const sub = () => getSubBadge(props.account.subscriptionType)
 const isBanned = () => props.account.banStatus && props.account.banStatus !== 'ACTIVE'
+const isPro = () => /pro/i.test(props.account.subscriptionType || '')
 
 async function refresh() {
   refreshing.value = true
@@ -49,6 +44,17 @@ async function toggle() {
     })
     await store.load()
     success(props.account.enabled ? '已禁用' : '已启用')
+  } catch { error('操作失败') }
+}
+
+async function toggleOverQuota() {
+  const next = !props.account.allowOverQuota
+  try {
+    await api(`/accounts/${props.account.id}`, {
+      method: 'PUT', body: JSON.stringify({ allowOverQuota: next })
+    })
+    await store.load()
+    success(next ? '已开启超开' : '已关闭超开')
   } catch { error('操作失败') }
 }
 
@@ -74,6 +80,16 @@ async function copyJSON() {
   } catch { error('获取配置失败') }
 }
 
+async function changeWeight(e) {
+  try {
+    await api(`/accounts/${props.account.id}`, {
+      method: 'PUT', body: JSON.stringify({ weight: +e.target.value })
+    })
+    await store.load()
+    success('权重已更新')
+  } catch { error('更新失败') }
+}
+
 function displayEmail() {
   const raw = props.account.email || (props.account.id?.substring(0, 12) + '...')
   return maskEmail(raw, privacyMode.value)
@@ -85,191 +101,424 @@ function formatAuth(method) {
   return map[method] || method
 }
 
-const getUsageColor = (percent) => {
-  if (percent > 0.9) return 'bg-rose-500'
-  if (percent > 0.7) return 'bg-amber-500'
-  return 'bg-[var(--primary)]'
+function getUsageVariant(percent) {
+  if (percent > 0.9) return 'danger'
+  if (percent > 0.7) return 'warning'
+  return 'primary'
 }
 </script>
 
 <template>
-  <div class="modern-card p-5 group relative flex flex-col h-full overflow-hidden"
-    :class="{ 
-      'ring-2 ring-primary border-transparent': isSelected(),
-      'opacity-75': !account.enabled || isBanned()
-    }">
-    
-    <!-- Status Indicator Top-Right -->
-    <div class="absolute top-0 right-0 p-3">
-      <div v-if="isBanned()" class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 text-[10px] font-bold uppercase tracking-wider">
-        <ShieldAlert class="w-3 h-3" />
+  <WorldCard
+    padding="md"
+    :elevated="false"
+    class="account-card"
+    :class="{ 'is-selected': isSelected(), 'is-disabled': !account.enabled || isBanned() }"
+  >
+    <!-- 状态徽章（右上） -->
+    <div class="card-status">
+      <WorldChip v-if="isBanned()" variant="danger" :dot="true" size="sm">
+        <ShieldAlert :size="11" />
         {{ account.banStatus === 'BANNED' ? '已封禁' : '已暂停' }}
-      </div>
-      <div v-else-if="!account.enabled" class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
-        <Power class="w-3 h-3" />
-        已禁用
-      </div>
-      <div v-else class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
-        <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-        运行中
+      </WorldChip>
+      <WorldChip v-else-if="!account.enabled" variant="neutral" :dot="false" size="sm">
+        <Power :size="11" />已禁用
+      </WorldChip>
+      <WorldChip v-else variant="success" :dot="true" size="sm" :pulse="true">运行中</WorldChip>
+      <span v-if="account.allowOverQuota" class="overquota-badge" title="已开启超开">+</span>
+    </div>
+
+    <!-- 头部 -->
+    <div class="card-head">
+      <input type="checkbox" :checked="isSelected()" @change="store.toggleSelect(account.id)" class="select-cb" />
+      <div class="head-info">
+        <h3 class="account-email">{{ displayEmail() }}</h3>
+        <div class="badge-row">
+          <span class="sub-badge" :class="`sub-${sub().color}`">{{ sub().label }}</span>
+          <span v-if="account.trialStatus === 'ACTIVE'" class="sub-badge sub-emerald">试用</span>
+          <span class="auth-badge">{{ formatAuth(account.provider || account.authMethod) }}</span>
+        </div>
       </div>
     </div>
 
-    <!-- Header Section -->
-    <div class="flex items-start gap-4 mb-5">
-      <div class="relative shrink-0 pt-1">
-        <input type="checkbox" :checked="isSelected()" @change="store.toggleSelect(account.id)"
-          class="w-5 h-5 cursor-pointer rounded border-[var(--border)] text-[var(--primary)] focus:ring-primary transition-all" />
-      </div>
-      
-      <div class="flex-1 min-w-0 pr-16">
-        <h3 class="font-bold text-sm text-[var(--text)] truncate mb-1 group-hover:text-[var(--primary)] transition-colors">
-          {{ displayEmail() }}
-        </h3>
-        <div class="flex flex-wrap gap-1.5">
-          <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight text-white"
-            :class="{
-              'bg-amber-500': sub().color === 'amber',
-              'bg-indigo-500': sub().color === 'violet',
-              'bg-blue-500': sub().color === 'blue',
-              'bg-slate-500': sub().color === 'gray',
-            }">{{ sub().label }}</span>
-          <span v-if="account.trialStatus === 'ACTIVE'" class="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px] font-bold uppercase">试用</span>
-          <span class="px-2 py-0.5 rounded bg-[var(--bg)] border border-[var(--border)] text-[var(--text-secondary)] text-[10px] font-medium">
-            {{ formatAuth(account.provider || account.authMethod) }}
+    <!-- 配额 -->
+    <div class="usage-section">
+      <div v-if="(account.trialUsageLimit > 0) || (account.usageLimit > 0)">
+        <div v-if="account.trialUsageLimit > 0 && account.usageLimit > 0" class="total-row">
+          <span class="total-label">总配额</span>
+          <span class="total-val">
+            {{ ((account.trialUsageCurrent || 0) + (account.usageCurrent || 0)).toFixed(0) }}
+            /
+            {{ ((account.trialUsageLimit || 0) + (account.usageLimit || 0)).toFixed(0) }}
           </span>
         </div>
-      </div>
-    </div>
 
-    <!-- Usage Section -->
-    <div class="flex-1 mb-5">
-      <!-- 如果有试用 + 主配额，先显示总量 -->
-      <div v-if="(account.trialUsageLimit > 0) || (account.usageLimit > 0)">
-        <!-- 总配额概览 -->
-        <div v-if="account.trialUsageLimit > 0 && account.usageLimit > 0" class="mb-3 p-2 bg-[var(--bg)] rounded-lg border border-[var(--border)]">
-          <div class="flex justify-between text-[10px] font-bold">
-            <span class="text-[var(--text)]">总配额</span>
-            <span class="text-[var(--primary)]">{{ ((account.trialUsageCurrent || 0) + (account.usageCurrent || 0)).toFixed(0) }} / {{ ((account.trialUsageLimit || 0) + (account.usageLimit || 0)).toFixed(0) }}</span>
-          </div>
-        </div>
-        <!-- 试用配额 -->
-        <div v-if="account.trialUsageLimit > 0 && account.trialStatus === 'ACTIVE'" class="mb-2">
-          <div class="flex justify-between items-end mb-1">
-            <span class="text-[10px] font-semibold text-[var(--text-secondary)] flex items-center gap-1">
-              <Activity class="w-3 h-3" /> 试用配额
-            </span>
-            <span class="text-[10px] font-bold" :class="(account.trialUsagePercent||0) > 0.8 ? 'text-rose-500' : 'text-emerald-500'">
+        <div v-if="account.trialUsageLimit > 0 && account.trialStatus === 'ACTIVE'" class="quota-row">
+          <div class="quota-head">
+            <span class="quota-label"><Activity :size="11" /> 试用配额</span>
+            <span class="quota-val" :class="`v-${getUsageVariant(account.trialUsagePercent || 0)}`">
               {{ (account.trialUsageCurrent || 0).toFixed(0) }} / {{ (account.trialUsageLimit || 0).toFixed(0) }}
             </span>
           </div>
-          <div class="h-1.5 bg-[var(--bg)] rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
-            <div class="h-full rounded-full transition-all duration-500"
-              :style="{ width: (account.trialUsagePercent || 0) * 100 + '%' }"
-              :class="getUsageColor(account.trialUsagePercent||0)" />
+          <div class="quota-bar">
+            <div class="quota-fill" :class="`v-${getUsageVariant(account.trialUsagePercent || 0)}`"
+                 :style="{ width: ((account.trialUsagePercent || 0) * 100) + '%' }" />
           </div>
         </div>
-        <!-- 主配额 -->
-        <div v-if="account.usageLimit > 0" class="mb-2">
-          <div class="flex justify-between items-end mb-1">
-            <span class="text-[10px] font-semibold text-[var(--text-secondary)] flex items-center gap-1">
-              <Activity class="w-3 h-3" /> 主配额
-            </span>
-            <span class="text-[10px] font-bold" :class="(account.usagePercent||0) > 0.8 ? 'text-rose-500' : 'text-[var(--primary)]'">
+
+        <div v-if="account.usageLimit > 0" class="quota-row">
+          <div class="quota-head">
+            <span class="quota-label"><Activity :size="11" /> 主配额</span>
+            <span class="quota-val" :class="`v-${getUsageVariant(account.usagePercent || 0)}`">
               {{ (account.usageCurrent || 0).toFixed(0) }} / {{ (account.usageLimit || 0).toFixed(0) }}
             </span>
           </div>
-          <div class="h-1.5 bg-[var(--bg)] rounded-full overflow-hidden border border-[var(--border)] p-[1px]">
-            <div class="h-full rounded-full transition-all duration-500"
-              :style="{ width: (account.usagePercent || 0) * 100 + '%' }"
-              :class="getUsageColor(account.usagePercent||0)" />
+          <div class="quota-bar">
+            <div class="quota-fill" :class="`v-${getUsageVariant(account.usagePercent || 0)}`"
+                 :style="{ width: ((account.usagePercent || 0) * 100) + '%' }" />
           </div>
         </div>
       </div>
-      <div v-else class="h-full flex flex-col justify-center items-center py-4 border-2 border-dashed border-[var(--border)] rounded-xl opacity-40">
-        <Clock class="w-5 h-5 mb-1" />
-        <span class="text-xs">无额度信息</span>
+      <div v-else class="quota-empty">
+        <Clock :size="14" />
+        <span>无额度信息</span>
       </div>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="grid grid-cols-3 gap-3 mb-5 p-3 bg-[var(--bg)] rounded-xl border border-[var(--border)]">
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">总请求</div>
-        <div class="text-sm font-bold flex items-center gap-1.5">
-          <Zap class="w-3.5 h-3.5 text-amber-500" /> {{ account.requestCount || 0 }}
+    <!-- 数据网格 -->
+    <div class="stats-grid">
+      <div class="stat-cell">
+        <div class="stat-label">总请求</div>
+        <div class="stat-val"><Zap :size="13" class="ic-warning" />{{ account.requestCount || 0 }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">Token 消耗</div>
+        <div class="stat-val">{{ formatNum(account.totalTokens || 0) }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">并发</div>
+        <div class="stat-val" :class="{ 'is-busy': account.inFlight > 5, 'is-mid': account.inFlight > 0 && account.inFlight <= 5 }">
+          <span v-if="account.inFlight > 0" class="busy-dot" />
+          {{ account.inFlight || 0 }}/10
         </div>
       </div>
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">Token 消耗</div>
-        <div class="text-sm font-bold">{{ formatNum(account.totalTokens || 0) }}</div>
+      <div class="stat-cell">
+        <div class="stat-label">到期时间</div>
+        <div class="stat-val"><Clock :size="13" class="ic-info" />{{ formatTokenExpiry(account.expiresAt) }}</div>
       </div>
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">并发</div>
-        <div class="text-sm font-bold flex items-center gap-1.5">
-          <span v-if="account.inFlight > 0" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-          <span :class="account.inFlight > 5 ? 'text-rose-500' : account.inFlight > 0 ? 'text-amber-500' : ''">
-            {{ account.inFlight || 0 }}/10
-          </span>
-        </div>
+      <div class="stat-cell">
+        <div class="stat-label">权重</div>
+        <select :value="account.weight || 0" @change="changeWeight" class="weight-sel">
+          <option v-for="w in [0,1,2,3,4,5]" :key="w" :value="w">权重 {{ w }}</option>
+        </select>
       </div>
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">到期时间</div>
-        <div class="text-sm font-bold flex items-center gap-1.5">
-          <Clock class="w-3.5 h-3.5 text-blue-500" /> {{ formatTokenExpiry(account.expiresAt) }}
-        </div>
-      </div>
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">权重</div>
-        <div class="flex items-center gap-2">
-          <select :value="account.weight || 0"
-            @change="async e => { try { await api(`/accounts/${account.id}`, { method: 'PUT', body: JSON.stringify({ weight: +e.target.value }) }); await store.load(); success('权重已更新') } catch { error('更新失败') } }"
-            class="text-xs font-bold py-0.5 px-1 border-none bg-transparent hover:bg-white dark:hover:bg-slate-800 rounded transition-colors cursor-pointer outline-none text-[var(--primary)]">
-            <option v-for="w in [0,1,2,3,4,5]" :key="w" :value="w">权重 {{ w }}</option>
-          </select>
-        </div>
-      </div>
-      <div class="space-y-0.5">
-        <div class="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-wider">错误数</div>
-        <div class="text-sm font-bold" :class="account.errorCount > 0 ? 'text-rose-500' : ''">{{ account.errorCount || 0 }}</div>
+      <div class="stat-cell">
+        <div class="stat-label">错误数</div>
+        <div class="stat-val" :class="{ 'is-error': account.errorCount > 0 }">{{ account.errorCount || 0 }}</div>
       </div>
     </div>
 
-    <!-- Action Toolbar -->
-    <div class="flex items-center justify-between gap-2 pt-1">
-      <div class="flex gap-1">
-        <button @click="refresh" :disabled="refreshing" 
-          class="p-2 rounded-lg bg-[var(--bg)] border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-all" title="刷新状态">
-          <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': refreshing }" />
+    <!-- 超开开关（仅 PRO 显示） -->
+    <div v-if="isPro()" class="overquota-row">
+      <div class="oq-label">
+        <Zap :size="13" />
+        <span>超开</span>
+        <span class="oq-hint" title="额度耗尽后仍可调用，按 OVERAGE 计费">?</span>
+      </div>
+      <Switch :modelValue="account.allowOverQuota" @update:modelValue="toggleOverQuota" />
+    </div>
+
+    <!-- 操作栏 -->
+    <div class="actions">
+      <div class="action-group">
+        <button class="ic-btn" @click="refresh" :disabled="refreshing" title="刷新状态">
+          <RefreshCw :size="14" :class="{ spin: refreshing }" />
         </button>
-        <button @click="copyJSON" 
-          class="p-2 rounded-lg bg-[var(--bg)] border border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-all" title="复制配置">
-          <Check v-if="copied" class="w-4 h-4 text-emerald-500" />
-          <Copy v-else class="w-4 h-4" />
+        <button class="ic-btn" @click="copyJSON" title="复制配置">
+          <Check v-if="copied" :size="14" class="ok" />
+          <Copy v-else :size="14" />
         </button>
       </div>
-
-      <div class="flex gap-2">
-        <button v-if="!isBanned()" @click="toggle"
-          class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all"
-          :class="account.enabled 
-            ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200' 
-            : 'bg-[var(--primary)] text-white hover:bg-[var(--primary)]-hover shadow-lg shadow-[var(--primary)]/20'">
-          <Power class="w-3.5 h-3.5" />
-          {{ account.enabled ? '禁用' : '启用' }}
-        </button>
-        <button @click="del" class="p-2 rounded-lg bg-rose-50 dark:bg-rose-900/20 text-rose-600 hover:bg-rose-500 hover:text-white transition-all">
-          <Trash2 class="w-4 h-4" />
-        </button>
+      <div class="action-group">
+        <WorldButton v-if="!isBanned()" :variant="account.enabled ? 'secondary' : 'primary'" size="sm" @click="toggle">
+          <Power :size="13" />
+          <span>{{ account.enabled ? '禁用' : '启用' }}</span>
+        </WorldButton>
+        <button class="ic-btn danger" @click="del" title="删除"><Trash2 :size="14" /></button>
       </div>
     </div>
-  </div>
+  </WorldCard>
 </template>
 
 <style scoped>
-/* 隐藏原生 Select 箭头在某些浏览器 */
-select {
-  appearance: none;
-  background-image: none;
+.account-card {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
+.account-card.is-selected {
+  outline: 2px solid var(--world-accent);
+  outline-offset: -2px;
+}
+.account-card.is-disabled { opacity: 0.7; }
+
+/* === 头部状态徽章 === */
+.card-status {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+}
+.overquota-badge {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: white;
+  font-weight: 800;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+}
+
+/* === 头部信息 === */
+.card-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding-right: 80px;
+}
+.select-cb {
+  width: 18px; height: 18px;
+  margin-top: 2px;
+  accent-color: var(--world-accent);
+  cursor: pointer;
+}
+.head-info { flex: 1; min-width: 0; }
+.account-email {
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  margin: 0 0 6px;
+  truncate: ellipsis;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.sub-badge {
+  padding: 2px 7px;
+  border-radius: var(--world-radius-sm);
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: white;
+}
+.sub-amber  { background: #f59e0b; }
+.sub-violet { background: #8b5cf6; }
+.sub-blue   { background: #3b82f6; }
+.sub-gray   { background: #64748b; }
+.sub-emerald{ background: #10b981; }
+
+.auth-badge {
+  padding: 2px 7px;
+  border-radius: var(--world-radius-sm);
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-mute);
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+/* === 配额 === */
+.usage-section { margin-bottom: 14px; }
+.total-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+.total-label { color: var(--world-text-primary); }
+.total-val { color: var(--world-accent); }
+
+.quota-row { margin-bottom: 6px; }
+.quota-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.quota-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
+}
+.quota-val {
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+.quota-val.v-primary { color: var(--world-accent); }
+.quota-val.v-warning { color: var(--world-warning); }
+.quota-val.v-danger  { color: var(--world-error); }
+
+.quota-bar {
+  height: 5px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-full);
+  padding: 1px;
+  overflow: hidden;
+}
+.quota-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 540ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.quota-fill.v-primary { background: var(--world-accent); }
+.quota-fill.v-warning { background: var(--world-warning); }
+.quota-fill.v-danger  { background: var(--world-error); }
+
+.quota-empty {
+  height: 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 2px dashed var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  color: var(--world-text-dim);
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+/* === Stats grid === */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+}
+.stat-cell { display: flex; flex-direction: column; gap: 3px; }
+.stat-label {
+  font-size: 0.6rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--world-text-mute);
+}
+.stat-val {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+}
+.stat-val.is-error { color: var(--world-error); }
+.stat-val.is-busy  { color: var(--world-error); }
+.stat-val.is-mid   { color: var(--world-warning); }
+.busy-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--world-warning);
+  animation: chip-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chip-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+.ic-warning { color: var(--world-warning); }
+.ic-info { color: var(--world-info); }
+
+.weight-sel {
+  appearance: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 0;
+  background: transparent;
+  border: none;
+  color: var(--world-accent);
+  cursor: pointer;
+}
+
+/* === 超开 toggle === */
+.overquota-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: var(--world-radius-md);
+}
+.oq-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--world-warning);
+}
+.oq-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--world-warning);
+  font-size: 0.6rem;
+  font-weight: 800;
+  cursor: help;
+}
+
+/* === 操作栏 === */
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: auto;
+}
+.action-group { display: flex; gap: 6px; }
+.ic-btn {
+  width: 30px; height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--world-radius-sm);
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-mute);
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+.ic-btn:hover { color: var(--world-accent); border-color: var(--world-accent); }
+.ic-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ic-btn.danger:hover { color: white; background: var(--world-error); border-color: var(--world-error); }
+.ic-btn .ok { color: var(--world-success); }
+.spin { animation: rotate 0.8s linear infinite; }
+@keyframes rotate { to { transform: rotate(360deg); } }
 </style>

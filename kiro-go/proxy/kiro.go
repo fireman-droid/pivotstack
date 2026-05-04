@@ -39,12 +39,6 @@ var kiroEndpoints = []kiroEndpoint{
 		AmzTarget: "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
 		Name:      "CodeWhisperer",
 	},
-	{
-		URL:       "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
-		Origin:    "CLI",
-		AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
-		Name:      "AmazonQ",
-	},
 }
 
 // makeUTLSDialer 创建 UTLS Chrome 指纹 TLS 拨号器
@@ -228,6 +222,9 @@ type KiroStreamCallback struct {
 
 // getSortedEndpoints 根据首选端点配置排序端点列表
 func getSortedEndpoints(preferred string) []kiroEndpoint {
+	if len(kiroEndpoints) <= 1 {
+		return kiroEndpoints
+	}
 	if preferred == "amazonq" {
 		return []kiroEndpoint{kiroEndpoints[1], kiroEndpoints[0]}
 	}
@@ -279,6 +276,19 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 	histLen := len(payload.ConversationState.History)
 	apiDebugLog("[API Request] account=%s | payload=%dKB | tools=%d | history=%d msgs",
 		account.Email, payloadKB, toolCount, histLen)
+
+	// 大上下文软提醒：仅提示，不拦截
+	// 阈值 350KB，避免每轮注入重复提醒
+	if payloadKB >= 350 {
+			warn := "\n\n[System Note] 当前对话上下文 is large and may cause stream interruptions. Please keep only relevant code snippets and shorten long logs/history."
+		content := payload.ConversationState.CurrentMessage.UserInputMessage.Content
+		if !strings.Contains(content, "当前对话上下文较大") {
+			payload.ConversationState.CurrentMessage.UserInputMessage.Content = content + warn
+			payloadBytes, _ = json.Marshal(payload)
+			payloadKB = len(payloadBytes) / 1024
+			apiDebugLog("[SoftWarn] injected large-context reminder, payload=%dKB", payloadKB)
+		}
+	}
 
 	// 根据配置排序端点
 	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())

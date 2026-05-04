@@ -2,7 +2,9 @@
 import { ref } from 'vue'
 import { useAccountsStore } from '../stores/accounts'
 import { useToast } from '../composables/useToast'
-import { VideoPlay, VideoPause, Refresh, Delete, Setting, Download } from '@element-plus/icons-vue'
+import { Play, Pause, RefreshCw, Trash2, Settings, Download, X } from 'lucide-vue-next'
+import WorldButton from './world/WorldButton.vue'
+import WorldChip from './world/WorldChip.vue'
 
 const store = useAccountsStore()
 const { success, error } = useToast()
@@ -12,10 +14,10 @@ async function doBatch(action, extra = {}) {
   const count = store.selectedIds.size
   if (!count) return
   const confirmMap = {
-    enable: `确定启用 ${count} 个账号？`,
+    enable:  `确定启用 ${count} 个账号？`,
     disable: `确定禁用 ${count} 个账号？`,
     refresh: `确定刷新 ${count} 个账号？`,
-    delete: `确定删除 ${count} 个账号？此操作不可撤销！`,
+    delete:  `确定删除 ${count} 个账号？此操作不可撤销！`,
     setWeight: `确定将 ${count} 个账号权重设为 ${extra.weight}？`,
   }
   if (confirmMap[action] && !confirm(confirmMap[action])) return
@@ -40,26 +42,95 @@ async function doBatch(action, extra = {}) {
 </script>
 
 <template>
-  <div v-if="store.selectedIds.size > 0" class="flex items-center gap-3">
-    <span class="text-sm font-medium text-blue-600">已选 {{ store.selectedIds.size }} 项</span>
-    <el-divider direction="vertical" />
-    
-    <el-button-group>
-      <el-button type="primary" :icon="VideoPlay" @click="doBatch('enable')">启用</el-button>
-      <el-button type="info" :icon="VideoPause" @click="doBatch('disable')">禁用</el-button>
-      <el-button type="primary" plain :icon="Refresh" @click="doBatch('refresh')">刷新</el-button>
-      <el-button type="danger" :icon="Delete" @click="doBatch('delete')">删除</el-button>
-    </el-button-group>
-    
-    <div class="flex items-center gap-1">
-      <el-select v-model="weightValue" class="w-20">
-        <el-option v-for="w in [0,1,2,3,4,5]" :key="w" :label="'W:'+w" :value="w" />
-      </el-select>
-      <el-button type="warning" :icon="Setting" @click="doBatch('setWeight', { weight: weightValue })">设权重</el-button>
+  <div v-if="store.selectedIds.size > 0" class="batch-bar">
+    <WorldChip variant="accent" :dot="true">已选 {{ store.selectedIds.size }} 项</WorldChip>
+
+    <span class="divider" />
+
+    <div class="btn-group">
+      <WorldButton variant="primary" size="sm" @click="doBatch('enable')">
+        <Play :size="13" /><span>启用</span>
+      </WorldButton>
+      <WorldButton variant="secondary" size="sm" @click="doBatch('disable')">
+        <Pause :size="13" /><span>禁用</span>
+      </WorldButton>
+      <WorldButton variant="secondary" size="sm" @click="doBatch('refresh')">
+        <RefreshCw :size="13" /><span>刷新</span>
+      </WorldButton>
+      <WorldButton variant="danger" size="sm" @click="doBatch('delete')">
+        <Trash2 :size="13" /><span>删除</span>
+      </WorldButton>
     </div>
-    
-    <el-button type="success" :icon="Download" @click="doBatch('export')">导出</el-button>
-    
-    <el-button link type="info" @click="store.clearSelection()">取消选择</el-button>
+
+    <span class="divider" />
+
+    <div class="weight-group">
+      <select v-model="weightValue" class="weight-select">
+        <option v-for="w in [0,1,2,3,4,5]" :key="w" :value="w">W: {{ w }}</option>
+      </select>
+      <WorldButton variant="secondary" size="sm" @click="doBatch('setWeight', { weight: weightValue })">
+        <Settings :size="13" /><span>设权重</span>
+      </WorldButton>
+    </div>
+
+    <WorldButton variant="secondary" size="sm" @click="doBatch('export')">
+      <Download :size="13" /><span>导出</span>
+    </WorldButton>
+
+    <button type="button" class="cancel-btn" @click="store.clearSelection()">
+      <X :size="13" /><span>取消选择</span>
+    </button>
   </div>
 </template>
+
+<style scoped>
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--world-glass-bg-strong);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-lg);
+  backdrop-filter: blur(var(--world-glass-blur));
+  -webkit-backdrop-filter: blur(var(--world-glass-blur));
+  box-shadow: var(--world-shadow-sm);
+}
+.divider {
+  width: 1px;
+  height: 22px;
+  background: var(--world-divider);
+}
+.btn-group, .weight-group { display: flex; gap: 6px; align-items: center; }
+
+.weight-select {
+  padding: 0 10px;
+  height: 30px;
+  border-radius: var(--world-radius-sm);
+  background: var(--world-overlay-light);
+  border: 1px solid var(--world-glass-border);
+  color: var(--world-text-primary);
+  font-family: var(--world-font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  outline: none;
+}
+.weight-select:focus { border-color: var(--world-accent); }
+
+.cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--world-text-mute);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 200ms;
+}
+.cancel-btn:hover { color: var(--world-error); }
+</style>

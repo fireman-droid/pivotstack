@@ -1,0 +1,24 @@
+/**
+ * 双世界字体定义
+ * - daogui (道诡): 霞鹜文楷（开源中文楷体）+ Cinzel 罗马式衬线
+ * - reality (现实): Inter / Space Grotesk + 系统无衬线 fallback
+ *
+ * Fallback 链：CDN 失效时回落到 'Noto Serif SC' / 系统字体 / serif
+ * 不阻断渲染：font-display: swap 保证首屏不空白
+ */
+
+/* CSS @import 必须先于其他规则 */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* 霞鹜文楷 - 开源中文楷体（jsdelivr CDN） */
+@font-face {
+  font-family: 'LXGW WenKai';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.woff2') format('woff2');
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2000-206F, U+2070-209F,
+                 U+2100-214F, U+2150-218F, U+2190-21FF, U+2200-22FF,
+                 U+3000-303F, U+3040-309F, U+30A0-30FF, U+3400-4DBF,
+                 U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}

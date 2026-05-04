@@ -117,7 +117,22 @@ func buildModelInfo(id, ownedBy string, supportsImage bool) map[string]interface
 
 // refreshModelsCache 从 Kiro API 拉取模型列表并缓存
 func (h *Handler) refreshModelsCache() {
-	account := h.pool.GetNext()
+	// Try a handful of accounts to find a kiro-backend one — relay accounts
+	// can't enumerate Kiro's model list. Loop limit prevents starvation if
+	// the pool happens to be all-relay.
+	var account *config.Account
+	for i := 0; i < 8; i++ {
+		acc := h.pool.GetNext()
+		if acc == nil {
+			return
+		}
+		if true {
+			account = acc
+			break
+		}
+		// release relay account immediately so we don't pin its in-flight slot
+		h.pool.ReleaseAccount(acc.ID)
+	}
 	if account == nil {
 		return
 	}

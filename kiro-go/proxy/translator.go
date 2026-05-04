@@ -4,10 +4,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"kiro-api-proxy/config"
 
 	"github.com/google/uuid"
 )
@@ -20,6 +23,11 @@ type modelMapping struct {
 
 var modelMapOrdered = []modelMapping{
 	{"claude-sonnet-4-20250514", "claude-sonnet-4"},
+	// 4.7 系列：上游不存在 4.7，统一映射到 4.6（PRO 池）
+	{"claude-sonnet-4-7", "claude-sonnet-4.6"},
+	{"claude-sonnet-4.7", "claude-sonnet-4.6"},
+	{"claude-opus-4-7", "claude-opus-4.6"},
+	{"claude-opus-4.7", "claude-opus-4.6"},
 	{"claude-sonnet-4-5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4.5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4-6", "claude-sonnet-4.6"},
@@ -116,6 +124,9 @@ func DeterminePoolTier(model string) string {
 	proModels := []string{
 		"claude-sonnet-4.6", "claude-sonnet-4-6",
 		"claude-opus-4.6", "claude-opus-4-6",
+		// 4.7 系列也走 PRO 池（最终经 ParseModelAndThinking 归一为 4.6）
+		"claude-sonnet-4.7", "claude-sonnet-4-7",
+		"claude-opus-4.7", "claude-opus-4-7",
 	}
 	for _, pm := range proModels {
 		if strings.Contains(baseLower, pm) {
@@ -127,18 +138,21 @@ func DeterminePoolTier(model string) string {
 
 // ValidateAndMapModel 根据号池类型映射模型
 // FREE 池：所有模型映射到 claude-sonnet-4.5
-// PRO 池：只允许 4.6 系列
+// PRO 池：只允许 4.6 系列（4.7 经 MapModel 归一为 4.6 后亦放行）
 func ValidateAndMapModel(model, subscriptionType string) (string, error) {
 	// 移除 thinking 后缀做基础判断
 	baseModel := strings.TrimSuffix(strings.TrimSuffix(model, "-thinking"), "-think")
-	baseLower := strings.ToLower(baseModel)
 
 	if subscriptionType == "" || subscriptionType == "FREE" {
 		// FREE 账号：所有模型映射到 claude-sonnet-4.5
 		return "claude-sonnet-4.5", nil
 	}
 
-	// PRO/PRO_PLUS/POWER 账号：只允许特定模型
+	// 先经 MapModel 归一（如 4.7 → 4.6），再判定 allowed
+	normalized := MapModel(baseModel)
+	normalizedLower := strings.ToLower(normalized)
+
+	// PRO/PRO_PLUS/POWER 账号：只允许 4.6 系列（归一后）
 	allowedModels := map[string]bool{
 		"claude-sonnet-4.6": true,
 		"claude-sonnet-4-6": true,
@@ -146,8 +160,8 @@ func ValidateAndMapModel(model, subscriptionType string) (string, error) {
 		"claude-opus-4-6":   true,
 	}
 
-	if allowedModels[baseLower] {
-		return baseModel, nil
+	if allowedModels[normalizedLower] {
+		return normalized, nil
 	}
 
 	// 拒绝其他模型
@@ -162,6 +176,54 @@ func DowngradeForFree(model, subscriptionType string) string {
 	}
 	return mapped
 }
+
+// stealthRng is seeded once at package init.
+var stealthRng = rand.New(rand.NewSource(time.Now().UnixNano()))
+var stealthRngMu sync.Mutex
+
+func stealthRoll() float64 {
+	stealthRngMu.Lock()
+	defer stealthRngMu.Unlock()
+	return stealthRng.Float64()
+}
+
+// ApplyStealth decides the model actually sent upstream based on stealth config.
+// Returns (upstreamModel, swapped). swapped=true means the user-requested model
+// was secretly replaced. Must be called AFTER ValidateAndMapModel.
+func ApplyStealth(validatedModel string) (string, bool) {
+	s := config.GetStealth()
+	if !s.Enabled {
+		return validatedModel, false
+	}
+	base := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(validatedModel, "-thinking"), "-think"))
+
+	isOpus46 := strings.Contains(base, "opus-4.6") || strings.Contains(base, "opus-4-6")
+	isSonnet46 := !isOpus46 && (strings.Contains(base, "sonnet-4.6") || strings.Contains(base, "sonnet-4-6"))
+
+	if isOpus46 && s.OpusFakeRatio > 0 && stealthRoll() < s.OpusFakeRatio {
+		target := s.OpusFakeTarget
+		if target == "" {
+			target = "claude-sonnet-4.6"
+		}
+		// Preserve thinking suffix if present in the original validated model
+		if strings.HasSuffix(validatedModel, "-thinking") {
+			return target + "-thinking", true
+		}
+		return target, true
+	}
+	if isSonnet46 && s.SonnetFakeRatio > 0 && stealthRoll() < s.SonnetFakeRatio {
+		target := s.SonnetFakeTarget
+		if target == "" {
+			target = "claude-sonnet-4.5"
+		}
+		if strings.HasSuffix(validatedModel, "-thinking") {
+			return target + "-thinking", true
+		}
+		return target, true
+	}
+	return validatedModel, false
+}
+
 
 // ==================== Claude API 类型 ====================
 

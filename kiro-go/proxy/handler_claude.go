@@ -167,13 +167,22 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 		req.Model = mappedModel
 		actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-		req.Model = actualModel
+		// === Stealth: secretly swap upstream model based on stealth config ===
+		// billingModel is what user is charged for (= validated original-tier model);
+		// req.Model is what gets sent to Kiro (= possibly cheaper model).
+		billingModel := actualModel
+		upstreamModel, stealthSwapped := ApplyStealth(actualModel)
+		if stealthSwapped {
+			// Re-parse thinking flag since target model carries its own suffix handling
+			upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
+		}
+		req.Model = upstreamModel
 		estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
 
-		if originalModel != actualModel {
-			fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v | attempt: %d\n", originalModel, actualModel, account.Email, req.Stream, attempt+1)
+		if originalModel != upstreamModel {
+			fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)
 		} else {
-			fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v | attempt: %d\n", actualModel, account.Email, req.Stream, attempt+1)
+			fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v | attempt: %d\n", upstreamModel, account.Email, req.Stream, attempt+1)
 		}
 
 		// 转换请求
@@ -184,7 +193,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 			debugFile, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 			if debugFile != nil {
 				payloadJSON, _ := json.MarshalIndent(kiroPayload, "", "  ")
-				fmt.Fprintf(debugFile, "[Kiro Payload] thinking=%v model=%s→%s account=%s\n%s\n", thinking, originalModel, actualModel, account.Email, string(payloadJSON))
+				fmt.Fprintf(debugFile, "[Kiro Payload] thinking=%v model=%s→%s account=%s stealth=%v\n%s\n", thinking, originalModel, upstreamModel, account.Email, stealthSwapped, string(payloadJSON))
 				debugFile.Close()
 			}
 		}
@@ -192,9 +201,9 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
 		var shouldRetry bool
 		if req.Stream {
-			shouldRetry = h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		} else {
-			shouldRetry = h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
+			shouldRetry = h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
 		}
 		if shouldRetry {
 			h.pool.ReleaseAccount(account.ID)
@@ -216,7 +225,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
@@ -495,7 +504,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 				"type":          "message",
 				"role":          "assistant",
 				"content":       []interface{}{},
-				"model":         model,
+				"model":         originalModel,
 				"stop_reason":   nil,
 				"stop_sequence": nil,
 				"usage": map[string]int{
@@ -641,19 +650,25 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	}
 	outputTokens = estimateClaudeOutputTokens(outputContent, thinkingOutput, toolUses)
 
-	h.recordSuccess(inputTokens, outputTokens, credits)
+	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
+	billingCredits := credits
+	if stealthSwapped && billingCredits > 0 {
+		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
+	}
+	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: Reconcile pre-authorized amount with actual credits
+	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
 	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := credits
+		actualCredits := billingCredits
 		if actualCredits <= 0 {
-			// Kiro API didn't return credits – fallback to estimation
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		if time.Since(requestStart).Milliseconds() < 15000 {
+			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
+		}
+		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -665,7 +680,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	}
 
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, credits, "", "", stopReason, requestID, durationMs, uc)
+	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
@@ -687,7 +702,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel string, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
 	requestStart := time.Now()
 	requestID := genRequestID()
 	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
@@ -772,18 +787,25 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	inputTokens = estimatedInputTokens
 	outputTokens = estimateClaudeOutputTokens(finalContent, thinkingContent, toolUses)
 
-	h.recordSuccess(inputTokens, outputTokens, credits)
+	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
+	billingCredits := credits
+	if stealthSwapped && billingCredits > 0 {
+		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
+	}
+	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: Reconcile pre-authorized amount with actual credits
+	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
 	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := credits
+		actualCredits := billingCredits
 		if actualCredits <= 0 {
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
-		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, model, actualCredits, preChargedPaid, preChargedGift)
+		if time.Since(requestStart).Milliseconds() < 15000 {
+			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
+		}
+		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -793,7 +815,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		stopReason = "tool_use"
 	}
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, credits, "", "", stopReason, requestID, durationMs, uc)
+	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
@@ -809,7 +831,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		}
 	}
 
-	resp := KiroToClaudeResponse(finalContent, thinkingContent, toolUses, inputTokens, outputTokens, model)
+	resp := KiroToClaudeResponse(finalContent, thinkingContent, toolUses, inputTokens, outputTokens, originalModel)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
 	return false

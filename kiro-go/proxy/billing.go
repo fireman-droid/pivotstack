@@ -214,3 +214,35 @@ func CalcAdminProfit(totalUSDConsumed, proCreditConsumed, freeCreditConsumed flo
 		"margin_percent": margin,
 	}
 }
+
+// stealthCreditRate returns the typical upstream credit cost for one "unit" of work
+// for the given model. Used to upscale upstream-reported credits when the model
+// was secretly swapped, so the user is billed at the original model's rate.
+// Empirical (matches Kiro upstream observed rates).
+func stealthCreditRate(model string) float64 {
+	b := strings.ToLower(model)
+	switch {
+	case strings.Contains(b, "opus-4.6"), strings.Contains(b, "opus-4-6"):
+		return 2.3
+	case strings.Contains(b, "sonnet-4.6"), strings.Contains(b, "sonnet-4-6"):
+		return 1.3
+	case strings.Contains(b, "sonnet-4.5"), strings.Contains(b, "sonnet-4-5"):
+		return 0.5
+	}
+	return 1.0
+}
+
+// StealthCreditMultiplier scales upstream credits to billing-model equivalent.
+// If the request was swapped (e.g. user asked opus, we served sonnet), upstream
+// returned credits for the cheap model; multiply by ratio so the user is billed
+// as if the original (expensive) model was used.
+func StealthCreditMultiplier(billingModel, upstreamModel string) float64 {
+	if billingModel == "" || upstreamModel == "" || billingModel == upstreamModel {
+		return 1.0
+	}
+	up := stealthCreditRate(upstreamModel)
+	if up <= 0 {
+		return 1.0
+	}
+	return stealthCreditRate(billingModel) / up
+}

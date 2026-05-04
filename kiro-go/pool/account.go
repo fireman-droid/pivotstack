@@ -134,7 +134,7 @@ func (p *AccountPool) GetNext() *config.Account {
 		// 跳过额度已用尽的账号（检查主配额和试用配额）
 		mainQuotaExhausted := acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit
 		trialQuotaExhausted := acc.TrialUsageLimit > 0 && acc.TrialUsageCurrent >= acc.TrialUsageLimit
-		if mainQuotaExhausted && trialQuotaExhausted {
+		if mainQuotaExhausted && trialQuotaExhausted && !acc.AllowOverQuota {
 			seen[accID] = true
 			continue
 		}
@@ -149,7 +149,7 @@ func (p *AccountPool) GetNext() *config.Account {
 	var earliest time.Time
 	for id, acc := range p.accounts {
 		// 额度用尽的账号不作为 fallback
-		if acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit {
+		if acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit && !acc.AllowOverQuota {
 			continue
 		}
 		if cooldown, ok := p.cooldowns[id]; ok {
@@ -342,7 +342,7 @@ func (p *AccountPool) GetNextByTier(tier string) *config.Account {
 		// 跳过额度已用尽的账号
 		mainQuotaExhausted := acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit
 		trialQuotaExhausted := acc.TrialUsageLimit > 0 && acc.TrialUsageCurrent >= acc.TrialUsageLimit
-		if mainQuotaExhausted && trialQuotaExhausted {
+		if mainQuotaExhausted && trialQuotaExhausted && !acc.AllowOverQuota {
 			seen[accID] = true
 			continue
 		}
@@ -359,7 +359,7 @@ func (p *AccountPool) GetNextByTier(tier string) *config.Account {
 		if !isAccountInTier(acc, tier) {
 			continue
 		}
-		if acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit {
+		if acc.UsageLimit > 0 && acc.UsageCurrent >= acc.UsageLimit && !acc.AllowOverQuota {
 			continue
 		}
 		if cooldown, ok := p.cooldowns[id]; ok {

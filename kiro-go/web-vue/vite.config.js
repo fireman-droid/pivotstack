@@ -13,10 +13,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/admin': 'http://localhost:8080',
-      '/user/api': 'http://localhost:8080',
-      '/v1': 'http://localhost:8080',
-      '/health': 'http://localhost:8080',
+      '/admin':    { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
+      '/user/api': { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
+      '/v1':       { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
+      '/health':   { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
     },
   },
   build: {

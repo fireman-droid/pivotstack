@@ -3,10 +3,18 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useUserAuth } from '../stores/userAuth'
+import { useWorldTheme } from '../stores/worldTheme'
+import WorldCard from '../components/world/WorldCard.vue'
+import WorldInput from '../components/world/WorldInput.vue'
+import WorldButton from '../components/world/WorldButton.vue'
+import WorldChip from '../components/world/WorldChip.vue'
+import WorldSwitcher from '../components/WorldSwitcher.vue'
+import { Shield, AlertCircle, ArrowRight } from 'lucide-vue-next'
 
 const router = useRouter()
 const auth = useAuthStore()
 const userAuth = useUserAuth()
+const theme = useWorldTheme()
 const input = ref('')
 const error = ref('')
 const loading = ref(false)
@@ -18,128 +26,315 @@ async function handleLogin() {
   const val = input.value.trim()
 
   try {
-    // Try user login first
     const userOk = await userAuth.login(val, true)
-    if (userOk) {
-      router.push('/user/dashboard')
-      return
-    }
+    if (userOk) { router.push('/user/dashboard'); return }
   } catch {}
 
   try {
-    // Then try admin login
     const adminOk = await auth.login(val)
-    if (adminOk) {
-      router.push('/')
-      return
-    }
+    if (adminOk) { router.push('/'); return }
   } catch {}
 
-  // Both failed
   error.value = '凭证无效'
-  // Clean up failed user attempt
   userAuth.logout()
   loading.value = false
 }
 </script>
 
 <template>
-  <div class="min-h-screen w-full flex flex-col items-center justify-center p-8 relative overflow-hidden">
-    <div class="absolute inset-0 z-0">
-      <div class="absolute top-[-15%] left-[20%] w-[50%] h-[50%] bg-[var(--primary)] opacity-[0.06] blur-[150px] rounded-full animate-blood-mist"></div>
-      <div class="absolute bottom-[-10%] right-[10%] w-[40%] h-[40%] bg-text-secondary opacity-[0.08] blur-[120px] rounded-full animate-blood-mist" style="animation-delay: -3s;"></div>
+  <div class="login-shell">
+    <!-- 背景层 -->
+    <div class="bg-fx" aria-hidden="true">
+      <div class="fx-blob fx-1" />
+      <div class="fx-blob fx-2" />
+      <div class="fx-grid" />
     </div>
 
-    <div class="w-full max-w-[460px] relative z-10 flex flex-col items-stretch">
-      <div class="text-center mb-14 flex flex-col items-center gap-5">
-        <div class="relative">
-          <svg class="w-20 h-20 animate-rune-pulse" viewBox="0 0 100 100">
-            <circle cx="50" cy="50" r="45" fill="none" stroke="#b8860b" stroke-width="5" opacity="0.7" />
-            <circle cx="50" cy="50" r="42" fill="none" stroke="#b8860b" stroke-width="1" opacity="0.3" />
-            <rect x="36" y="36" width="28" height="28" fill="none" stroke="#b8860b" stroke-width="4" opacity="0.7" />
-            <path d="M50 12 L50 24 M88 50 L76 50 M50 88 L50 76 M12 50 L24 50" stroke="#b8860b" stroke-width="3" opacity="0.4" />
+    <!-- 右上 主题切换 -->
+    <div class="login-switcher">
+      <WorldSwitcher />
+    </div>
+
+    <!-- 中央容器 -->
+    <main class="login-content">
+      <!-- 品牌区 -->
+      <header class="brand-row">
+        <div class="brand-mark">
+          <!-- daogui: 心蟠/钱币 -->
+          <svg v-if="theme.currentWorld === 'daogui'" class="mark-svg dg" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="#b8860b" stroke-width="3" opacity="0.6" />
+            <circle cx="50" cy="50" r="38" fill="none" stroke="#c41e3a" stroke-width="2" opacity="0.7" />
+            <rect x="36" y="36" width="28" height="28" fill="none" stroke="#b8860b" stroke-width="3" opacity="0.65" />
+            <path d="M50 14 L50 24 M86 50 L76 50 M50 86 L50 76 M14 50 L24 50" stroke="#c41e3a" stroke-width="2.5" opacity="0.6" />
           </svg>
-          <div class="absolute inset-0 rounded-full bg-[var(--world-accent-alt)] opacity-[0.08] blur-xl animate-rune-pulse"></div>
-        </div>
-        <div class="space-y-2">
-          <h1 class="text-4xl font-black tracking-tighter text-[var(--text)]">
-            Kiro<span class="text-[var(--primary)]">Stack</span>
-          </h1>
-          <p class="text-[var(--text)]-secondary font-bold uppercase tracking-[0.25em] text-[10px]">High Performance Proxy Gateway</p>
-        </div>
-      </div>
-
-      <div class="bg-[var(--card)]/80 backdrop-blur-2xl border border-[var(--border)] rounded-3xl px-10 py-14 shadow-2xl flex flex-col gap-10 relative overflow-hidden">
-        <div class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#b8860b]/40 to-transparent"></div>
-        <div class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#c41e3a]/30 to-transparent"></div>
-
-        <div class="space-y-2">
-          <h2 class="text-xl font-bold text-[var(--text)] tracking-tight">身 份 鉴 权</h2>
-          <p class="text-[var(--text)]-secondary text-[10px] font-bold uppercase tracking-[0.2em]">Authentication Required</p>
-        </div>
-
-        <form @submit.prevent="handleLogin" class="flex flex-col gap-8">
-          <div class="flex flex-col gap-3">
-            <label class="block text-[10px] font-black uppercase tracking-[0.3em] text-[var(--world-accent-alt)] ml-1">凭证 / CREDENTIAL</label>
-            <div class="relative group">
-              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--world-accent-alt)]/40 text-lg select-none">卍</span>
-              <input 
-                v-model="input" 
-                type="password" 
-                placeholder="请输入访问凭证..." 
-                required
-                autofocus
-                class="w-full h-16 pl-12 pr-6 bg-[var(--bg)]/60 border border-[var(--border)] rounded-xl text-[var(--text)] outline-none focus:border-[var(--primary)]/50 focus:shadow-[0_0_20px_rgba(196,30,58,0.15)] transition-all text-base font-medium placeholder:text-[var(--text)]-secondary"
-              />
-            </div>
+          <!-- reality: 医疗徽章 -->
+          <div v-else class="mark-medical">
+            <Shield :size="32" stroke-width="2.2" />
           </div>
+        </div>
+        <h1 class="brand-name">
+          Kiro<span class="brand-accent">Stack</span>
+        </h1>
+        <p class="brand-tagline">控制台 · Admin Portal</p>
+      </header>
 
-          <button 
-            type="submit" 
-            :disabled="loading"
-            class="w-full h-16 rounded-xl bg-[var(--primary)] hover:bg-[#d42444] text-white font-black text-base shadow-xl shadow-[var(--primary)]/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 blood-glow-hover relative overflow-hidden"
+      <!-- 表单卡片 -->
+      <WorldCard padding="lg" :hover="false" elevated class="login-card">
+        <div class="card-eyebrow">
+          <span class="dot" />
+          <span>身份鉴权 · Authentication</span>
+        </div>
+
+        <form @submit.prevent="handleLogin" class="login-form">
+          <WorldInput
+            v-model="input"
+            type="password"
+            label="凭证 / Credential"
+            placeholder="请输入访问凭证"
+            :monospace="true"
+            size="lg"
+            :error="error || ''"
+            @enter="handleLogin"
+          />
+
+          <WorldButton
+            type="submit"
+            variant="primary"
+            size="lg"
+            :loading="loading"
+            :block="true"
           >
-            <template v-if="!loading">
-              <span>登 录</span>
-              <span class="text-lg opacity-60">☯</span>
-            </template>
-            <template v-else>
-              <svg class="w-6 h-6 animate-coin-spin" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="6" opacity="0.6" />
-                <rect x="38" y="38" width="24" height="24" fill="none" stroke="currentColor" stroke-width="4" opacity="0.6" />
-              </svg>
-              <span>验 证 中...</span>
-            </template>
-          </button>
+            <span>{{ loading ? '验证中' : '登录' }}</span>
+            <ArrowRight v-if="!loading" :size="16" />
+          </WorldButton>
         </form>
 
-        <Transition name="fade-slide">
-          <div v-if="error" class="p-4 rounded-xl bg-[var(--primary)]/10 border border-[var(--primary)]/25 text-[var(--primary)] text-sm font-bold text-center flex items-center justify-center gap-2">
-            <span class="text-lg">☠</span>
-            {{ error }}
+        <Transition name="fade-up">
+          <div v-if="error" class="error-row">
+            <WorldChip variant="danger" :dot="true">
+              <AlertCircle :size="13" />
+              <span>{{ error }}</span>
+            </WorldChip>
           </div>
         </Transition>
-      </div>
+      </WorldCard>
 
-      <div class="mt-12 text-center text-[9px] font-bold uppercase tracking-[0.5em] text-[var(--text)]-secondary">
-        &copy; 2026 KIRO ENGINEERING · SECURED PROTOCOL
-      </div>
-    </div>
+      <p class="login-foot">
+        © 2026 KIRO STACK · Secured Channel
+      </p>
+    </main>
   </div>
 </template>
 
 <style scoped>
-.fade-slide-enter-active, .fade-slide-leave-active {
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+.login-shell {
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: hidden;
+  font-family: var(--world-font-sans);
 }
-.fade-slide-enter-from { opacity: 0; transform: translateY(12px); }
-.fade-slide-leave-to { opacity: 0; }
 
+/* === 背景层 === */
+.bg-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.fx-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.15;
+  will-change: transform;
+}
+.fx-1 {
+  top: -10%;
+  left: 10%;
+  width: 50%;
+  height: 50%;
+  background: var(--world-accent);
+  animation: blob-drift 12s ease-in-out infinite;
+}
+.fx-2 {
+  bottom: -10%;
+  right: 5%;
+  width: 40%;
+  height: 40%;
+  background: var(--world-paper-aged, var(--world-accent-soft, #38bdf8));
+  animation: blob-drift 14s ease-in-out -4s infinite;
+}
+.fx-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.4;
+}
+[data-world="daogui"] .fx-blob { opacity: 0.18; }
+[data-world="daogui"] .fx-grid { opacity: 0.06; }
+
+@keyframes blob-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(20px, -10px) scale(1.05); }
+}
+
+/* === 主题切换器 === */
+.login-switcher {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 10;
+}
+
+/* === 中央内容 === */
+.login-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* === 品牌 === */
+.brand-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+.brand-mark {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mark-svg.dg {
+  width: 100%;
+  height: 100%;
+  animation: rune-pulse 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 12px rgba(184, 134, 11, 0.4));
+}
+.mark-medical {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--world-radius-2xl);
+  background: linear-gradient(135deg, var(--world-accent), var(--world-accent-soft, #38bdf8));
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 32px -8px rgba(2, 132, 199, 0.45);
+}
+.brand-name {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
+}
+.brand-accent {
+  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand-tagline {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--world-text-mute);
+  margin: 0;
+}
+
+/* === 卡片 === */
+.login-card {
+  position: relative;
+}
+.card-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--world-text-mute);
+  text-transform: uppercase;
+  margin-bottom: 22px;
+}
+.card-eyebrow .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--world-accent);
+  box-shadow: 0 0 6px var(--world-accent);
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.error-row {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+}
+.login-foot {
+  text-align: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--world-text-dim);
+  margin: 0;
+}
+
+/* === 入场动画 === */
+.login-content { animation: bloom-in 0.6s var(--world-ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1)); }
+@keyframes bloom-in {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.97); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+[data-world="daogui"] .login-content { animation: dg-bloom-in 0.7s var(--world-ease-bounce); }
+@keyframes dg-bloom-in {
+  0%   { opacity: 0; transform: scale(0.94); filter: blur(8px); }
+  100% { opacity: 1; transform: scale(1);    filter: blur(0); }
+}
+
+.fade-up-enter-active { transition: all 320ms cubic-bezier(0.16, 1, 0.3, 1); }
+.fade-up-leave-active { transition: all 220ms ease; }
+.fade-up-enter-from   { opacity: 0; transform: translateY(8px); }
+.fade-up-leave-to     { opacity: 0; }
+
+/* 移动端 */
+@media (max-width: 480px) {
+  .login-content { gap: 22px; }
+  .brand-name { font-size: 1.6rem; }
+  .login-switcher { top: 12px; right: 12px; }
+}
+
+/* 自动填充修复 */
 input:-webkit-autofill,
-input:-webkit-autofill:hover, 
+input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-  -webkit-text-fill-color: #e5e5e5;
-  -webkit-box-shadow: 0 0 0px 1000px #0a0a0a inset;
+  -webkit-text-fill-color: var(--world-text-primary);
+  -webkit-box-shadow: 0 0 0 1000px var(--world-bg-card) inset;
   transition: background-color 5000s ease-in-out 0s;
 }
 </style>

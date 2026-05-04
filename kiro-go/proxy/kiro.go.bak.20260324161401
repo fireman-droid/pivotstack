@@ -1,0 +1,797 @@
+// Package proxy Kiro API 代理核心
+// 负责调用 Kiro API 并解析 AWS Event Stream 响应
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"kiro-api-proxy/config"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	utls "github.com/refraction-networking/utls"
+)
+
+const KiroVersion = "1.28.0"
+
+// 双端点配置（429 时自动 fallback）
+type kiroEndpoint struct {
+	URL       string
+	Origin    string
+	AmzTarget string
+	Name      string
+}
+
+var kiroEndpoints = []kiroEndpoint{
+	{
+		URL:       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
+		Origin:    "AI_EDITOR",
+		AmzTarget: "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+		Name:      "CodeWhisperer",
+	},
+	{
+		URL:       "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+		Origin:    "CLI",
+		AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
+		Name:      "AmazonQ",
+	},
+}
+
+// makeUTLSDialer 创建 UTLS Chrome 指纹 TLS 拨号器
+// 使用 Chrome 的 TLS 指纹而非 Go 标准库指纹，防止 AWS 识别为非标准客户端
+func makeUTLSDialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+
+		var netConn net.Conn
+		if proxyURL := os.Getenv("VPN_PROXY_URL"); proxyURL != "" {
+			p, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, err
+			}
+			// 通过代理建立 TCP 连接
+			d := &net.Dialer{Timeout: 30 * time.Second}
+			netConn, err = d.DialContext(ctx, "tcp", net.JoinHostPort(p.Hostname(), p.Port()))
+			if err != nil {
+				return nil, err
+			}
+			// CONNECT 隧道
+			connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", addr, addr)
+			_, err = netConn.Write([]byte(connectReq))
+			if err != nil {
+				netConn.Close()
+				return nil, err
+			}
+			// 读取代理响应（简单方式）
+			buf := make([]byte, 4096)
+			n, err := netConn.Read(buf)
+			if err != nil || !strings.Contains(string(buf[:n]), "200") {
+				netConn.Close()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("proxy CONNECT failed: %s", string(buf[:n]))
+			}
+		} else {
+			d := &net.Dialer{Timeout: 30 * time.Second}
+			netConn, err = d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// UTLS Chrome 指纹 + 强制 HTTP/1.1
+		spec, err := utls.UTLSIdToSpec(utls.HelloChrome_Auto)
+		if err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		for _, ext := range spec.Extensions {
+			if alpn, ok := ext.(*utls.ALPNExtension); ok {
+				alpn.AlpnProtocols = []string{"http/1.1"}
+				break
+			}
+		}
+		tlsConn := utls.UClient(netConn, &utls.Config{ServerName: host}, utls.HelloCustom)
+		if err := tlsConn.ApplyPreset(&spec); err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			netConn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+}
+
+// 全局 HTTP 客户端，UTLS Chrome 指纹 + 支持 VPN_PROXY_URL 代理
+var kiroHttpClient = func() *http.Client {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		ForceAttemptHTTP2:   false,                                                  // UTLS 强制 HTTP/1.1
+		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{}, // 禁用 Go 内置 HTTP/2
+		DialTLSContext:      makeUTLSDialer(),
+	}
+	// 注意：代理已在 UTLS dialer 中处理，不再设置 transport.Proxy
+	return &http.Client{Timeout: 0, Transport: transport} // Timeout=0: 流式响应不设超时
+}()
+
+// ==================== 请求结构 ====================
+
+// KiroPayload Kiro API 请求体
+type KiroPayload struct {
+	ConversationState struct {
+		ChatTriggerType string `json:"chatTriggerType"`
+		ConversationID  string `json:"conversationId"`
+		CurrentMessage  struct {
+			UserInputMessage KiroUserInputMessage `json:"userInputMessage"`
+		} `json:"currentMessage"`
+		History []KiroHistoryMessage `json:"history,omitempty"`
+	} `json:"conversationState"`
+	ProfileArn      string           `json:"profileArn,omitempty"`
+	InferenceConfig *InferenceConfig `json:"inferenceConfig,omitempty"`
+}
+
+type KiroUserInputMessage struct {
+	Content                 string                   `json:"content"`
+	ModelID                 string                   `json:"modelId"`
+	Origin                  string                   `json:"origin"`
+	Images                  []KiroImage              `json:"images,omitempty"`
+	UserInputMessageContext *UserInputMessageContext `json:"userInputMessageContext,omitempty"`
+}
+
+type UserInputMessageContext struct {
+	Tools       []KiroToolWrapper `json:"tools,omitempty"`
+	ToolResults []KiroToolResult  `json:"toolResults,omitempty"`
+}
+
+type KiroToolWrapper struct {
+	ToolSpecification struct {
+		Name        string      `json:"name"`
+		Description string      `json:"description"`
+		InputSchema InputSchema `json:"inputSchema"`
+	} `json:"toolSpecification"`
+}
+
+type InputSchema struct {
+	JSON interface{} `json:"json"`
+}
+
+type KiroToolResult struct {
+	ToolUseID string              `json:"toolUseId"`
+	Content   []KiroResultContent `json:"content"`
+	Status    string              `json:"status"`
+}
+
+type KiroResultContent struct {
+	Text string `json:"text"`
+}
+
+type KiroImage struct {
+	Format string `json:"format"`
+	Source struct {
+		Bytes string `json:"bytes"`
+	} `json:"source"`
+}
+
+type KiroHistoryMessage struct {
+	UserInputMessage         *KiroUserInputMessage         `json:"userInputMessage,omitempty"`
+	AssistantResponseMessage *KiroAssistantResponseMessage `json:"assistantResponseMessage,omitempty"`
+}
+
+type KiroAssistantResponseMessage struct {
+	Content  string        `json:"content"`
+	ToolUses []KiroToolUse `json:"toolUses,omitempty"`
+}
+
+type KiroToolUse struct {
+	ToolUseID string                 `json:"toolUseId"`
+	Name      string                 `json:"name"`
+	Input     map[string]interface{} `json:"input"`
+}
+
+type InferenceConfig struct {
+	MaxTokens   int     `json:"maxTokens,omitempty"`
+	Temperature float64 `json:"temperature,omitempty"`
+	TopP        float64 `json:"topP,omitempty"`
+}
+
+// ==================== 流式回调 ====================
+
+// KiroStreamCallback 流式响应回调
+type KiroStreamCallback struct {
+	OnText     func(text string, isThinking bool)
+	OnToolUse  func(toolUse KiroToolUse)
+	OnComplete func(inputTokens, outputTokens int)
+	OnError    func(err error)
+	OnCredits  func(credits float64)
+}
+
+// ==================== API 调用 ====================
+
+// getSortedEndpoints 根据首选端点配置排序端点列表
+func getSortedEndpoints(preferred string) []kiroEndpoint {
+	if preferred == "amazonq" {
+		return []kiroEndpoint{kiroEndpoints[1], kiroEndpoints[0]}
+	}
+	if preferred == "codewhisperer" {
+		return []kiroEndpoint{kiroEndpoints[0], kiroEndpoints[1]}
+	}
+	// "auto" 或空值：默认顺序
+	return []kiroEndpoint{kiroEndpoints[0], kiroEndpoints[1]}
+}
+
+// apiDebugLog 包级 debug 日志函数，记录到 data/debug.log
+func apiDebugLog(format string, args ...interface{}) {
+	if os.Getenv("DEBUG_REQUESTS") != "true" {
+		return
+	}
+	f, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if f != nil {
+		fmt.Fprintf(f, format+"\n", args...)
+		f.Close()
+	}
+}
+
+// CallKiroAPI 调用 Kiro API（流式），双端点自动 fallback
+func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroStreamCallback) (*UpstreamError, error) {
+
+	if _, err := json.Marshal(payload); err != nil {
+		apiDebugLog("[API Error] payload marshal failed: %v", err)
+		return nil, err
+	}
+
+	// User-Agent（Kiro CLI 格式）
+	machineId := account.MachineId
+	var userAgent, amzUserAgent string
+	if machineId != "" {
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard m/E %s", KiroVersion, machineId)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust %s", KiroVersion, machineId)
+	} else {
+		userAgent = fmt.Sprintf("Kiro-Cli/%s ua/2.1 os/linux lang/rust api/codewhispererstreaming cfg/retry-mode/standard", KiroVersion)
+		amzUserAgent = fmt.Sprintf("Kiro-Cli/%s os/linux lang/rust", KiroVersion)
+	}
+
+	// 计算 payload 大小用于日志
+	payloadBytes, _ := json.Marshal(payload)
+	payloadKB := len(payloadBytes) / 1024
+	toolCount := 0
+	if payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext != nil {
+		toolCount = len(payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools)
+	}
+	histLen := len(payload.ConversationState.History)
+	apiDebugLog("[API Request] account=%s | payload=%dKB | tools=%d | history=%d msgs",
+		account.Email, payloadKB, toolCount, histLen)
+
+	// 根据配置排序端点
+	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())
+
+	var lastErr error
+	var lastUpstreamErr *UpstreamError
+	for _, ep := range endpoints {
+		// 更新 payload 中的 origin
+		payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
+
+		reqBody, _ := json.Marshal(payload)
+		req, err := http.NewRequest("POST", ep.URL, bytes.NewReader(reqBody))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("X-Amz-Target", ep.AmzTarget)
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("X-Amz-User-Agent", amzUserAgent)
+		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+		req.Header.Set("x-amzn-codewhisperer-optout", "true")
+		req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+		req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
+		req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+
+		resp, err := kiroHttpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)
+			apiDebugLog("[API Error] Endpoint %s HTTP request failed: %v", ep.Name, err)
+			continue
+		}
+
+		if resp.StatusCode == 429 {
+			resp.Body.Close()
+			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying fallback...\n", ep.Name)
+			apiDebugLog("[API Error] Endpoint %s quota exhausted (429), trying fallback", ep.Name)
+			lastUpstreamErr = &UpstreamError{
+				StatusCode: 429,
+				Endpoint:   ep.Name,
+				Body:       "quota exhausted",
+				AccountID:  account.ID,
+			}
+			lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
+			continue // 试第二端点（独立限流，相当于双倍额度）
+		}
+
+		if resp.StatusCode != 200 {
+			errBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			upstreamErr := &UpstreamError{
+				StatusCode: resp.StatusCode,
+				Endpoint:   ep.Name,
+				Body:       string(errBody),
+				AccountID:  account.ID,
+			}
+			lastUpstreamErr = upstreamErr
+			lastErr = upstreamErr
+
+			// 记录到 debug.log
+			errBodyStr := string(errBody)
+			if len(errBodyStr) > 500 {
+				errBodyStr = errBodyStr[:500] + "...(truncated)"
+			}
+			apiDebugLog("[API Error] Endpoint %s status=%d | payload=%dKB | response: %s",
+				ep.Name, resp.StatusCode, len(reqBody)/1024, errBodyStr)
+
+			// Token 失效自动检测：月额度耗尽或被暂停时标记账号
+			errStr := string(errBody)
+			if strings.Contains(errStr, "MONTHLY_REQUEST_COUNT") {
+				fmt.Printf("[KiroAPI] Account %s MONTHLY_REQUEST_COUNT exhausted, disabling\n", account.ID[:8])
+				apiDebugLog("[API Error] Account %s MONTHLY_REQUEST_COUNT exhausted, disabling", account.ID[:8])
+				account.Enabled = false
+			} else if strings.Contains(errStr, "TEMPORARILY_SUSPENDED") {
+				fmt.Printf("[KiroAPI] Account %s TEMPORARILY_SUSPENDED, disabling\n", account.ID[:8])
+				apiDebugLog("[API Error] Account %s TEMPORARILY_SUSPENDED, disabling", account.ID[:8])
+				account.Enabled = false
+			}
+
+			// 认证错误不继续尝试
+			if resp.StatusCode == 401 || resp.StatusCode == 403 {
+				apiDebugLog("[API Error] Auth error %d, not retrying", resp.StatusCode)
+				return upstreamErr, upstreamErr
+			}
+			fmt.Printf("[KiroAPI] Endpoint %s error %d | payload: %dKB | response: %s\n",
+				ep.Name, resp.StatusCode, len(reqBody)/1024, string(errBody))
+			// Debug: print payload details on 400 errors
+			if resp.StatusCode == 400 {
+				toolCount := 0
+				if payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext != nil {
+					toolCount = len(payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools)
+				}
+				histLen := len(payload.ConversationState.History)
+				contentLen := len(payload.ConversationState.CurrentMessage.UserInputMessage.Content)
+				preview := string(reqBody)
+				if len(preview) > 500 {
+					preview = preview[:500]
+				}
+				fmt.Printf("[KiroAPI-DEBUG] 400 details | tools=%d | history=%d msgs | content_len=%d | payload_preview: %s\n",
+					toolCount, histLen, contentLen, preview)
+			}
+			continue
+		}
+
+		apiDebugLog("[API OK] Endpoint %s connected, starting stream parse", ep.Name)
+		err = parseEventStream(resp.Body, callback)
+		resp.Body.Close()
+		if err != nil {
+			apiDebugLog("[API Error] Stream parse error on %s: %v", ep.Name, err)
+		}
+		return nil, err
+	}
+
+	apiDebugLog("[API Error] All endpoints failed, last error: %v", lastErr)
+	if lastErr != nil {
+		return lastUpstreamErr, lastErr
+	}
+	return nil, fmt.Errorf("all endpoints failed")
+}
+
+// ==================== Event Stream 解析 ====================
+
+// parseEventStream 解析 AWS Event Stream 二进制格式
+func parseEventStream(body io.Reader, callback *KiroStreamCallback) error {
+	// 不使用 bufio，直接读取避免缓冲延迟
+	var inputTokens, outputTokens int
+	var totalCredits float64
+	var currentToolUse *toolUseState
+	var lastAssistantContent string
+	var lastReasoningContent string
+	var totalBytesRead int64
+	var eventCount int
+	streamStart := time.Now()
+
+	for {
+		// Prelude: 12 bytes (total_len + headers_len + crc)
+		prelude := make([]byte, 12)
+		_, err := io.ReadFull(body, prelude)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			duration := time.Since(streamStart)
+			fmt.Printf("[StreamError] Prelude read failed after %d events, %d bytes, %.1fs: %v\n",
+				eventCount, totalBytesRead, duration.Seconds(), err)
+			return fmt.Errorf("stream interrupted after %d events (%.1fs, %dB): %w",
+				eventCount, duration.Seconds(), totalBytesRead, err)
+		}
+		totalBytesRead += 12
+
+		totalLength := int(prelude[0])<<24 | int(prelude[1])<<16 | int(prelude[2])<<8 | int(prelude[3])
+		headersLength := int(prelude[4])<<24 | int(prelude[5])<<16 | int(prelude[6])<<8 | int(prelude[7])
+
+		if totalLength < 16 {
+			continue
+		}
+
+		// 读取剩余部分
+		remaining := totalLength - 12
+		msgBuf := make([]byte, remaining)
+		_, err = io.ReadFull(body, msgBuf)
+		if err != nil {
+			duration := time.Since(streamStart)
+			fmt.Printf("[StreamError] Payload read failed after %d events, %d bytes, %.1fs (expected %d more bytes): %v\n",
+				eventCount, totalBytesRead, duration.Seconds(), remaining, err)
+			return fmt.Errorf("stream interrupted reading payload after %d events (%.1fs, %dB): %w",
+				eventCount, duration.Seconds(), totalBytesRead, err)
+		}
+		totalBytesRead += int64(remaining)
+
+		if headersLength > len(msgBuf)-4 {
+			continue
+		}
+
+		eventType := extractEventType(msgBuf[0:headersLength])
+		payloadBytes := msgBuf[headersLength : len(msgBuf)-4]
+		if len(payloadBytes) == 0 {
+			continue
+		}
+		eventCount++
+
+		var event map[string]interface{}
+		if err := json.Unmarshal(payloadBytes, &event); err != nil {
+			continue
+		}
+
+		inputTokens, outputTokens = updateTokensFromEvent(event, inputTokens, outputTokens)
+
+		// Fallback: 通过 JSON payload 字段来推断事件类型 (参考 kirocli2api 的做法)
+		// 这样即使 extractEventType 因为二进制 header 解析问题返回空字符串，也能正确识别事件
+		if eventType == "" {
+			if _, hasToolUseId := event["toolUseId"]; hasToolUseId {
+				eventType = "toolUseEvent"
+			} else if _, hasContent := event["content"]; hasContent {
+				eventType = "assistantResponseEvent"
+			} else if _, hasReason := event["reason"]; hasReason {
+				eventType = "invalidStateEvent"
+			} else if _, hasText := event["text"]; hasText {
+				eventType = "reasoningContentEvent"
+			} else if _, hasUsage := event["usage"]; hasUsage {
+				eventType = "meteringEvent"
+			}
+		}
+
+		apiDebugLog("[SSE Event] type=%s payload=%.300s", eventType, string(payloadBytes))
+
+		// 处理事件
+		switch eventType {
+		case "assistantResponseEvent":
+			if content, ok := event["content"].(string); ok && content != "" {
+				normalized := normalizeChunk(content, &lastAssistantContent)
+				if normalized != "" {
+					callback.OnText(normalized, false)
+				}
+			}
+		case "reasoningContentEvent":
+			if text, ok := event["text"].(string); ok && text != "" {
+				normalized := normalizeChunk(text, &lastReasoningContent)
+				if normalized != "" {
+					callback.OnText(normalized, true)
+				}
+			}
+		case "toolUseEvent":
+			currentToolUse = handleToolUseEvent(event, currentToolUse, callback)
+		case "invalidStateEvent":
+			// Kiro API 返回错误状态 (如 reason="ERROR")
+			if reason, ok := event["reason"].(string); ok {
+				msg, _ := event["message"].(string)
+				apiDebugLog("[SSE InvalidState] reason=%s message=%s", reason, msg)
+				if callback.OnError != nil {
+					callback.OnError(fmt.Errorf("kiro invalid state: %s: %s", reason, msg))
+				}
+			}
+		case "meteringEvent":
+			if usage, ok := event["usage"].(float64); ok {
+				totalCredits += usage
+			}
+		}
+	}
+
+	// 流结束后，如果还有未 flush 的 toolUse，强制完成
+	// Kiro API 不一定会发送 stop:true 的 toolUseEvent，所以必须在流结束时主动 flush
+	if currentToolUse != nil {
+		apiDebugLog("[SSE] Flushing pending toolUse at stream end: name=%s id=%s", currentToolUse.Name, currentToolUse.ToolUseID)
+		finishToolUse(currentToolUse, callback)
+		currentToolUse = nil
+	}
+
+	duration := time.Since(streamStart)
+	fmt.Printf("[Stream] Complete: %d events, %d bytes, %.1fs\n", eventCount, totalBytesRead, duration.Seconds())
+
+	if callback.OnCredits != nil && totalCredits > 0 {
+		callback.OnCredits(totalCredits)
+	}
+
+	callback.OnComplete(inputTokens, outputTokens)
+	return nil
+}
+
+func updateTokensFromEvent(event map[string]interface{}, currentInputTokens, currentOutputTokens int) (int, int) {
+	candidates := []map[string]interface{}{event}
+	collectUsageMaps(event, &candidates)
+
+	inputTokens := currentInputTokens
+	outputTokens := currentOutputTokens
+
+	for _, usage := range candidates {
+		if usage == nil {
+			continue
+		}
+
+		if v, ok := readTokenNumber(usage,
+			"outputTokens", "completionTokens", "totalOutputTokens",
+			"output_tokens", "completion_tokens", "total_output_tokens",
+		); ok {
+			outputTokens = v
+		}
+
+		if v, ok := readTokenNumber(usage,
+			"inputTokens", "promptTokens", "totalInputTokens",
+			"input_tokens", "prompt_tokens", "total_input_tokens",
+		); ok {
+			inputTokens = v
+			continue
+		}
+
+		uncached, _ := readTokenNumber(usage, "uncachedInputTokens", "uncached_input_tokens")
+		cacheRead, _ := readTokenNumber(usage, "cacheReadInputTokens", "cache_read_input_tokens")
+		cacheWrite, _ := readTokenNumber(usage, "cacheWriteInputTokens", "cache_write_input_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens")
+		if uncached+cacheRead+cacheWrite > 0 {
+			inputTokens = uncached + cacheRead + cacheWrite
+			continue
+		}
+
+		total, ok := readTokenNumber(usage, "totalTokens", "total_tokens")
+		if ok && total > 0 {
+			candidateOutput := outputTokens
+			if v, vok := readTokenNumber(usage,
+				"outputTokens", "completionTokens", "totalOutputTokens",
+				"output_tokens", "completion_tokens", "total_output_tokens",
+			); vok {
+				candidateOutput = v
+			}
+			if total-candidateOutput > 0 {
+				inputTokens = total - candidateOutput
+			}
+		}
+	}
+
+	return inputTokens, outputTokens
+}
+
+func collectUsageMaps(v interface{}, out *[]map[string]interface{}) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, child := range t {
+			lk := strings.ToLower(k)
+			if lk == "usage" || lk == "tokenusage" || lk == "token_usage" {
+				if m, ok := child.(map[string]interface{}); ok {
+					*out = append(*out, m)
+				}
+			}
+			collectUsageMaps(child, out)
+		}
+	case []interface{}:
+		for _, child := range t {
+			collectUsageMaps(child, out)
+		}
+	}
+}
+
+func normalizeChunk(chunk string, previous *string) string {
+	if chunk == "" {
+		return ""
+	}
+
+	prev := *previous
+	if prev == "" {
+		*previous = chunk
+		return chunk
+	}
+
+	if chunk == prev {
+		return ""
+	}
+
+	if strings.HasPrefix(chunk, prev) {
+		delta := chunk[len(prev):]
+		*previous = chunk
+		return delta
+	}
+
+	if strings.HasPrefix(prev, chunk) {
+		return ""
+	}
+
+	maxOverlap := 0
+	maxLen := len(prev)
+	if len(chunk) < maxLen {
+		maxLen = len(chunk)
+	}
+	for i := maxLen; i > 0; i-- {
+		if strings.HasSuffix(prev, chunk[:i]) {
+			maxOverlap = i
+			break
+		}
+	}
+
+	*previous = chunk
+	if maxOverlap > 0 {
+		return chunk[maxOverlap:]
+	}
+
+	return chunk
+}
+
+func readTokenNumber(m map[string]interface{}, keys ...string) (int, bool) {
+	for _, k := range keys {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			return int(n), true
+		case int:
+			return n, true
+		case int64:
+			return int(n), true
+		case json.Number:
+			if parsed, err := n.Int64(); err == nil {
+				return int(parsed), true
+			}
+		case string:
+			if parsed, err := strconv.Atoi(n); err == nil {
+				return parsed, true
+			}
+			if parsed, err := strconv.ParseFloat(n, 64); err == nil {
+				return int(parsed), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// ==================== Tool Use 处理 ====================
+
+type toolUseState struct {
+	ToolUseID   string
+	Name        string
+	InputBuffer strings.Builder
+}
+
+func handleToolUseEvent(event map[string]interface{}, current *toolUseState, callback *KiroStreamCallback) *toolUseState {
+	toolUseID, _ := event["toolUseId"].(string)
+	name, _ := event["name"].(string)
+	isStop, _ := event["stop"].(bool)
+
+	if toolUseID != "" && name != "" {
+		if current == nil {
+			current = &toolUseState{ToolUseID: toolUseID, Name: name}
+		} else if current.ToolUseID != toolUseID {
+			finishToolUse(current, callback)
+			current = &toolUseState{ToolUseID: toolUseID, Name: name}
+		}
+	}
+
+	if current != nil {
+		if input, ok := event["input"].(string); ok {
+			current.InputBuffer.WriteString(input)
+		} else if inputObj, ok := event["input"].(map[string]interface{}); ok {
+			data, _ := json.Marshal(inputObj)
+			current.InputBuffer.Reset()
+			current.InputBuffer.Write(data)
+		}
+	}
+
+	if isStop && current != nil {
+		finishToolUse(current, callback)
+		return nil
+	}
+
+	return current
+}
+
+func finishToolUse(state *toolUseState, callback *KiroStreamCallback) {
+	var input map[string]interface{}
+	if state.InputBuffer.Len() > 0 {
+		json.Unmarshal([]byte(state.InputBuffer.String()), &input)
+	}
+	if input == nil {
+		input = make(map[string]interface{})
+	}
+	callback.OnToolUse(KiroToolUse{
+		ToolUseID: state.ToolUseID,
+		Name:      state.Name,
+		Input:     input,
+	})
+}
+
+// extractEventType 从 headers 中提取事件类型
+func extractEventType(headers []byte) string {
+	offset := 0
+	for offset < len(headers) {
+		if offset >= len(headers) {
+			break
+		}
+		nameLen := int(headers[offset])
+		offset++
+		if offset+nameLen > len(headers) {
+			break
+		}
+		name := string(headers[offset : offset+nameLen])
+		offset += nameLen
+		if offset >= len(headers) {
+			break
+		}
+		valueType := headers[offset]
+		offset++
+
+		if valueType == 7 { // String
+			if offset+2 > len(headers) {
+				break
+			}
+			valueLen := int(headers[offset])<<8 | int(headers[offset+1])
+			offset += 2
+			if offset+valueLen > len(headers) {
+				break
+			}
+			value := string(headers[offset : offset+valueLen])
+			offset += valueLen
+			if name == ":event-type" {
+				return value
+			}
+			continue
+		}
+
+		// 跳过其他类型
+		skipSizes := map[byte]int{0: 0, 1: 0, 2: 1, 3: 2, 4: 4, 5: 8, 8: 8, 9: 16}
+		if valueType == 6 {
+			if offset+2 > len(headers) {
+				break
+			}
+			l := int(headers[offset])<<8 | int(headers[offset+1])
+			offset += 2 + l
+		} else if skip, ok := skipSizes[valueType]; ok {
+			offset += skip
+		} else {
+			break
+		}
+	}
+	return ""
+}
