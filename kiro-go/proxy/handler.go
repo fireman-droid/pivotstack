@@ -102,9 +102,12 @@ type CallLog struct {
 	TotalTokens     int     `json:"total_tokens"`
 	Credits         float64 `json:"credits,omitempty"`           // 计费 credits（掺水后；若未掺水 = 上游原值）
 	UpstreamCredits float64 `json:"upstream_credits,omitempty"`  // 上游原始 credits（掺水前；admin 审计用，用户端清零）
-	PaidCredits     float64 `json:"paid_credits,omitempty"`
-	GiftedCredits   float64 `json:"gifted_credits,omitempty"`
-	CostUSD         float64 `json:"cost_usd,omitempty"`
+	// PaidCredits/GiftedCredits/CostUSD 故意不带 omitempty：
+	// 即使 0 也要显式落盘，否则纯 gift 余额扣费的请求（paid=0）会让对账误判为"未扣费"。
+	// 注意 CostUSD 在 handler_stats 中被覆盖为 paidCostUSD（仅营收，不含 gift 部分）。
+	PaidCredits   float64 `json:"paid_credits"`
+	GiftedCredits float64 `json:"gifted_credits"`
+	CostUSD       float64 `json:"cost_usd"`
 	Stream          bool    `json:"stream"`
 	Error           string  `json:"error,omitempty"`
 	PayloadKB       int     `json:"payload_kb,omitempty"`
