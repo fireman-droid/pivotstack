@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kiro Stack integrates two upstream projects to provide OpenAI/Anthropic-compatible API access to Kiro (Amazon Q Developer) accounts:
+PivotStack integrates two upstream projects to provide OpenAI/Anthropic-compatible API access to Kiro (Amazon Q Developer) accounts:
 
 - **kiro-go** (Go): Web admin panel, multi-account pool management, token refresh
 - **kiro-gateway** (Python/FastAPI): Stable proxy layer with retry logic and dual-endpoint fallback

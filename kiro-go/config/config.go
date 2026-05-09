@@ -111,20 +111,70 @@ type ApiKeyInfo struct {
 	Tokens         int64            `json:"tokens"`
 	Credits        float64          `json:"credits"` // cumulative credits consumed
 	Models         map[string]int64 `json:"models,omitempty"`
+
+	// === 代理体系（v1 新增；旧 key 默认零值，零破坏）===
+	ParentKeyID      string  `json:"parentKeyId,omitempty"`      // 子 key 才有，指向 reseller key.ID
+	IsReseller       bool    `json:"isReseller,omitempty"`       // admin 在面板上勾"开通代理"
+	MaxChildKeys     int     `json:"maxChildKeys,omitempty"`     // 0 = 无限；admin 设的子 key 数量上限
+	ResellerDiscount float64 `json:"resellerDiscount,omitempty"` // 0 / 1.0 = 无折扣；0.5 = 半价进货
+	SoldToChildren   float64 `json:"soldToChildren,omitempty"`   // reseller 累计转给子 key 的总额（USD）
+
+	// === 速率限制（防天卡共享）===
+	// 0 = 走全局默认（200/min）；> 0 = 这张 key 单独的每分钟请求上限。
+	// 天卡分级卖：便宜的卡 5/min（单人都嫌慢），贵的 60/min（小团队够用）。
+	// 共享给 N 人 → N 人挤同一配额，自然劝退分发。兑换天卡时从 ActivationCode.RateLimitPerMin 拷贝过来。
+	RateLimitPerMin int `json:"rateLimitPerMin,omitempty"`
 }
 
 // ActivationCode represents a redeemable code for balance or time extension.
 type ActivationCode struct {
 	Code          string  `json:"code"`                    // e.g. KIRO-XXXX-XXXX-XXXX
-	Type          string  `json:"type"`                    // "balance" | "days"
-	Amount        float64 `json:"amount"`                  // balance: USD face value; days: number of days
-	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days)
+	Type          string  `json:"type"`                    // "balance" | "days" | "time"
+	Amount        float64 `json:"amount"`                  // balance: CNY; days: number of days; time: seconds
+	Tier          string  `json:"tier,omitempty"`          // "free" | "pro" (only for type=days/time)
 	CodeExpiresAt int64   `json:"codeExpiresAt,omitempty"` // code itself expires (0=never)
 	Used          bool    `json:"used"`
 	UsedBy        string  `json:"usedBy,omitempty"` // ApiKey ID
 	UsedAt        int64   `json:"usedAt,omitempty"`
 	CreatedAt     int64   `json:"createdAt"`
 	Note          string  `json:"note,omitempty"`
+
+	// 仅 type=days/time 用：兑换后写入 ApiKeyInfo.RateLimitPerMin。
+	// 0 = 兑换时不修改 key 的速率（保留 key 现有值）。
+	RateLimitPerMin int `json:"rateLimitPerMin,omitempty"`
+}
+
+// PromotionConfig 活动门槛配置：admin 开启后，凡满足 OR 三个条件之一的 key 才享受活动价。
+//
+// 资格判定（OR 关系，任一满足即可）：
+//  1. 在白名单（Whitelist）→ 直接通过
+//  2. 本月累计充值 ≥ MinMonthlyRechargeCNY（且阈值 > 0）
+//  3. 过去 RecentCallsDays 天调用次数 ≥ MinRecentCalls（且两者均 > 0）
+//
+// 都不满足时走原价（Pricing.ProPoolPriceUSD/FreePoolPriceUSD）。
+// 阈值字段为 0 则视为该条件未启用。
+type PromotionConfig struct {
+	Enabled bool   `json:"enabled"`
+	Name    string `json:"name,omitempty"` // 活动名（如"五一骨折"）
+
+	// === v2 主字段（per-model 活动价）===
+	ModelPrices         map[string]float64 `json:"modelPrices,omitempty"`         // 活动期每个 model 的 USD/credit
+	DefaultProPriceUSD  float64            `json:"defaultProPriceUSD,omitempty"`  // 活动期 PRO 池兜底
+	DefaultFreePriceUSD float64            `json:"defaultFreePriceUSD,omitempty"` // 活动期 FREE 池兜底
+
+	// === 资格判定（不变）===
+	MinMonthlyRechargeCNY float64  `json:"minMonthlyRechargeCNY"` // 本月充值门槛（¥），0=不启用
+	MinRecentCalls        int      `json:"minRecentCalls"`        // 活跃度门槛：调用次数，0=不启用
+	RecentCallsDays       int      `json:"recentCallsDays"`       // 活跃度门槛：观察窗口（天），默认 7
+	Whitelist             []string `json:"whitelist,omitempty"`   // 白名单：ApiKey UUID 数组
+	StartTs               int64    `json:"startTs,omitempty"`     // 活动开始（unix sec），0=立即
+	EndTs                 int64    `json:"endTs,omitempty"`       // 活动结束（unix sec），0=无限
+	UpdatedAt             int64    `json:"updatedAt,omitempty"`
+	UpdatedBy             string   `json:"updatedBy,omitempty"`
+
+	// === Deprecated v1 字段（保留 JSON 兼容；启动时迁移）===
+	ProPoolPriceUSD  float64 `json:"proPoolPriceUSD,omitempty"`
+	FreePoolPriceUSD float64 `json:"freePoolPriceUSD,omitempty"`
 }
 
 // CostEntry represents a single account purchase record.
@@ -140,14 +190,31 @@ const FreeAccountCredits = 550.0 // fixed credits per FREE account
 const CNYPerUSDFace = 0.05       // $1 face value = ¥0.05 real CNY
 
 // PricingConfig holds credit-based pricing.
+//
+// 模型级定价（v2，主路径）：
+//   ModelPrices map[model] = USD/credit 售价，admin 在 UI 里逐 model 配
+//   未配置的 model 按 ResolveModelPool 兜底到 DefaultProPriceUSD/DefaultFreePriceUSD
+//
+// Pool 仅用于路由判断（model→号池、能不能用、成本统计），不再做定价语义。
+//
+// 旧字段（ProPoolPriceUSD/FreePoolPriceUSD/ModelMultipliers）保留 JSON 兼容，
+// 启动时 MigratePricingToModelLevel 会自动算 ModelPrices = pool_price × multiplier 注入。
 type PricingConfig struct {
-	FreePoolPriceUSD float64 `json:"freePoolPriceUSD"` // face-value USD per credit for FREE pool (default: 0.40)
-	ProPoolPriceUSD  float64 `json:"proPoolPriceUSD"`  // face-value USD per credit for PRO pool (default: 2.00)
+	// === v2 主字段 ===
+	ModelPrices         map[string]float64 `json:"modelPrices,omitempty"`         // model 名小写 → USD/credit 售价
+	DefaultProPriceUSD  float64            `json:"defaultProPriceUSD,omitempty"`  // PRO 池兜底（ModelPrices 未列出时），默认 0.20
+	DefaultFreePriceUSD float64            `json:"defaultFreePriceUSD,omitempty"` // FREE 池兜底，默认 0.04
 
+	// === 成本端（不变，定价端跟成本端独立）===
 	ProCostEntries  []CostEntry `json:"proCostEntries,omitempty"`
 	FreeCostEntries []CostEntry `json:"freeCostEntries,omitempty"`
 
-	// Deprecated fields kept for backward compat
+	// === Deprecated v1 字段（保留 JSON 兼容；启动时 MigratePricingToModelLevel 自动迁移）===
+	FreePoolPriceUSD float64            `json:"freePoolPriceUSD,omitempty"` // 旧：FREE 池单价
+	ProPoolPriceUSD  float64            `json:"proPoolPriceUSD,omitempty"`  // 旧：PRO 池单价
+	ModelMultipliers map[string]float64 `json:"modelMultipliers,omitempty"` // 旧：模型乘数
+
+	// 旧采购成本兜底字段（不动）
 	PurchasePriceCNY      float64 `json:"purchasePriceCNY,omitempty"`
 	ProAccountPriceCNY    float64 `json:"proAccountPriceCNY,omitempty"`
 	ProAccountCredits     float64 `json:"proAccountCredits,omitempty"`
@@ -214,10 +281,20 @@ func (p PricingConfig) FreeTotalCost() float64 {
 }
 
 // GetPricing returns the pricing configuration with defaults.
+//
+// 迁移由 MaybeMigratePricing 在程序启动时显式触发（main.go），此处只做"读 + 兜底默认值"。
 func GetPricing() PricingConfig {
 	cfgLock.RLock()
 	defer cfgLock.RUnlock()
 	p := cfg.Pricing
+	// v2 默认值
+	if p.DefaultProPriceUSD == 0 {
+		p.DefaultProPriceUSD = 0.20
+	}
+	if p.DefaultFreePriceUSD == 0 {
+		p.DefaultFreePriceUSD = 0.04
+	}
+	// v1 deprecated 默认值（仍然填，给报表/外部脚本兜底）
 	if p.FreePoolPriceUSD == 0 {
 		p.FreePoolPriceUSD = 0.40
 	}
@@ -225,6 +302,27 @@ func GetPricing() PricingConfig {
 		p.ProPoolPriceUSD = 2.00
 	}
 	return p
+}
+
+// MaybeMigratePricing 启动时显式调用一次（main.go 在 SetSupportedModels 之后）。
+// 检测旧字段是否需要迁移到 v2 ModelPrices，迁移则持久化到磁盘。
+//
+// 返回 (migrated, err)：migrated=true 表示真的发生了迁移并写盘成功。
+func MaybeMigratePricing() (bool, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	pricingMigrated := MigratePricingToModelLevel(&cfg.Pricing)
+	promoMigrated := false
+	if cfg.Promotion != nil {
+		promoMigrated = MigratePromotionToModelLevel(cfg.Promotion)
+	}
+	if !pricingMigrated && !promoMigrated {
+		return false, nil
+	}
+	if err := Save(); err != nil {
+		return true, fmt.Errorf("save after migrate: %w", err)
+	}
+	return true, nil
 }
 
 // AddCostEntry adds a cost entry to PRO or FREE list.
@@ -280,6 +378,7 @@ type Config struct {
 	ActivationCodes []ActivationCode `json:"activationCodes,omitempty"`
 	Pricing         PricingConfig    `json:"pricing,omitempty"`
 	Stealth         StealthConfig    `json:"stealth,omitempty"`
+	Promotion       *PromotionConfig `json:"promotion,omitempty"`
 
 	// Thinking mode configuration for extended reasoning output
 	ThinkingSuffix       string `json:"thinkingSuffix,omitempty"`       // Model suffix to trigger thinking mode (default: "-thinking")
@@ -294,6 +393,10 @@ type Config struct {
 	MaxInFlightPerAccount     int `json:"maxInFlightPerAccount,omitempty"`     // Legacy: unified per-account limit (kept for migration)
 	MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree,omitempty"` // Per FREE account max in-flight requests (default: 50)
 	MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro,omitempty"`  // Per PRO account max in-flight requests (default: 50)
+
+	// 天卡防共享速率限制：仅对 plan=timed/hybrid 且 ExpiresAt 未过期的 key 生效。
+	// 0 = 走老兜底 200/min。默认 10。设值越低，N 人共享一张卡时人均配额越糟糕，自然劝退分发。
+	TimedKeyRPM int `json:"timedKeyRPM,omitempty"`
 
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
@@ -906,6 +1009,25 @@ func UpdateConcurrencyConfig(perKey, perAccountFree, perAccountPro int) error {
 	return Save()
 }
 
+// GetTimedKeyRPM 返回天卡 key 的全局每分钟请求上限。
+// 0 = 走老兜底 200/min；admin 没设过返 0（不强加默认 10，让 abuse.go 决定 fallback）。
+func GetTimedKeyRPM() int {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	return cfg.TimedKeyRPM
+}
+
+// UpdateTimedKeyRPM 持久化天卡全局 RPM。<= 0 视为禁用（走老兜底）。
+func UpdateTimedKeyRPM(rpm int) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if rpm < 0 {
+		rpm = 0
+	}
+	cfg.TimedKeyRPM = rpm
+	return Save()
+}
+
 func UpdateStats(totalReq, successReq, failedReq, totalTokens int, totalCredits float64) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -1052,6 +1174,80 @@ func UpdatePreferredEndpoint(endpoint string) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	cfg.PreferredEndpoint = endpoint
+	return Save()
+}
+
+// ==================== Promotion ====================
+
+// GetPromotion 返回当前活动配置（线程安全副本）。未配置则返回 nil。
+func GetPromotion() *PromotionConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg.Promotion == nil {
+		return nil
+	}
+	// 返回副本（含白名单深拷贝）
+	cp := *cfg.Promotion
+	if len(cfg.Promotion.Whitelist) > 0 {
+		cp.Whitelist = make([]string, len(cfg.Promotion.Whitelist))
+		copy(cp.Whitelist, cfg.Promotion.Whitelist)
+	}
+	return &cp
+}
+
+// UpdatePromotion 更新活动配置（传 nil 视为关闭）。
+func UpdatePromotion(p *PromotionConfig, operator string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if p != nil {
+		p.UpdatedAt = time.Now().Unix()
+		p.UpdatedBy = operator
+		// 默认窗口
+		if p.RecentCallsDays <= 0 {
+			p.RecentCallsDays = 7
+		}
+	}
+	cfg.Promotion = p
+	return Save()
+}
+
+// AddPromotionWhitelist 把 keyID 加入白名单（去重）。
+func AddPromotionWhitelist(keyID, operator string) error {
+	if keyID == "" {
+		return fmt.Errorf("keyID required")
+	}
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg.Promotion == nil {
+		cfg.Promotion = &PromotionConfig{Enabled: false, RecentCallsDays: 7}
+	}
+	for _, k := range cfg.Promotion.Whitelist {
+		if k == keyID {
+			return nil // 已在
+		}
+	}
+	cfg.Promotion.Whitelist = append(cfg.Promotion.Whitelist, keyID)
+	cfg.Promotion.UpdatedAt = time.Now().Unix()
+	cfg.Promotion.UpdatedBy = operator
+	return Save()
+}
+
+// RemovePromotionWhitelist 把 keyID 从白名单移除。
+func RemovePromotionWhitelist(keyID, operator string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg.Promotion == nil {
+		return nil
+	}
+	out := cfg.Promotion.Whitelist[:0]
+	for _, k := range cfg.Promotion.Whitelist {
+		if k != keyID {
+			out = append(out, k)
+		}
+	}
+	cfg.Promotion.Whitelist = out
+	cfg.Promotion.UpdatedAt = time.Now().Unix()
+	cfg.Promotion.UpdatedBy = operator
 	return Save()
 }
 
@@ -1271,6 +1467,10 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
 						amountUSD := ac.Amount / CNYPerUSDFace
+						// 代理折扣：仅 reseller 自己充值时按 1/discount 放大（< 1 才生效）
+						if cfg.ApiKeys[j].IsReseller && cfg.ApiKeys[j].ResellerDiscount > 0 && cfg.ApiKeys[j].ResellerDiscount < 1 {
+							amountUSD = amountUSD / cfg.ApiKeys[j].ResellerDiscount
+						}
 						cfg.ApiKeys[j].Balance += amountUSD
 						cfg.ApiKeys[j].TotalRecharged += amountUSD
 						// Set plan: if already timed → hybrid, otherwise credit
@@ -1290,7 +1490,20 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 						if base < now {
 							base = now
 						}
-						cfg.ApiKeys[j].ExpiresAt = base + int64(ac.Amount)
+						// 单位区分（CodeManagement.vue 行为）：
+						//   type=days → ac.Amount 是"天数"，需要 ×86400 转秒
+						//   type=time → ac.Amount 已经是"秒"（前端把 天/时/分 折算后送过来），直接加
+						// 历史 BUG：曾 days/time 共用 +amount → 30天卡只加30秒；
+						// 后修成统一 ×86400 → 反过来 1天卡变 86400天。
+						// 回归测试见 TestRedeemActivationCode_DaysAddsCorrectSeconds 与
+						// TestRedeemActivationCode_TimeUsesSecondsDirectly。
+						var deltaSec int64
+						if ac.Type == "days" {
+							deltaSec = int64(ac.Amount) * 86400
+						} else { // "time"
+							deltaSec = int64(ac.Amount)
+						}
+						cfg.ApiKeys[j].ExpiresAt = base + deltaSec
 						// Set plan and tier
 						if cfg.ApiKeys[j].Plan == "credit" || cfg.ApiKeys[j].Plan == "hybrid" {
 							cfg.ApiKeys[j].Plan = "hybrid"
@@ -1328,6 +1541,107 @@ func DeleteActivationCode(codeStr string) error {
 		}
 	}
 	return nil
+}
+
+// ==================== Reseller (代理体系) ====================
+
+// IsResellerKey 判断是不是开通了代理的 key
+func (i *ApiKeyInfo) IsResellerKey() bool {
+	return i != nil && i.IsReseller
+}
+
+// IsChildKey 判断是不是某 reseller 的子 key
+func (i *ApiKeyInfo) IsChildKey() bool {
+	return i != nil && i.ParentKeyID != ""
+}
+
+// GetChildKeys 返回某 reseller 的所有子 key（深拷贝）
+func GetChildKeys(parentKeyID string) []ApiKeyInfo {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	var children []ApiKeyInfo
+	for _, k := range cfg.ApiKeys {
+		if k.ParentKeyID == parentKeyID {
+			c := k
+			if c.Models != nil {
+				c.Models = copyModelCounts(c.Models)
+			}
+			children = append(children, c)
+		}
+	}
+	return children
+}
+
+// TransferBalance 原子操作：reseller→child 转账
+//   - 校验 to.ParentKeyID == fromKeyID（防横向越权）
+//   - 校验 from.Balance >= amountUSD
+//   - 一次写盘
+func TransferBalance(fromKeyID, toKeyID string, amountUSD float64) error {
+	if amountUSD <= 0 {
+		return fmt.Errorf("amount must be positive")
+	}
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	var fromIdx, toIdx int = -1, -1
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == fromKeyID {
+			fromIdx = i
+		}
+		if cfg.ApiKeys[i].ID == toKeyID {
+			toIdx = i
+		}
+	}
+	if fromIdx < 0 {
+		return fmt.Errorf("source key not found")
+	}
+	if toIdx < 0 {
+		return fmt.Errorf("target key not found")
+	}
+	if cfg.ApiKeys[toIdx].ParentKeyID != fromKeyID {
+		return fmt.Errorf("not your child key") // 横向越权拦截
+	}
+	if cfg.ApiKeys[fromIdx].Balance < amountUSD {
+		return fmt.Errorf("insufficient balance")
+	}
+	cfg.ApiKeys[fromIdx].Balance -= amountUSD
+	cfg.ApiKeys[fromIdx].SoldToChildren += amountUSD
+	cfg.ApiKeys[toIdx].Balance += amountUSD
+	cfg.ApiKeys[toIdx].TotalRecharged += amountUSD
+	return Save()
+}
+
+// RefundChildBalance 删除子 key 时把它剩余余额（Balance + GiftBalance）退回 reseller 的 Balance。
+// 返回退还的总金额（USD）。
+func RefundChildBalance(childKeyID string) (float64, error) {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	var childIdx, parentIdx int = -1, -1
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == childKeyID {
+			childIdx = i
+		}
+	}
+	if childIdx < 0 {
+		return 0, fmt.Errorf("child not found")
+	}
+	parentID := cfg.ApiKeys[childIdx].ParentKeyID
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == parentID {
+			parentIdx = i
+		}
+	}
+	refund := cfg.ApiKeys[childIdx].Balance + cfg.ApiKeys[childIdx].GiftBalance
+	if parentIdx >= 0 && refund > 0 {
+		cfg.ApiKeys[parentIdx].Balance += refund
+		// 修正"已销售"统计（避免负数）
+		cfg.ApiKeys[parentIdx].SoldToChildren -= refund
+		if cfg.ApiKeys[parentIdx].SoldToChildren < 0 {
+			cfg.ApiKeys[parentIdx].SoldToChildren = 0
+		}
+	}
+	cfg.ApiKeys[childIdx].Balance = 0
+	cfg.ApiKeys[childIdx].GiftBalance = 0
+	return refund, Save()
 }
 
 // CleanupUsedCodes completely removes all voided/used activation codes from the storage.

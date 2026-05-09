@@ -43,11 +43,13 @@ async function handleLogin() {
 
 <template>
   <div class="login-shell">
-    <!-- 背景层 -->
+    <!-- 背景层（柔光晕 + 网格） -->
     <div class="bg-fx" aria-hidden="true">
-      <div class="fx-blob fx-1" />
-      <div class="fx-blob fx-2" />
+      <div class="fx-aurora fx-a1" />
+      <div class="fx-aurora fx-a2" />
+      <div class="fx-aurora fx-a3" />
       <div class="fx-grid" />
+      <div class="fx-vignette" />
     </div>
 
     <!-- 右上 主题切换 -->
@@ -73,9 +75,9 @@ async function handleLogin() {
           </div>
         </div>
         <h1 class="brand-name">
-          Kiro<span class="brand-accent">Stack</span>
+          Pivot<span class="brand-accent">Stack</span>
         </h1>
-        <p class="brand-tagline">控制台 · Admin Portal</p>
+        <p class="brand-tagline">统一入口 · Sign In</p>
       </header>
 
       <!-- 表单卡片 -->
@@ -139,7 +141,14 @@ async function handleLogin() {
   font-family: var(--world-font-sans);
 }
 
-/* === 背景层 === */
+/* === 背景层 ===
+ * 设计原则：
+ *  - 用 radial-gradient 自然羽化，不再依赖 blur() 糊硬边
+ *  - 三层 aurora 不同尺寸 / 速度 / 相位，构成有机层次
+ *  - opacity 控制在 0.20–0.32 之间，保持"在背景里"而不是"贴在前景"
+ *  - 动画用 transform + ease-in-out + 大 duration（22s+）让运动近似静止
+ *  - vignette 暗角收边，消除矩形屏幕的硬边感
+ */
 .bg-fx {
   position: absolute;
   inset: 0;
@@ -147,44 +156,108 @@ async function handleLogin() {
   pointer-events: none;
   overflow: hidden;
 }
-.fx-blob {
+.fx-aurora {
   position: absolute;
   border-radius: 50%;
-  filter: blur(120px);
-  opacity: 0.15;
-  will-change: transform;
+  filter: blur(40px);
+  opacity: 0.45;
+  will-change: transform, opacity;
+  /* Light 默认：用 multiply 让色雾在白底变成淡淡水彩，不会被白底吃掉 */
+  mix-blend-mode: multiply;
 }
-.fx-1 {
-  top: -10%;
-  left: 10%;
-  width: 50%;
-  height: 50%;
-  background: var(--world-accent);
-  animation: blob-drift 12s ease-in-out infinite;
+[data-theme="dark"] .fx-aurora,
+.dark .fx-aurora {
+  /* Dark：用 screen / lighten 让色光从黑底浮出来 */
+  mix-blend-mode: lighten;
+  opacity: 0.28;
 }
-.fx-2 {
-  bottom: -10%;
-  right: 5%;
-  width: 40%;
-  height: 40%;
-  background: var(--world-paper-aged, var(--world-accent-soft, #38bdf8));
-  animation: blob-drift 14s ease-in-out -4s infinite;
+
+.fx-a1 {
+  top: -20%;
+  left: -10%;
+  width: 70%;
+  height: 80%;
+  background: radial-gradient(
+    circle at 35% 40%,
+    color-mix(in srgb, var(--world-accent) 70%, transparent) 0%,
+    color-mix(in srgb, var(--world-accent) 30%, transparent) 30%,
+    transparent 65%
+  );
+  animation: aurora-a 22s ease-in-out infinite;
 }
+.fx-a2 {
+  bottom: -25%;
+  right: -15%;
+  width: 75%;
+  height: 90%;
+  background: radial-gradient(
+    circle at 60% 55%,
+    color-mix(in srgb, var(--world-paper-aged, var(--world-accent-soft, #38bdf8)) 60%, transparent) 0%,
+    color-mix(in srgb, var(--world-paper-aged, var(--world-accent-soft, #38bdf8)) 25%, transparent) 35%,
+    transparent 70%
+  );
+  animation: aurora-b 28s ease-in-out -6s infinite;
+}
+.fx-a3 {
+  top: 30%;
+  right: 20%;
+  width: 38%;
+  height: 38%;
+  opacity: 0.18;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--world-accent) 50%, transparent) 0%,
+    transparent 60%
+  );
+  animation: aurora-c 18s ease-in-out -9s infinite;
+}
+
 .fx-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
-  opacity: 0.4;
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 56px 56px;
+  opacity: 0.5;
+  /* 中心淡出，避免抢主卡片视线 */
+  mask-image: radial-gradient(ellipse 65% 55% at 50% 50%, transparent 0%, rgba(0,0,0,0.85) 70%, black 100%);
+  -webkit-mask-image: radial-gradient(ellipse 65% 55% at 50% 50%, transparent 0%, rgba(0,0,0,0.85) 70%, black 100%);
 }
-[data-world="daogui"] .fx-blob { opacity: 0.18; }
-[data-world="daogui"] .fx-grid { opacity: 0.06; }
 
-@keyframes blob-drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50%      { transform: translate(20px, -10px) scale(1.05); }
+.fx-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 80% 70% at 50% 50%,
+    transparent 0%,
+    transparent 55%,
+    rgba(15, 23, 42, 0.08) 100%
+  );
+}
+
+[data-world="daogui"] .fx-aurora { opacity: 0.22; }
+[data-world="daogui"] .fx-grid   { opacity: 0.08; }
+
+/* 三组动画：缓慢、错相、不同振幅，整体看起来像呼吸而非滑动 */
+@keyframes aurora-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33%      { transform: translate3d(3%, -2%, 0) scale(1.06); }
+  66%      { transform: translate3d(-2%, 3%, 0) scale(0.96); }
+}
+@keyframes aurora-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  40%      { transform: translate3d(-4%, 2%, 0) scale(1.08); }
+  70%      { transform: translate3d(2%, -3%, 0) scale(0.94); }
+}
+@keyframes aurora-c {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.18; }
+  50%      { transform: translate3d(2%, 4%, 0) scale(1.12); opacity: 0.10; }
+}
+
+/* 关闭动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .fx-aurora { animation: none; }
 }
 
 /* === 主题切换器 === */

@@ -6,6 +6,7 @@ import (
 	"io"
 	"kiro-api-proxy/config"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +53,15 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		allowed, reason := OnRequestStart(keyID, strings.TrimSpace(ip))
 		if !allowed {
-			h.sendOpenAIError(w, 429, "rate_limit_error", "Request blocked: "+reason)
+			kind, retryAfter := ParseAbuseReason(reason)
+			if retryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			}
+			msg := "Request blocked: " + kind
+			if kind == "rate_limit" && retryAfter > 0 {
+				msg = fmt.Sprintf("rate limited, retry after %ds", retryAfter)
+			}
+			h.sendOpenAIError(w, 429, "rate_limit_error", msg)
 			return
 		}
 		defer OnRequestEnd(keyID)
@@ -72,6 +81,9 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Billing: PreAuthorize – lock estimated cost before calling upstream
+	// 提前固定 originalModel，确保 PreAuth/Reconcile/addCallLog 全链路用同一个模型查倍率（Bug #7）
+	originalModel := req.Model
+
 	var preChargedPaid, preChargedGift float64
 	if keyID != "" {
 		estimatedInput := estimateOpenAIRequestInputTokens(&req)
@@ -80,7 +92,7 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 			maxTokens = req.MaxTokens
 		}
 		var preErr error
-		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
+		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, originalModel, maxTokens, estimatedInput)
 		if preErr != nil {
 			h.sendOpenAIError(w, 402, "insufficient_balance", preErr.Error())
 			return
@@ -91,9 +103,8 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	// 让 sonnet-4.6 stealth 到 sonnet-4.5 时自然落 FREE 池，
 	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
 	thinkingCfg := config.GetThinkingConfig()
-	originalModel := req.Model
 	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	upstreamModel, stealthSwapped := ApplyStealth(billingModel)
+	upstreamModel, stealthSwapped := ApplyStealth(billingModel, originalModel)
 	if stealthSwapped {
 		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
 	}
@@ -491,6 +502,14 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 				originalModel, model, account.Email, payloadKB)
 			return true
 		}
+		// INVALID_MODEL_ID + 还未发流：token 提前失效，强制刷新后让外层重试
+		if upstreamErr != nil && upstreamErr.StatusCode == 400 && !headersSent && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
+			fmt.Printf("[InvalidModel-Refresh] OpenAI Stream account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
+			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
+				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
+			}
+			return true
+		}
 		h.recordFailure()
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] OpenAI Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
@@ -544,7 +563,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
 		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -623,6 +642,14 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 				originalModel, model, account.Email, payloadKB)
 			return true
 		}
+		// INVALID_MODEL_ID 通常是 token 已被 AWS 提前作废，强制刷新本号 token 让外层重试
+		if upstreamErr != nil && upstreamErr.StatusCode == 400 && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
+			fmt.Printf("[InvalidModel-Refresh] OpenAI NonStream account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
+			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
+				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
+			}
+			return true
+		}
 		h.recordFailure()
 		if uc != nil {
 			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
@@ -671,7 +698,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 			actualCredits = EstimateCredits(outputTokens, inputTokens)
 		}
 		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}

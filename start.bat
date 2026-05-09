@@ -1,10 +1,10 @@
 @echo off
 setlocal
 
-title Kiro Stack Launcher
+title PivotStack Launcher
 
 :: ============================================
-:: Kiro Stack - Run without Docker
+:: PivotStack - Run without Docker
 :: ============================================
 
 :: Check .env file exists
@@ -50,7 +50,7 @@ if %errorlevel% neq 0 (
 )
 
 echo ============================================
-echo   Kiro Stack - Starting...
+echo   PivotStack - Starting...
 echo ============================================
 echo.
 
@@ -89,7 +89,7 @@ start "Kiro Go" cmd /k "cd /d "%~dp0kiro-go" && set "ADMIN_PASSWORD=%ADMIN_PASSW
 
 echo.
 echo ============================================
-echo   Kiro Stack started.
+echo   PivotStack started.
 echo.
 echo   Admin Panel: http://127.0.0.1:8080/admin
 echo   OpenAI API:  http://127.0.0.1:8080/v1/chat/completions

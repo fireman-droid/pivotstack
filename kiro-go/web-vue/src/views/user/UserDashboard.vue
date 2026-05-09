@@ -36,6 +36,7 @@ onMounted(async () => {
 })
 
 const info = computed(() => auth.userInfo || {})
+const isChildKey = computed(() => !!info.value.isChildKey)
 const isTimedPlan  = computed(() => info.value.plan === 'timed' || info.value.plan === 'hybrid')
 const isCreditPlan = computed(() => info.value.plan === 'credit' || info.value.plan === 'hybrid' || (!info.value.plan && totalBalanceValue.value > 0))
 const balanceValue     = computed(() => Number(info.value.balance || 0))
@@ -108,6 +109,43 @@ const topModels = computed(() => {
 
 const baseUrl = computed(() => `${location.protocol}//${location.host}`)
 
+// 动态生成"计费标准"表格行：按模型逐行显示（v2 per-model 定价）。
+// 后端加新模型（4.8/haiku 等）只需改 SupportedModels() + ModelPrices，前端自动同步。
+function lookupModelPrice(modelPrices, model) {
+  if (!modelPrices) return null
+  const key = String(model).toLowerCase()
+  if (modelPrices[key] != null) return modelPrices[key]
+  // dash/dot 等价：claude-opus-4.6 ↔ claude-opus-4-6
+  const dotForm = key.replace(/-(\d)/g, '.$1')
+  if (modelPrices[dotForm] != null) return modelPrices[dotForm]
+  const dashForm = key.replace(/\.(\d)/g, '-$1')
+  if (modelPrices[dashForm] != null) return modelPrices[dashForm]
+  return null
+}
+
+const pricingRows = computed(() => {
+  const p = pricing.value || {}
+  const supported = p.supportedModels || { pro: [], free: [] }
+  const modelPrices = p.modelPrices || {}
+  const defaults = {
+    pro:  p.defaultProPriceUSD  || 0.20,
+    free: p.defaultFreePriceUSD || 0.04,
+  }
+  const rows = []
+  for (const pool of ['pro', 'free']) {
+    for (const m of supported[pool] || []) {
+      const explicit = lookupModelPrice(modelPrices, m)
+      const price = explicit != null ? explicit : defaults[pool]
+      rows.push({
+        model: String(m).replace(/^claude-/, ''),
+        pool: pool === 'pro' ? 'PRO' : 'FREE',
+        price: '$' + Number(price).toFixed(2),
+      })
+    }
+  }
+  return rows
+})
+
 function copyUrl() {
   copyToClipboard(baseUrl.value)
   copied.value = true
@@ -136,11 +174,15 @@ function goRecharge() { router.push('/user/recharge') }
     <WorldCard v-if="!info.plan && giftBalanceValue <= 0" padding="md" variant="talisman" class="activate-banner">
       <div class="banner-row">
         <div class="banner-icon"><AlertTriangle :size="22" /></div>
-        <div class="banner-text">
+        <div class="banner-text" v-if="isChildKey">
+          <h3>账户余额不足</h3>
+          <p>此账户由您的服务商管理，如需充值请联系您的服务商</p>
+        </div>
+        <div class="banner-text" v-else>
           <h3>账号尚未激活</h3>
           <p>请兑换激活码来获取余额或时间，开始使用 API 服务</p>
         </div>
-        <WorldButton variant="primary" size="md" @click="goRecharge">
+        <WorldButton v-if="!isChildKey" variant="primary" size="md" @click="goRecharge">
           <Gift :size="14" /><span>前往充值</span>
         </WorldButton>
       </div>
@@ -152,7 +194,8 @@ function goRecharge() { router.push('/user/recharge') }
         v-if="isCreditPlan"
         label="账户余额"
         :value="`$${totalBalanceValue.toFixed(2)}`"
-        :hint="giftBalanceValue > 0 ? `付费 $${balanceValue.toFixed(2)} · 赠送 $${giftBalanceValue.toFixed(2)}` : (totalBalanceValue < 1 ? '余额不足' : '账户正常')"
+        :hint="`充值 $${balanceValue.toFixed(2)} · 赠送 $${giftBalanceValue.toFixed(2)}`"
+        :sub-hint="totalBalanceValue < 1 ? (isChildKey ? '请联系服务商充值' : '余额不足') : '账户正常'"
         :variant="balanceVariant"
         :icon="Wallet"
       />
@@ -162,6 +205,7 @@ function goRecharge() { router.push('/user/recharge') }
         label="剩余时间"
         :value="timeRemaining"
         :hint="expiryDate"
+        :sub-hint="info.rateLimitPerMin > 0 ? `速率上限 ${info.rateLimitPerMin}/分钟` : ''"
         :variant="timeVariant"
         :icon="Clock"
       />
@@ -237,14 +281,11 @@ function goRecharge() { router.push('/user/recharge') }
       </h3>
       <WorldTable
         :columns="[
-          { key: 'pool',  label: '账号池', mono: true },
+          { key: 'model', label: '模型',  mono: true },
+          { key: 'pool',  label: '号池',  align: 'center' },
           { key: 'price', label: '单价 ($/credit)', align: 'right' },
-          { key: 'models',label: '支持模型', align: 'right', mono: true },
         ]"
-        :rows="[
-          { pool: 'FREE 池', price: '$' + (pricing.freePoolPriceUSD || 0.04), models: 'sonnet-4.5' },
-          { pool: 'PRO 池',  price: '$' + (pricing.proPoolPriceUSD  || 0.20), models: 'sonnet-4.6, opus-4.6' },
-        ]"
+        :rows="pricingRows"
         :compact="true"
       />
     </WorldCard>

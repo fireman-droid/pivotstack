@@ -1,5 +1,5 @@
 #!/bin/bash
-# Kiro Stack 一键部署/更新脚本
+# PivotStack 一键部署/更新脚本
 # 用法:
 #   bash deploy-update.sh          # 首次部署或全量更新
 #   bash deploy-update.sh update   # 拉取最新代码并重建

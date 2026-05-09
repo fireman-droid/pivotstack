@@ -1,17 +1,35 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
-import { Gift, Sparkles, ShoppingBag, UserCircle, AlertCircle } from 'lucide-vue-next'
+import { Gift, Sparkles, ShoppingBag, UserCircle, AlertCircle, Receipt, Calendar } from 'lucide-vue-next'
 import WorldCard from '../../components/world/WorldCard.vue'
 import WorldInput from '../../components/world/WorldInput.vue'
 import WorldButton from '../../components/world/WorldButton.vue'
+import WorldChip from '../../components/world/WorldChip.vue'
 
 const auth = useUserAuth()
 const code = ref('')
 const loading = ref(false)
 const result = ref(null)
 const error = ref('')
+
+// 充值记录
+const records = ref([])
+const recordsTotal = ref(0)
+const recordsLoading = ref(false)
+const page = ref(1)
+const limit = 20
+
+async function fetchRecords() {
+  recordsLoading.value = true
+  try {
+    const data = await userApi(`/recharges?page=${page.value}&limit=${limit}`)
+    records.value = data.records || []
+    recordsTotal.value = data.total || 0
+  } catch (e) { console.error(e) }
+  recordsLoading.value = false
+}
 
 async function handleRedeem() {
   if (!code.value.trim()) return
@@ -23,11 +41,39 @@ async function handleRedeem() {
     result.value = data
     code.value = ''
     auth.refresh()
+    fetchRecords()  // 兑换成功后刷新历史
   } catch (e) {
     error.value = e.message
   }
   loading.value = false
 }
+
+function fmtTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function typeLabel(t) {
+  const map = {
+    code_redeem:      { text: '激活码',     variant: 'success' },
+    code_redeem_days: { text: '天卡兑换',   variant: 'info'    },
+    admin_balance:    { text: '管理员充值', variant: 'success' },
+    admin_gift:       { text: '管理员赠送', variant: 'warning' },
+    admin_adjust:     { text: '调整',       variant: 'default' },
+  }
+  return map[t] || { text: t, variant: 'default' }
+}
+
+const totalPages = computed(() => Math.max(1, Math.ceil(recordsTotal.value / limit)))
+
+function gotoPage(p) {
+  if (p < 1 || p > totalPages.value) return
+  page.value = p
+  fetchRecords()
+}
+
+onMounted(fetchRecords)
 </script>
 
 <template>
@@ -118,6 +164,54 @@ async function handleRedeem() {
         </div>
       </WorldCard>
     </div>
+
+    <!-- 充值历史 -->
+    <WorldCard padding="md" class="history-card">
+      <header class="history-head">
+        <div class="history-title-wrap">
+          <Receipt :size="16" />
+          <h3 class="history-title">充值记录</h3>
+        </div>
+        <span class="history-count" v-if="recordsTotal > 0">共 {{ recordsTotal }} 笔</span>
+      </header>
+
+      <div v-if="recordsLoading" class="history-empty">加载中…</div>
+      <div v-else-if="!records.length" class="history-empty">
+        <Calendar :size="20" />
+        <span>暂无充值记录</span>
+      </div>
+      <div v-else class="history-list">
+        <div v-for="(r, i) in records" :key="i" class="history-row">
+          <div class="row-left">
+            <WorldChip
+              :variant="typeLabel(r.type).variant"
+              size="sm"
+              :dot="true"
+            >
+              {{ typeLabel(r.type).text }}
+            </WorldChip>
+            <div class="row-meta">
+              <div class="row-time">{{ fmtTime(r.timestamp) }}</div>
+              <div v-if="r.code" class="row-code">码: {{ r.code }}</div>
+              <div v-if="r.note" class="row-note">{{ r.note }}</div>
+            </div>
+          </div>
+          <div class="row-right">
+            <div class="amount-cny" v-if="r.amountCNY">+¥{{ r.amountCNY.toFixed(2) }}</div>
+            <div class="amount-usd">{{ r.amountUSD > 0 ? '+$' : '$' }}{{ (r.amountUSD || 0).toFixed(2) }}</div>
+            <div class="balance-flow">
+              余额: ${{ r.balanceBefore.toFixed(2) }} → ${{ r.balanceAfter.toFixed(2) }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="totalPages > 1" class="pagination">
+        <WorldButton size="sm" variant="ghost" :disabled="page <= 1" @click="gotoPage(page - 1)">上一页</WorldButton>
+        <span class="page-info">{{ page }} / {{ totalPages }}</span>
+        <WorldButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(page + 1)">下一页</WorldButton>
+      </div>
+    </WorldCard>
   </div>
 </template>
 
@@ -302,5 +396,108 @@ async function handleRedeem() {
   font-size: 0.75rem;
   color: var(--world-text-mute);
   line-height: 1.4;
+}
+
+/* === 充值历史 === */
+.history-card { margin-top: 8px; }
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.history-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
+}
+.history-count {
+  font-size: 0.75rem;
+  color: var(--world-text-mute);
+  font-weight: 700;
+}
+.history-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--world-text-dim);
+  font-size: 0.875rem;
+}
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--world-overlay-light);
+  border-radius: var(--world-radius-md);
+  border: 1px solid transparent;
+  transition: all 200ms ease;
+}
+.history-row:hover {
+  border-color: var(--world-glass-border);
+  background: var(--world-overlay-strong, var(--world-overlay-light));
+}
+.row-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.row-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.row-time {
+  font-size: 0.78rem;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-mono);
+  font-weight: 700;
+}
+.row-code, .row-note {
+  font-size: 0.7rem;
+  color: var(--world-text-mute);
+  font-family: var(--world-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-right {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.amount-cny {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--world-success);
+  font-family: var(--world-font-mono);
+}
+.amount-usd {
+  font-size: 0.7rem;
+  color: var(--world-text-mute);
+  font-family: var(--world-font-mono);
+}
+.balance-flow {
+  font-size: 0.65rem;
+  color: var(--world-text-dim);
+  font-family: var(--world-font-mono);
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.page-info {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
+  font-family: var(--world-font-mono);
 }
 </style>

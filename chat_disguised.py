@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kiro Stack Chat Assistant - 智能伪装版
+PivotStack Chat Assistant - 智能伪装版
 自动识别任务类型并包装成代码相关请求，绕过 Kiro 的非编程限制
 """
 
@@ -385,7 +385,7 @@ class ChatSession:
 
 def print_banner():
     banner_text = Text()
-    banner_text.append("Kiro Stack Chat - 智能伪装版\n", style="bold cyan")
+    banner_text.append("PivotStack Chat - 智能伪装版\n", style="bold cyan")
     banner_text.append("自动伪装成代码任务，绕过非编程限制\n", style="yellow")
     banner_text.append("输入消息开始对话, /help 查看命令, /test 测试伪装", style="dim")
     console.print(Panel(banner_text, border_style="cyan", padding=(1, 2)))
@@ -411,7 +411,7 @@ def read_multiline():
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Kiro Stack Chat - 智能伪装版")
+    parser = argparse.ArgumentParser(description="PivotStack Chat - 智能伪装版")
     parser.add_argument("--url", default=DEFAULT_BASE_URL, help=f"API base URL (default: {DEFAULT_BASE_URL})")
     parser.add_argument("--model", "-m", default=DEFAULT_MODEL, help=f"模型名称 (default: {DEFAULT_MODEL})")
     parser.add_argument("message", nargs="*", help="直接发送消息")

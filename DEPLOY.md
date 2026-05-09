@@ -1,4 +1,4 @@
-# Kiro Stack 部署指南（任何人/AI 部署前必读）
+# PivotStack 部署指南（任何人/AI 部署前必读）
 
 > **⚠️ 绝对不要在 `/var/www/kiro-stack/` 根目录跑 `docker compose up`！**
 > 真生产入口是端口 **8990**，compose 文件在 **`kiro-go/` 子目录**。

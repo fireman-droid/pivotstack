@@ -34,7 +34,7 @@ function Show-Done {
 while ($true) {
     Clear-Host
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  Kiro Stack - Docker Manager" -ForegroundColor Cyan
+    Write-Host "  PivotStack - Docker Manager" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  1. Start          (no rebuild)"

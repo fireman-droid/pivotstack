@@ -92,7 +92,7 @@ var statusCmd = &cobra.Command{
 
 		fmt.Println()
 		color.Cyan("╭─────────────────────────────────────╮")
-		color.Cyan("│   📊 Kiro-Stack 系统状态            │")
+		color.Cyan("│   📊 PivotStack 系统状态            │")
 		color.Cyan("╰─────────────────────────────────────╯")
 		fmt.Println()
 

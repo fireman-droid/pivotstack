@@ -4,10 +4,12 @@ let echarts = null
 import { api } from '../api/admin'
 import { formatNum } from '../utils/format'
 import { useWorldTheme } from '../stores/worldTheme'
+import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import {
   Users, Zap, Crown, CreditCard, Clock,
-  Copy, Terminal, Globe, AlertTriangle, Moon, RefreshCw
+  Copy, Terminal, Globe, AlertTriangle, Moon, RefreshCw,
+  DollarSign, BarChart3, TrendingUp, Activity
 } from 'lucide-vue-next'
 import { copyToClipboard } from '../utils/clipboard'
 import WorldCard from '../components/world/WorldCard.vue'
@@ -28,6 +30,17 @@ const stats = ref({
 })
 const version = ref('')
 const loading = ref(true)
+const profit = ref(null)
+const auth = useAuthStore()
+
+async function fetchProfit() {
+  try {
+    const res = await fetch('/admin/api/profit', {
+      headers: { 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' },
+    })
+    if (res.ok) profit.value = await res.json()
+  } catch (e) { console.error('fetchProfit failed:', e) }
+}
 
 const theme = useWorldTheme()
 const chartRef = ref(null)
@@ -213,6 +226,9 @@ onMounted(async () => {
   await loadVersion()
   connectStatsSSE()
   loadInactive()
+  fetchProfit()
+  // 营收数据每 30s 刷一次（admin 看趋势）
+  setInterval(fetchProfit, 30000)
 })
 
 onUnmounted(() => {
@@ -245,6 +261,36 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
         <WorldChip variant="neutral" size="sm"><Clock :size="11" /> 运行 {{ formatUptime(stats.uptime) }}</WorldChip>
       </div>
     </header>
+
+    <!-- 营收概览 4 卡 -->
+    <div class="stats-row" v-if="profit">
+      <WorldStat
+        label="总收入" unit="CNY"
+        :value="`¥${(profit.revenue_cny || 0).toFixed(2)}`"
+        :hint="`面值 $${(profit.revenue_usd || 0).toFixed(2)}`"
+        :icon="DollarSign" variant="success"
+      />
+      <WorldStat
+        label="总成本" unit="CNY"
+        :value="`¥${(profit.total_cost_cny || 0).toFixed(2)}`"
+        :hint="`PRO ¥${(profit.pro_cost_cny || 0).toFixed(2)} · FREE ¥${(profit.free_cost_cny || 0).toFixed(2)}`"
+        :icon="BarChart3" variant="danger"
+      />
+      <WorldStat
+        label="净利润" unit="CNY"
+        :value="`¥${(profit.profit_cny || 0).toFixed(2)}`"
+        :hint="(profit.profit_cny || 0) >= 0 ? '盈利中' : '亏损中'"
+        :icon="TrendingUp"
+        :variant="(profit.profit_cny || 0) >= 0 ? 'success' : 'danger'"
+      />
+      <WorldStat
+        label="利润率" unit="%"
+        :value="(profit.margin_percent || 0).toFixed(1)"
+        :hint="(profit.margin_percent || 0) >= 30 ? '健康' : ((profit.margin_percent || 0) >= 0 ? '偏低' : '亏损')"
+        :icon="Activity"
+        :variant="(profit.margin_percent || 0) >= 30 ? 'info' : ((profit.margin_percent || 0) >= 0 ? 'warning' : 'danger')"
+      />
+    </div>
 
     <!-- 4 Stats -->
     <div class="stats-row">

@@ -4,6 +4,7 @@ defineProps({
   value: { type: [String, Number], required: true },
   unit: { type: String, default: '' },          // $/￥/credit/天 字面单位
   hint: { type: String, default: '' },
+  subHint: { type: String, default: '' },       // 第二行小字（状态短语等）
   variant: { type: String, default: 'primary' },// primary | success | warning | danger | info
   icon: { type: [Object, Function], default: null },
   trend: { type: String, default: '' },         // 'up' | 'down' | ''
@@ -28,6 +29,7 @@ defineProps({
       </span>
       <span v-if="hint" class="stat-hint">{{ hint }}</span>
     </div>
+    <div v-if="subHint" class="stat-subhint">{{ subHint }}</div>
   </div>
 </template>
 
@@ -107,6 +109,18 @@ defineProps({
   color: var(--world-error);
 }
 .trend-arrow { font-size: 0.7rem; }
+
+.stat-subhint {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--world-text-mute);
+  opacity: 0.75;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+.v-success .stat-subhint { color: var(--world-success); opacity: 0.8; }
+.v-warning .stat-subhint { color: var(--world-warning); opacity: 0.85; }
+.v-danger  .stat-subhint { color: var(--world-error);   opacity: 0.85; }
 
 /* === Variant 强调（左侧装饰条 + 数字色） === */
 .world-stat::before {

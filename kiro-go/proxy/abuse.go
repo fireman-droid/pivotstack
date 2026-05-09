@@ -3,9 +3,26 @@ package proxy
 import (
 	"fmt"
 	"kiro-api-proxy/config"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+// ParseAbuseReason 把 OnRequestStart 返回的 reason 字符串解析为 (kind, retryAfterSec)。
+//   - kind:           "rate_limit" | "concurrency_limit" | <原值>
+//   - retryAfterSec:  仅 rate_limit 类型有意义，0 表示无建议
+//
+// 调用方据此设 Retry-After 头 + 决定具体错误文案。
+func ParseAbuseReason(reason string) (kind string, retryAfterSec int) {
+	if i := strings.Index(reason, ":"); i > 0 {
+		if n, err := strconv.Atoi(reason[i+1:]); err == nil {
+			return reason[:i], n
+		}
+		return reason[:i], 0
+	}
+	return reason, 0
+}
 
 // KeyRuntime tracks per-key runtime state for abuse prevention.
 type KeyRuntime struct {
@@ -30,8 +47,61 @@ func getOrCreateRuntime(keyID string) *KeyRuntime {
 	return actual.(*KeyRuntime)
 }
 
+// 老兜底速率（credit / 已过期天卡走这个）。保留写死，避免破坏现有行为。
+const legacyDefaultRPM = 200
+
+// isTimedActive 当前 key 是否处于"按时长收费"的活跃期。
+// 只有这种 key 才需要走防共享速率限制（credit 计费自带反共享）。
+func isTimedActive(info *config.ApiKeyInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.Plan != "timed" && info.Plan != "hybrid" {
+		return false
+	}
+	if info.ExpiresAt <= 0 {
+		return false
+	}
+	return time.Now().Unix() <= info.ExpiresAt
+}
+
+// getEffectiveRPM 返回当前 key 应该用的 60s 滑动窗口上限。
+//
+// 决策顺序：
+//  1. 非天卡活跃期 → 老兜底 200/min（credit / 过期 hybrid）
+//  2. key.RateLimitPerMin > 0 → 用 key 自己的（per-key override，本期 UI 不暴露）
+//  3. 否则用 Settings.TimedKeyRPM
+//  4. Settings 也没配 → 回退老兜底
+func getEffectiveRPM(info *config.ApiKeyInfo) int {
+	if !isTimedActive(info) {
+		return legacyDefaultRPM
+	}
+	if info != nil && info.RateLimitPerMin > 0 {
+		return info.RateLimitPerMin
+	}
+	rpm := config.GetTimedKeyRPM()
+	if rpm <= 0 {
+		return legacyDefaultRPM
+	}
+	return rpm
+}
+
+// computeRetryAfter 根据 60s 滑动窗口，算下一次请求最少要等多少秒（向上取整）。
+// 用窗口里最早一条的"距离 60 秒过去"还差多久。
+func computeRetryAfter(times []int64, now int64) int {
+	if len(times) == 0 {
+		return 1
+	}
+	earliest := times[0]
+	wait := earliest + 60 - now
+	if wait < 1 {
+		wait = 1
+	}
+	return int(wait)
+}
+
 // OnRequestStart checks abuse limits before allowing a request.
-// Returns (allowed, reason).
+// Returns (allowed, reason). reason 形如 "rate_limit:N"（N 秒后重试），调用方据此设 Retry-After。
 func OnRequestStart(keyID, ip string) (bool, string) {
 	if keyID == "" {
 		return true, ""
@@ -58,11 +128,15 @@ func OnRequestStart(keyID, ip string) (bool, string) {
 		fmt.Printf("[Abuse] key=%s flagged: %s\n", keyID[:8], rt.FlagReason)
 	}
 
-	// Rate limit: max 200 requests in 60 seconds
+	// Rate limit: 天卡走 per-key/global RPM；其他走老兜底 200/min
+	info := config.FindApiKeyByID(keyID)
+	limit := getEffectiveRPM(info)
 	rt.RequestTimes = pruneOldTimestamps(rt.RequestTimes, now, 60)
-	if len(rt.RequestTimes) >= 200 {
-		fmt.Printf("[Abuse] key=%s blocked: rate_limit (%d req/60s)\n", keyID[:8], len(rt.RequestTimes))
-		return false, "rate_limit"
+	if len(rt.RequestTimes) >= limit {
+		retryAfter := computeRetryAfter(rt.RequestTimes, now)
+		fmt.Printf("[Abuse] key=%s blocked: rate_limit (%d req/60s, limit=%d, retry=%ds)\n",
+			keyID[:8], len(rt.RequestTimes), limit, retryAfter)
+		return false, fmt.Sprintf("rate_limit:%d", retryAfter)
 	}
 
 	rt.ActiveStreams++

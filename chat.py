@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kiro Stack Chat Assistant - 交互式终端对话工具 (Rich UI)
+PivotStack Chat Assistant - 交互式终端对话工具 (Rich UI)
 连接本地 kiro-stack API，支持流式输出、多轮对话、模型切换
 """
 
@@ -506,7 +506,7 @@ class ChatSession:
 
 def print_banner():
     banner_text = Text()
-    banner_text.append("Kiro Stack Chat Assistant\n", style="bold cyan")
+    banner_text.append("PivotStack Chat Assistant\n", style="bold cyan")
     banner_text.append("输入消息开始对话, /help 查看命令, /exit 退出", style="dim")
     console.print(Panel(banner_text, border_style="cyan", padding=(1, 2)))
 
@@ -533,7 +533,7 @@ def read_multiline():
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Kiro Stack Chat Assistant")
+    parser = argparse.ArgumentParser(description="PivotStack Chat Assistant")
     parser.add_argument("--url", default=DEFAULT_BASE_URL, help=f"API base URL (default: {DEFAULT_BASE_URL})")
     parser.add_argument("--model", "-m", default=DEFAULT_MODEL, help=f"模型名称 (default: {DEFAULT_MODEL})")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS, help="最大输出 tokens")

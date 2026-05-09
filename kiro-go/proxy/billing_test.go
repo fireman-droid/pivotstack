@@ -82,22 +82,24 @@ func TestEstimateCredits(t *testing.T) {
 }
 
 func TestPoolPriceAndCost(t *testing.T) {
+	// v2 起 PoolPriceUSD 是 deprecated wrapper，返回 DefaultProPriceUSD/DefaultFreePriceUSD（按 pool 兜底）。
+	// 默认值贴近实际生产用的（FREE=0.04, PRO=0.20）而非远古 1.0 时代的 0.40/2.00。
 	freePrice := PoolPriceUSD("free")
 	proPrice := PoolPriceUSD("pro")
 
-	if freePrice != 0.40 {
-		t.Errorf("FREE pool price = $%.4f, want $0.40", freePrice)
+	if freePrice != 0.04 {
+		t.Errorf("FREE pool price = $%.4f, want $0.04", freePrice)
 	}
-	if proPrice != 2.00 {
-		t.Errorf("PRO pool price = $%.4f, want $2.00", proPrice)
+	if proPrice != 0.20 {
+		t.Errorf("PRO pool price = $%.4f, want $0.20", proPrice)
 	}
 
 	// CreditsToCostUSD
-	if cost := CreditsToCostUSD(10.0, "free"); math.Abs(cost-4.00) > 0.001 {
-		t.Errorf("10 credits FREE = $%.4f, want $4.00", cost)
+	if cost := CreditsToCostUSD(10.0, "free"); math.Abs(cost-0.40) > 0.001 {
+		t.Errorf("10 credits FREE = $%.4f, want $0.40", cost)
 	}
-	if cost := CreditsToCostUSD(10.0, "pro"); math.Abs(cost-20.00) > 0.001 {
-		t.Errorf("10 credits PRO = $%.4f, want $20.00", cost)
+	if cost := CreditsToCostUSD(10.0, "pro"); math.Abs(cost-2.00) > 0.001 {
+		t.Errorf("10 credits PRO = $%.4f, want $2.00", cost)
 	}
 	t.Logf("✅ FREE $%.2f/cr, PRO $%.2f/cr, ratio=%.1fx", freePrice, proPrice, proPrice/freePrice)
 }

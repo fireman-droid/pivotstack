@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"kiro-api-proxy/config"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,12 +11,17 @@ import (
 
 var auditMu sync.Mutex
 
-// AuditLog appends an audit entry to data/audit.log.
+// AuditLog appends an audit entry to <dataDir>/audit.log.
+// 用 config.GetDataDir() 跟 call_logs / recharge_records 同口径，
+// 本地实例用独立 data_local/ 不会污染生产 data/。
 func AuditLog(action, operator, detail string) {
 	auditMu.Lock()
 	defer auditMu.Unlock()
 
-	dir := "data"
+	dir := config.GetDataDir()
+	if dir == "" {
+		dir = "data"
+	}
 	os.MkdirAll(dir, 0755)
 	f, err := os.OpenFile(filepath.Join(dir, "audit.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

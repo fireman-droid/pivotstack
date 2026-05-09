@@ -42,6 +42,7 @@ const newPassword = ref('')
 const maxConcurrentPerKey = ref(20)
 const maxInFlightPerAccountFree = ref(50)
 const maxInFlightPerAccountPro = ref(50)
+const timedKeyRPM = ref(10) // 天卡防共享速率（仅天卡有效期内的 key 受此约束）
 const loading = ref({ api: false, thinking: false, endpoint: false, pwd: false, concurrency: false, leaderboard: false })
 
 // Abuse monitor
@@ -134,6 +135,8 @@ onMounted(async () => {
       maxConcurrentPerKey.value = d.maxConcurrentPerKey || 20
       maxInFlightPerAccountFree.value = d.maxInFlightPerAccountFree || d.maxInFlightPerAccount || 50
       maxInFlightPerAccountPro.value = d.maxInFlightPerAccountPro || d.maxInFlightPerAccount || 50
+      // timedKeyRPM：0 = 走老兜底；前端 ref 默认 10 但若服务返回了具体值就用服务的（包括 0）
+      if (typeof d.timedKeyRPM === 'number') timedKeyRPM.value = d.timedKeyRPM
     }
     loadFlagged()
     loadLeaderboardConfig()
@@ -171,7 +174,12 @@ async function saveEndpoint() {
 
 async function saveConcurrency() {
   loading.value.concurrency = true
-  const res = await api('/concurrency', { method: 'POST', body: JSON.stringify({ maxConcurrentPerKey: maxConcurrentPerKey.value, maxInFlightPerAccountFree: maxInFlightPerAccountFree.value, maxInFlightPerAccountPro: maxInFlightPerAccountPro.value }) })
+  const res = await api('/concurrency', { method: 'POST', body: JSON.stringify({
+    maxConcurrentPerKey: maxConcurrentPerKey.value,
+    maxInFlightPerAccountFree: maxInFlightPerAccountFree.value,
+    maxInFlightPerAccountPro: maxInFlightPerAccountPro.value,
+    timedKeyRPM: Number(timedKeyRPM.value) || 0,
+  }) })
   res.ok ? success('并发设置已保存') : error('保存失败')
   loading.value.concurrency = false
 }
@@ -353,6 +361,9 @@ async function clearFlag(keyId) {
           <WorldInput v-model.number="maxInFlightPerAccountPro" type="number"
                       label="PRO 账号最大并发"
                       hint="付费号池中每个账号同时处理的最大请求数（默认 50）" />
+          <WorldInput v-model.number="timedKeyRPM" type="number"
+                      label="天卡 / 时间卡 速率上限（次/分钟）"
+                      hint="只对 plan=timed/hybrid 且未过期的 key 生效。默认 10。设值越低越能劝退分发（N 人共享一张卡时人均配额变低）。0 = 不限速（走老兜底 200/min）。credit 用户与已过期 key 不受影响。" />
           <div class="row-actions">
             <WorldButton variant="primary" :loading="loading.concurrency" @click="saveConcurrency">
               <Save :size="14" /><span>保存并发配置</span>

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Kiro-Stack 服务器部署/更新脚本
+# PivotStack 服务器部署/更新脚本
 # 用法: bash deploy-kiro.sh [deploy|update|stop|status|logs]
 
 set -e
 PROJECT_DIR="/var/www/kiro-stack"
 
 deploy() {
-  echo "🚀 首次部署 Kiro-Stack..."
+  echo "🚀 首次部署 PivotStack..."
 
   # 克隆项目
   if [ ! -d "$PROJECT_DIR" ]; then
@@ -17,7 +17,7 @@ deploy() {
   # 创建 .env（不在 Git 里）
   cat > .env << 'EOF'
 # ============================================
-# Kiro Stack 配置文件
+# PivotStack 配置文件
 # ============================================
 
 # -------------------- 管理面板 --------------------
@@ -43,7 +43,7 @@ EOF
 }
 
 update() {
-  echo "🔄 更新 Kiro-Stack..."
+  echo "🔄 更新 PivotStack..."
   cd "$PROJECT_DIR"
 
   echo "📥 拉取最新代码..."
@@ -58,7 +58,7 @@ update() {
 }
 
 stop() {
-  echo "⏹ 停止 Kiro-Stack..."
+  echo "⏹ 停止 PivotStack..."
   cd "$PROJECT_DIR"
   docker compose down
   echo "✅ 已停止"

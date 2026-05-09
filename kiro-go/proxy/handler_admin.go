@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -168,6 +169,30 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiUpdateLeaderboardConfig(w, r)
 	case path == "/apikeys/clear-gift" && r.Method == "POST":
 		h.apiClearAllGift(w, r)
+
+	// ==================== Promotion / Recharge / Insights (新增) ====================
+	case path == "/promotion" && r.Method == "GET":
+		h.apiGetPromotion(w, r)
+	case path == "/promotion" && r.Method == "PUT":
+		h.apiUpdatePromotion(w, r)
+	case path == "/promotion/whitelist" && r.Method == "POST":
+		h.apiAddPromotionWhitelist(w, r)
+	case strings.HasPrefix(path, "/promotion/whitelist/") && r.Method == "DELETE":
+		kid := strings.TrimPrefix(path, "/promotion/whitelist/")
+		h.apiRemovePromotionWhitelist(w, r, kid)
+	case path == "/recharges" && r.Method == "GET":
+		h.apiGetRecharges(w, r)
+	case strings.HasPrefix(path, "/apikeys/") && strings.HasSuffix(path, "/recharges") && r.Method == "GET":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/apikeys/"), "/recharges")
+		h.apiGetApiKeyRecharges(w, r, id)
+	case path == "/insights/funnel" && r.Method == "GET":
+		h.apiInsightsFunnel(w, r)
+	case path == "/insights/whales" && r.Method == "GET":
+		h.apiInsightsWhales(w, r)
+	case path == "/insights/freeloaders" && r.Method == "GET":
+		h.apiInsightsFreeloaders(w, r)
+	case path == "/insights/daily" && r.Method == "GET":
+		h.apiInsightsDaily(w, r)
 
 	default:
 		w.WriteHeader(404)
@@ -689,15 +714,17 @@ func (h *Handler) apiGetConcurrency(w http.ResponseWriter, _ *http.Request) {
 		"maxConcurrentPerKey":       perKey,
 		"maxInFlightPerAccountFree": perFree,
 		"maxInFlightPerAccountPro":  perPro,
+		"timedKeyRPM":               config.GetTimedKeyRPM(), // 0 = 走老兜底 200/min
 	})
 }
 
 func (h *Handler) apiUpdateConcurrency(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MaxConcurrentPerKey       int `json:"maxConcurrentPerKey"`
-		MaxInFlightPerAccount     int `json:"maxInFlightPerAccount"`     // Legacy: sets both free and pro
-		MaxInFlightPerAccountFree int `json:"maxInFlightPerAccountFree"` // Per FREE account
-		MaxInFlightPerAccountPro  int `json:"maxInFlightPerAccountPro"`  // Per PRO account
+		MaxConcurrentPerKey       int  `json:"maxConcurrentPerKey"`
+		MaxInFlightPerAccount     int  `json:"maxInFlightPerAccount"`     // Legacy: sets both free and pro
+		MaxInFlightPerAccountFree int  `json:"maxInFlightPerAccountFree"` // Per FREE account
+		MaxInFlightPerAccountPro  int  `json:"maxInFlightPerAccountPro"`  // Per PRO account
+		TimedKeyRPM               *int `json:"timedKeyRPM,omitempty"`     // 天卡 key 全局 RPM；nil=不改，0=禁用走老兜底，>0=新阈值
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -734,6 +761,20 @@ func (h *Handler) apiUpdateConcurrency(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
+	}
+	// 单独处理 timedKeyRPM（指针：nil 表示不改）
+	if req.TimedKeyRPM != nil {
+		v := *req.TimedKeyRPM
+		if v < 0 || v > 10000 {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "timedKeyRPM must be 0-10000"})
+			return
+		}
+		if err := config.UpdateTimedKeyRPM(v); err != nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
@@ -944,12 +985,16 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
 	var req struct {
-		Plan        *string  `json:"plan"`
-		ExpiresAt   *int64   `json:"expiresAt"`
-		Enabled     *bool    `json:"enabled"`
-		Balance     *float64 `json:"balance"`
-		GiftBalance *float64 `json:"giftBalance"`
-		Note        *string  `json:"note"`
+		Plan             *string  `json:"plan"`
+		ExpiresAt        *int64   `json:"expiresAt"`
+		Enabled          *bool    `json:"enabled"`
+		Balance          *float64 `json:"balance"`
+		GiftBalance      *float64 `json:"giftBalance"`
+		Note             *string  `json:"note"`
+		// 代理设置
+		IsReseller       *bool    `json:"isReseller"`
+		MaxChildKeys     *int     `json:"maxChildKeys"`
+		ResellerDiscount *float64 `json:"resellerDiscount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -969,6 +1014,11 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 		json.NewEncoder(w).Encode(map[string]string{"error": "API key not found"})
 		return
 	}
+	// 记录变更前状态（用于审计 + recharge_records 流水）
+	beforeBalance := existing.Balance
+	beforeGift := existing.GiftBalance
+	beforeExpiresAt := existing.ExpiresAt
+
 	if req.Plan != nil {
 		existing.Plan = *req.Plan
 	}
@@ -987,11 +1037,80 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	if req.Note != nil {
 		existing.Note = *req.Note
 	}
+	// 代理设置：子 key 不允许开代理（防套娃）
+	if req.IsReseller != nil {
+		if existing.ParentKeyID != "" && *req.IsReseller {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "child key cannot become reseller"})
+			return
+		}
+		existing.IsReseller = *req.IsReseller
+		// 关闭代理时清空相关字段（保留 SoldToChildren 作为历史统计）
+		if !existing.IsReseller {
+			existing.MaxChildKeys = 0
+			existing.ResellerDiscount = 0
+		}
+	}
+	if req.MaxChildKeys != nil && existing.IsReseller {
+		if *req.MaxChildKeys < 0 {
+			existing.MaxChildKeys = 0
+		} else {
+			existing.MaxChildKeys = *req.MaxChildKeys
+		}
+	}
+	if req.ResellerDiscount != nil && existing.IsReseller {
+		// 0 = 无折扣；(0,1) = 折扣进货倍率
+		d := *req.ResellerDiscount
+		if d < 0 || d >= 1 {
+			d = 0
+		}
+		existing.ResellerDiscount = d
+	}
 	if err := config.UpdateApiKey(id, *existing); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+
+	// 审计 + 充值流水（如果 balance/gift/expiresAt 有变化）
+	operator := operatorFromRequest(r)
+	now := time.Now()
+	cst := time.FixedZone("CST", 8*3600)
+
+	// balance 变化 → 写流水
+	if req.Balance != nil && existing.Balance != beforeBalance {
+		delta := existing.Balance - beforeBalance
+		appendRechargeRecord(RechargeRecord{
+			Time: now.In(cst).Format("01-02 15:04:05"), Timestamp: now.Unix(),
+			KeyID: existing.ID, KeyNote: existing.Note,
+			Type: "admin_adjust", AmountUSD: delta, AmountCNY: delta * config.CNYPerUSDFace,
+			BalanceBefore: beforeBalance, BalanceAfter: existing.Balance,
+			GiftBefore: beforeGift, GiftAfter: existing.GiftBalance,
+			Operator: operator, Note: "admin balance adjust",
+		})
+		AuditLog("apikey_balance_adjust", operator,
+			fmt.Sprintf("keyID=%s before=$%.4f after=$%.4f delta=$%.4f", existing.ID, beforeBalance, existing.Balance, delta))
+	}
+	// gift 变化 → 写流水
+	if req.GiftBalance != nil && existing.GiftBalance != beforeGift {
+		delta := existing.GiftBalance - beforeGift
+		appendRechargeRecord(RechargeRecord{
+			Time: now.In(cst).Format("01-02 15:04:05"), Timestamp: now.Unix(),
+			KeyID: existing.ID, KeyNote: existing.Note,
+			Type: "admin_gift", AmountUSD: delta, AmountCNY: 0, // 赠送不算 CNY 充值
+			BalanceBefore: beforeBalance, BalanceAfter: existing.Balance,
+			GiftBefore: beforeGift, GiftAfter: existing.GiftBalance,
+			Operator: operator, Note: "admin gift adjust",
+		})
+		AuditLog("apikey_gift_adjust", operator,
+			fmt.Sprintf("keyID=%s before=$%.4f after=$%.4f delta=$%.4f", existing.ID, beforeGift, existing.GiftBalance, delta))
+	}
+	// ExpiresAt 变化 → audit（不写充值流水，但留痕方便排查"天卡消失"）
+	if req.ExpiresAt != nil && existing.ExpiresAt != beforeExpiresAt {
+		AuditLog("apikey_expires_change", operator,
+			fmt.Sprintf("keyID=%s before=%d after=%d delta=%d", existing.ID, beforeExpiresAt, existing.ExpiresAt, existing.ExpiresAt-beforeExpiresAt))
+	}
+
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -1027,7 +1146,165 @@ func (h *Handler) apiGetApiKeyLogs(w http.ResponseWriter, _ *http.Request, keyID
 // GET /admin/api/pricing
 func (h *Handler) apiGetPricing(w http.ResponseWriter, _ *http.Request) {
 	pricing := config.GetPricing()
-	json.NewEncoder(w).Encode(pricing)
+	supported := SupportedModels()
+	out := struct {
+		config.PricingConfig
+		SupportedModels map[string][]string  `json:"supportedModels"`
+		Preview         []pricingPreviewRow  `json:"preview"` // v2: 给前端表格用的扁平视图
+		Promotion       *promotionPreviewOut `json:"promotionPreview,omitempty"`
+	}{
+		PricingConfig:   pricing,
+		SupportedModels: supported,
+		Preview:         buildPricingPreview(pricing, supported),
+		Promotion:       buildPromotionPreview(pricing, supported),
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
+// pricingPreviewRow 给前端表格的一行：每个 model 一条。
+type pricingPreviewRow struct {
+	Model              string  `json:"model"`
+	Pool               string  `json:"pool"`
+	PriceUSD           float64 `json:"priceUSD"`           // 实际生效（ModelPrices 命中或 Default 兜底）
+	IsDefault          bool    `json:"isDefault"`          // true = 走的是 DefaultProPriceUSD/DefaultFreePriceUSD
+	PriceCNYPerCredit  float64 `json:"priceCNYPerCredit"`  // priceUSD × CNYPerUSDFace（0.05）
+	CostCNYPerCredit   float64 `json:"costCNYPerCredit"`   // 采购成本（成本端，不是定价）
+	CostIsFallback     bool    `json:"costIsFallback"`     // true = 没有真实成本数据（CostEntries 空），cost 是 hardcoded 兜底；前端应显示 "—" 而非真实利润率
+	MarginPercent      float64 `json:"marginPercent"`      // (revenue - cost) / revenue × 100；CostIsFallback=true 时无意义
+	LegacyPriceUSD     float64 `json:"legacyPriceUSD"`     // shadow：旧公式 v1 算的价（前端可比对）
+	LegacyEqualsActual bool    `json:"legacyEqualsActual"` // 新旧是否一致（迁移正确）
+}
+
+func buildPricingPreview(p config.PricingConfig, supported map[string][]string) []pricingPreviewRow {
+	rows := make([]pricingPreviewRow, 0)
+	seen := map[string]bool{}
+
+	emit := func(model, pool string) {
+		if seen[model] {
+			return
+		}
+		seen[model] = true
+		actual := ModelPriceUSD(model)
+		fromMap := lookupModelPrice(p.ModelPrices, model) > 0
+		legacy := LegacyModelPriceUSD(model)
+		var costPer float64
+		var costIsFallback bool
+		if pool == "pro" {
+			costPer = p.ProCostPerCredit()
+			costIsFallback = len(p.ProCostEntries) == 0 &&
+				!(p.ProAccountCredits > 0 && p.ProAccountPriceCNY > 0) &&
+				p.PurchasePriceCNY <= 0
+		} else {
+			costPer = p.FreeCostPerCredit()
+			costIsFallback = len(p.FreeCostEntries) == 0 &&
+				!(p.FreeAccountBatchCount > 0 && p.FreeAccountCredits > 0 && p.FreeAccountBatchPrice > 0)
+		}
+		revenuePer := actual * config.CNYPerUSDFace
+		margin := 0.0
+		if revenuePer > 0 {
+			margin = (revenuePer - costPer) / revenuePer * 100
+		}
+		rows = append(rows, pricingPreviewRow{
+			Model:              model,
+			Pool:               pool,
+			PriceUSD:           actual,
+			IsDefault:          !fromMap,
+			PriceCNYPerCredit:  revenuePer,
+			CostCNYPerCredit:   costPer,
+			CostIsFallback:     costIsFallback,
+			MarginPercent:      margin,
+			LegacyPriceUSD:     legacy,
+			LegacyEqualsActual: math.Abs(actual-legacy) < 0.0001,
+		})
+	}
+
+	// 1. supportedModels 里的 model 先列
+	for _, m := range supported["pro"] {
+		emit(m, "pro")
+	}
+	for _, m := range supported["free"] {
+		emit(m, "free")
+	}
+	// 2. ModelPrices 里有但 supportedModels 没的（admin 自定义的）后追加
+	for m := range p.ModelPrices {
+		emit(m, ResolveModelPool(m))
+	}
+	return rows
+}
+
+// promotionPreviewOut 在活动 tab 给前端用的"原价 → 活动价 → 折扣"对照
+type promotionPreviewOut struct {
+	Enabled bool                  `json:"enabled"`
+	Rows    []promotionPreviewRow `json:"rows"`
+}
+
+type promotionPreviewRow struct {
+	Model           string  `json:"model"`
+	Pool            string  `json:"pool"`
+	OriginalUSD     float64 `json:"originalUSD"`
+	PromoUSD        float64 `json:"promoUSD"`
+	IsPromoDefault  bool    `json:"isPromoDefault"` // true = 活动期走的是 promo.DefaultPro/FreePriceUSD
+	DiscountPercent float64 `json:"discountPercent"`
+}
+
+func buildPromotionPreview(p config.PricingConfig, supported map[string][]string) *promotionPreviewOut {
+	promo := config.GetPromotion()
+	if promo == nil {
+		return nil
+	}
+	out := &promotionPreviewOut{Enabled: promo.Enabled}
+	allModels := []string{}
+	for _, m := range supported["pro"] {
+		allModels = append(allModels, m)
+	}
+	for _, m := range supported["free"] {
+		allModels = append(allModels, m)
+	}
+	for m := range p.ModelPrices {
+		// dedup
+		dup := false
+		for _, x := range allModels {
+			if normalizeModelKey(strings.ToLower(x)) == normalizeModelKey(strings.ToLower(m)) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			allModels = append(allModels, m)
+		}
+	}
+	for _, m := range allModels {
+		pool := ResolveModelPool(m)
+		original := ModelPriceUSD(m)
+		// 活动期单价：lookup promo.ModelPrices → 否则 promo.DefaultPro/FreePriceUSD → 否则原价
+		promoPrice := lookupModelPrice(promo.ModelPrices, m)
+		isDefault := false
+		if promoPrice <= 0 {
+			isDefault = true
+			if pool == "pro" {
+				promoPrice = promo.DefaultProPriceUSD
+			} else {
+				promoPrice = promo.DefaultFreePriceUSD
+			}
+		}
+		if promoPrice <= 0 {
+			promoPrice = original
+			isDefault = false
+		}
+		discount := 0.0
+		if original > 0 {
+			discount = (1 - promoPrice/original) * 100
+		}
+		out.Rows = append(out.Rows, promotionPreviewRow{
+			Model:           m,
+			Pool:            pool,
+			OriginalUSD:     original,
+			PromoUSD:        promoPrice,
+			IsPromoDefault:  isDefault,
+			DiscountPercent: discount,
+		})
+	}
+	return out
 }
 
 // PUT /admin/api/pricing
@@ -1038,12 +1315,21 @@ func (h *Handler) apiUpdatePricing(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
+	// v1→v2 兜底：admin 用旧 Pricing UI（只发 ProPoolPriceUSD/FreePoolPriceUSD/ModelMultipliers，
+	// 不发 ModelPrices 或 Default*）时，自动算出 ModelPrices 让计费立刻生效。
+	// 判定"v1 UI"：ModelPrices 空 + DefaultPro/FreePriceUSD 都为 0。
+	if len(pricing.ModelPrices) == 0 && pricing.DefaultProPriceUSD == 0 && pricing.DefaultFreePriceUSD == 0 {
+		config.MigratePricingToModelLevel(&pricing)
+	}
 	if err := config.UpdatePricing(pricing); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-	AuditLog("pricing_update", "admin", fmt.Sprintf("freePool=$%.2f proPool=$%.2f purchaseCNY=¥%.4f", pricing.FreePoolPriceUSD, pricing.ProPoolPriceUSD, pricing.PurchasePriceCNY))
+	AuditLog("pricing_update", "admin",
+		fmt.Sprintf("modelPrices=%d entries defaultPro=$%.4f defaultFree=$%.4f freePool=$%.4f proPool=$%.4f purchaseCNY=¥%.4f",
+			len(pricing.ModelPrices), pricing.DefaultProPriceUSD, pricing.DefaultFreePriceUSD,
+			pricing.FreePoolPriceUSD, pricing.ProPoolPriceUSD, pricing.PurchasePriceCNY))
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -1080,10 +1366,9 @@ func (h *Handler) apiGetProfit(w http.ResponseWriter, _ *http.Request) {
 	for _, log := range h.callLogs {
 		pool := ResolveModelPool(log.ActualModel)
 
-		// Calculates "Revenue" based ONLY on PaidCredits
-		// If PaidCredits is 0, Revenue will be $0 for this log.
-		revenueUSD := CreditsToCostUSD(log.PaidCredits, pool)
-		totalPaidUSDConsumed += revenueUSD
+		// Revenue = log.CostUSD（addCallLogWithKey 已经把它覆盖为 ActualPaidUSD，含模型倍率）。
+		// 旧版用 CreditsToCostUSD(log.PaidCredits, pool) 不带倍率，会少算 multiplier 部分（Bug #2）。
+		totalPaidUSDConsumed += log.CostUSD
 
 		// Calculates generic cost using ALL Credits (Cost is paid to upstream regardless)
 		if pool == "pro" {

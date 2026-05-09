@@ -201,7 +201,11 @@ const stats = computed(() => ({
 }))
 
 function fmtAmount(c) {
-  if (c.type === 'balance') return `+$${(c.amount || 0).toFixed(2)}`
+  if (c.type === 'balance') {
+    // amount 字段存的是 CNY，兑换时换算成 USD face（1 ¥ = 20 $）
+    const cny = c.amount || 0
+    return `+¥${cny.toFixed(2)} (≈$${(cny / 0.05).toFixed(0)})`
+  }
   const sec = c.amount || 0
   if (sec >= 86400) return `+${Math.floor(sec / 86400)}天`
   if (sec >= 3600) return `+${Math.floor(sec / 3600)}小时`
@@ -349,14 +353,14 @@ onMounted(loadCodes)
 
         <!-- Balance preset -->
         <div v-if="form.type === 'balance'" class="gen-section">
-          <label class="gen-label">面额（$）</label>
+          <label class="gen-label">充值面额（¥）</label>
           <div class="preset-grid">
             <button
               v-for="amt in balancePresets" :key="amt"
               :class="['preset-btn', { active: form.amount === amt }]"
               @click="form.amount = amt"
             >
-              ${{ amt }}
+              ¥{{ amt }}
             </button>
             <button :class="['preset-btn', { active: form.amount === -1 }]" @click="form.amount = -1">自定义</button>
           </div>
@@ -364,9 +368,13 @@ onMounted(loadCodes)
             v-if="form.amount === -1"
             v-model.number="form.customBalance"
             type="number"
-            label="自定义金额（$）"
+            label="自定义金额（¥）"
             placeholder="例如 25.5"
           />
+          <p class="hint-line">
+            用户兑换后账户余额自动加 <strong>${{ ((form.amount === -1 ? Number(form.customBalance) : form.amount) / 0.05 || 0).toFixed(2) }}</strong>
+            face value（1 ¥ = 20 $）
+          </p>
         </div>
 
         <!-- Time preset -->
@@ -542,6 +550,17 @@ onMounted(loadCodes)
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--world-text-mute);
+}
+.hint-line {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--world-text-mute);
+  line-height: 1.5;
+}
+.hint-line strong {
+  font-weight: 700;
+  color: var(--world-accent);
+  font-family: var(--world-font-mono, ui-monospace, monospace);
 }
 .preset-grid {
   display: flex;

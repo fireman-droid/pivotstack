@@ -6,7 +6,7 @@ import WorldSwitcher from './WorldSwitcher.vue'
 import {
   LayoutDashboard, KeyRound, FileText, Users, Settings,
   LogOut, Menu, X, ChevronRight, Shield, Gift,
-  Key, DollarSign, Beaker, Trophy
+  Key, DollarSign, Beaker, Trophy, BarChart3
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -23,6 +23,7 @@ const navMain = [
   { name: 'API 接入说明', path: '/api',      icon: Key },
   { name: '使用日志',     path: '/logs',     icon: FileText },
   { name: '定价中心',     path: '/pricing',  icon: DollarSign },
+  { name: '运营洞察',     path: '/insights', icon: BarChart3 },
   { name: '激活码',       path: '/codes',    icon: Gift },
   { name: '账号管理',     path: '/accounts', icon: Users },
   { name: '排行榜',       path: '/leaderboard', icon: Trophy },
@@ -59,7 +60,7 @@ function handleLogout() {
           <Shield :size="14" stroke-width="2.6" />
         </div>
         <div class="brand-text-wrap">
-          <span class="brand-name">Kiro<span class="brand-accent">Stack</span></span>
+          <span class="brand-name">Pivot<span class="brand-accent">Stack</span></span>
           <div class="brand-eyebrow">ADMIN PANEL</div>
         </div>
       </div>
@@ -122,7 +123,7 @@ function handleLogout() {
           <Menu v-if="!isSidebarOpen" :size="18" />
           <X v-else :size="18" />
         </button>
-        <span class="mobile-brand">Kiro<span class="brand-accent">Stack</span></span>
+        <span class="mobile-brand">Pivot<span class="brand-accent">Stack</span></span>
         <div class="hamburger-spacer" />
       </header>
 

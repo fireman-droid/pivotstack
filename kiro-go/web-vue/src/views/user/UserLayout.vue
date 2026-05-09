@@ -2,7 +2,7 @@
 import { useRouter, useRoute } from 'vue-router'
 import { useUserAuth } from '../../stores/userAuth'
 import { computed, onMounted } from 'vue'
-import { LayoutDashboard, Gift, ScrollText, LogOut, Zap } from 'lucide-vue-next'
+import { LayoutDashboard, Gift, ScrollText, LogOut, Zap, Users } from 'lucide-vue-next'
 import WorldSwitcher from '../../components/WorldSwitcher.vue'
 import WorldChip from '../../components/world/WorldChip.vue'
 
@@ -10,22 +10,37 @@ const router = useRouter()
 const route = useRoute()
 const auth = useUserAuth()
 
-const navItems = [
-  { path: '/user/dashboard', label: '概览', icon: LayoutDashboard },
-  { path: '/user/recharge',  label: '充值', icon: Gift },
-  { path: '/user/logs',      label: '日志', icon: ScrollText },
-]
+const dashboardItem = { path: '/user/dashboard', label: '概览', icon: LayoutDashboard }
+const rechargeItem  = { path: '/user/recharge',  label: '充值', icon: Gift }
+const logsItem      = { path: '/user/logs',      label: '日志', icon: ScrollText }
+const resellerNavItem = { path: '/user/reseller', label: '代理', icon: Users }
+
+// 子 key 隐藏「充值」（钱由代理转账，不通过激活码）
+// reseller 加显示「代理」管理菜单
+const navItems = computed(() => {
+  const items = [dashboardItem]
+  if (!auth.userInfo?.isChildKey) items.push(rechargeItem)
+  items.push(logsItem)
+  if (auth.userInfo?.isReseller) items.push(resellerNavItem)
+  return items
+})
 
 const isActivated = computed(() => !!auth.plan)
 const balanceValue = computed(() => Number(auth.balance || 0))
+const giftBalanceValue = computed(() => Number(auth.userInfo?.giftBalance || 0))
+const totalBalanceValue = computed(() => balanceValue.value + giftBalanceValue.value)
 const isCreditPlan = computed(() => auth.plan === 'credit' || auth.plan === 'hybrid')
 const isTimedPlan  = computed(() => auth.plan === 'timed'  || auth.plan === 'hybrid')
 
 const balanceDisplay = computed(() => {
   if (!isCreditPlan.value) return null
-  return `$${balanceValue.value.toFixed(2)}`
+  return `$${totalBalanceValue.value.toFixed(2)}`
 })
-const balanceVariant = computed(() => balanceValue.value < 1 ? 'danger' : 'success')
+const balanceTooltip = computed(() => {
+  if (!isCreditPlan.value) return ''
+  return `充值 $${balanceValue.value.toFixed(2)} · 赠送 $${giftBalanceValue.value.toFixed(2)}`
+})
+const balanceVariant = computed(() => totalBalanceValue.value < 1 ? 'danger' : 'success')
 
 const timeDisplay = computed(() => {
   if (!isTimedPlan.value) return null
@@ -70,14 +85,14 @@ onMounted(() => { auth.refresh() })
             <div class="brand-mark">
               <Zap :size="14" stroke-width="2.6" />
             </div>
-            <span class="brand-name">KiroStack</span>
+            <span class="brand-name">PivotStack</span>
           </router-link>
           <nav class="nav-row" aria-label="用户导航">
             <router-link
               v-for="item in navItems"
               :key="item.path"
               :to="item.path"
-              :class="['nav-pill', { active: route.path === item.path }]"
+              :class="['nav-pill', { active: route.path === item.path || route.path.startsWith(item.path + '/') }]"
             >
               <component :is="item.icon" :size="14" stroke-width="2.2" />
               <span>{{ item.label }}</span>
@@ -87,7 +102,7 @@ onMounted(() => { auth.refresh() })
 
         <div class="topbar-right">
           <WorldChip v-if="!isActivated" variant="neutral">未激活</WorldChip>
-          <WorldChip v-if="balanceDisplay" :variant="balanceVariant" :dot="true">
+          <WorldChip v-if="balanceDisplay" :variant="balanceVariant" :dot="true" :title="balanceTooltip">
             {{ balanceDisplay }}
           </WorldChip>
           <WorldChip v-if="timeDisplay" :variant="timeVariant" :pulse="timeVariant === 'danger'">
@@ -114,7 +129,7 @@ onMounted(() => { auth.refresh() })
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        :class="['tabbar-item', { active: route.path === item.path }]"
+        :class="['tabbar-item', { active: route.path === item.path || route.path.startsWith(item.path + '/') }]"
       >
         <span class="tabbar-icon">
           <component :is="item.icon" :size="18" stroke-width="2.2" />

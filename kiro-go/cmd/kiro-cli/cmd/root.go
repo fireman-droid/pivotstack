@@ -18,8 +18,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "kiro-cli",
-	Short: "Kiro Stack 命令行管理工具",
-	Long:  `Kiro Stack CLI - 通过命令行管理账号池、查看状态、执行常用操作`,
+	Short: "PivotStack 命令行管理工具",
+	Long:  `PivotStack CLI - 通过命令行管理账号池、查看状态、执行常用操作`,
 	Run: func(cmd *cobra.Command, args []string) {
 		showMenu()
 	},
@@ -27,7 +27,7 @@ var rootCmd = &cobra.Command{
 
 func showMenu() {
 	fmt.Println("\n╔════════════════════════════════════════════════════════════╗")
-	fmt.Println("║          🚀 Kiro Stack CLI - 功能面板                      ║")
+	fmt.Println("║          🚀 PivotStack CLI - 功能面板                      ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 	fmt.Println("📊 系统管理")

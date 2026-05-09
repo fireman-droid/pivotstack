@@ -23,7 +23,11 @@ const showKeyId = ref(null)
 const expandedId = ref(null)
 const searchQuery = ref('')
 const editingId = ref(null)
-const editForm = reactive({ note: '', balance: 0, giftBalance: 0, expiresAt: 0 })
+const editForm = reactive({
+  note: '', balance: 0, giftBalance: 0, expiresAt: 0,
+  // 代理设置
+  isReseller: false, maxChildKeys: 0, resellerDiscountPercent: 100, parentKeyId: '',
+})
 const form = ref({ note: '' })
 
 const CNY_PER_USD = 0.05  // 1$ face value = ¥0.05
@@ -74,16 +78,30 @@ function startEdit(k) {
   editForm.balance     = ((k.balance || 0) * CNY_PER_USD).toFixed(2)
   editForm.giftBalance = ((k.giftBalance || 0) * CNY_PER_USD).toFixed(2)
   editForm.expiresAt = k.expiresAt || 0
+  // 代理设置
+  editForm.isReseller = !!k.isReseller
+  editForm.maxChildKeys = k.maxChildKeys || 0
+  // 后端存的是小数（0.5），UI 显示为百分比（50）；空 / 0 视作 100%（无折扣）
+  const d = Number(k.resellerDiscount || 0)
+  editForm.resellerDiscountPercent = d > 0 && d < 1 ? Math.round(d * 100) : 100
+  editForm.parentKeyId = k.parentKeyId || ''
 }
 function cancelEdit() { editingId.value = null }
 
 async function saveEdit(k) {
   try {
+    // 子 key 不允许开代理；UI 已 disable 但后端再防一手
+    const isChild = !!k.parentKeyId
+    const isReseller = !isChild && editForm.isReseller
+    const pct = Math.max(1, Math.min(100, Number(editForm.resellerDiscountPercent) || 100))
     const body = {
       note: editForm.note,
       balance: Number(editForm.balance) / CNY_PER_USD,
       giftBalance: Number(editForm.giftBalance) / CNY_PER_USD,
       expiresAt: Number(editForm.expiresAt),
+      isReseller: isReseller,
+      maxChildKeys: Math.max(0, Number(editForm.maxChildKeys) || 0),
+      resellerDiscount: pct >= 100 ? 0 : pct / 100,  // 100% 存 0（视作无折扣）
     }
     const res = await api(`/apikeys/${k.id}`, { method: 'PUT', body: JSON.stringify(body) })
     if (res.ok) {
@@ -91,6 +109,9 @@ async function saveEdit(k) {
       k.balance = body.balance
       k.giftBalance = body.giftBalance
       k.expiresAt = body.expiresAt
+      k.isReseller = body.isReseller
+      k.maxChildKeys = body.maxChildKeys
+      k.resellerDiscount = body.resellerDiscount
       editingId.value = null
       success('已保存')
     }
@@ -125,6 +146,21 @@ function addTime(amount) {
   const now = Math.floor(Date.now() / 1000)
   const base = editForm.expiresAt > now ? editForm.expiresAt : now
   editForm.expiresAt = Math.max(now, base + amount)
+}
+
+// 清空到期时间需二次确认，避免误点把已生效的天卡蒸发
+function clearExpiresAt() {
+  const now = Math.floor(Date.now() / 1000)
+  const remaining = (editForm.expiresAt || 0) - now
+  if (remaining > 0) {
+    const days = Math.floor(remaining / 86400)
+    const hours = Math.floor((remaining % 86400) / 3600)
+    const human = days > 0 ? `${days}天${hours}小时` : `${hours}小时`
+    if (!confirm(`⚠️ 当前账户还剩 ${human} 有效期。\n\n确认要清空到期时间（设为永不过期）吗？\n\n这通常会让用户失去已购买的天卡时间。`)) {
+      return
+    }
+  }
+  editForm.expiresAt = 0
 }
 
 const filteredKeys = computed(() => {
@@ -214,6 +250,8 @@ onMounted(loadKeys)
               <Wallet :size="11" />
               ${{ (k.balance || 0).toFixed(2) }}
             </WorldChip>
+            <WorldChip v-if="k.isReseller" variant="info" size="sm">代理</WorldChip>
+            <WorldChip v-if="k.parentKeyId" variant="neutral" size="sm">子 Key</WorldChip>
             <WorldChip :variant="k.enabled ? 'success' : 'neutral'" size="sm" :dot="true">
               {{ k.enabled ? '启用' : '禁用' }}
             </WorldChip>
@@ -236,9 +274,31 @@ onMounted(loadKeys)
                   <button @click="addTime(86400)">+1 天</button>
                   <button @click="addTime(7 * 86400)">+7 天</button>
                   <button @click="addTime(30 * 86400)">+30 天</button>
-                  <button @click="editForm.expiresAt = 0">永不过期</button>
+                  <button @click="clearExpiresAt">永不过期</button>
                 </div>
               </div>
+
+              <!-- 代理设置（高级，仅非子 key 可开） -->
+              <div v-if="!editForm.parentKeyId" class="reseller-block">
+                <details>
+                  <summary>代理设置（高级）</summary>
+                  <label class="reseller-toggle">
+                    <input type="checkbox" v-model="editForm.isReseller" />
+                    <span>开通代理（让此 Key 能创建子 Key 分发给其他人）</span>
+                  </label>
+                  <div v-if="editForm.isReseller" class="reseller-fields">
+                    <WorldInput v-model.number="editForm.maxChildKeys" type="number" label="子 Key 上限（0=无限）" />
+                    <WorldInput v-model.number="editForm.resellerDiscountPercent" type="number" label="充值折扣率（%，100=无折扣）" />
+                    <p class="reseller-hint">
+                      💡 折扣 50% 时 reseller 充 ¥100 = 余额 ¥200（用于赚差价）。100% = 跟普通用户一样无折扣。
+                    </p>
+                  </div>
+                </details>
+              </div>
+              <div v-else class="reseller-block child-note">
+                ⓘ 此 Key 是子 Key（属于 reseller <code>{{ editForm.parentKeyId.slice(0, 8) }}</code>），不能再开代理。
+              </div>
+
               <div class="edit-actions">
                 <WorldButton variant="ghost" size="sm" @click="cancelEdit">
                   <X :size="13" /><span>取消</span>
@@ -261,6 +321,19 @@ onMounted(loadKeys)
               <div class="info-cell"><span class="info-label">累计充值</span><span class="info-val">${{ (k.totalRecharged || 0).toFixed(2) }}</span></div>
               <div class="info-cell"><span class="info-label">累计赠送</span><span class="info-val">${{ (k.totalGifted || 0).toFixed(2) }}</span></div>
               <div class="info-cell"><span class="info-label">到期时间</span><span class="info-val">{{ k.expiresAt ? formatDate(k.expiresAt) : '永不过期' }}</span></div>
+
+              <div v-if="k.isReseller" class="info-cell">
+                <span class="info-label">代理身份</span>
+                <span class="info-val">代理（折扣 {{ k.resellerDiscount > 0 && k.resellerDiscount < 1 ? Math.round(k.resellerDiscount * 100) : 100 }}% · 上限 {{ k.maxChildKeys || '∞' }}）</span>
+              </div>
+              <div v-if="k.parentKeyId" class="info-cell">
+                <span class="info-label">所属代理</span>
+                <span class="info-val mono">{{ k.parentKeyId.slice(0, 8) }}</span>
+              </div>
+              <div v-if="k.isReseller" class="info-cell">
+                <span class="info-label">累计已售</span>
+                <span class="info-val">${{ (k.soldToChildren || 0).toFixed(2) }}</span>
+              </div>
 
               <div class="actions-row">
                 <WorldButton variant="secondary" size="sm" @click="toggleKey(k)">
@@ -547,4 +620,68 @@ onMounted(loadKeys)
 
 .expand-enter-active, .expand-leave-active { transition: all 320ms ease; max-height: 600px; overflow: hidden; }
 .expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; }
+
+/* 代理设置 */
+.reseller-block {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  background: var(--world-bg-card);
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+}
+.reseller-block details summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--world-text-mute);
+  text-transform: uppercase;
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.reseller-block details summary::before {
+  content: "▶";
+  font-size: 0.6rem;
+  transition: transform 160ms ease;
+}
+.reseller-block details[open] summary::before { transform: rotate(90deg); }
+.reseller-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+  font-size: 0.85rem;
+  color: var(--world-text-primary);
+  cursor: pointer;
+}
+.reseller-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+.reseller-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--world-overlay-light);
+  border-radius: var(--world-radius-sm);
+  font-size: 0.75rem;
+  color: var(--world-text-mute);
+  line-height: 1.5;
+}
+.reseller-block.child-note {
+  font-size: 0.8125rem;
+  color: var(--world-text-mute);
+  padding: 12px;
+}
+.reseller-block.child-note code {
+  font-family: var(--world-font-mono);
+  background: var(--world-overlay-light);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
 </style>

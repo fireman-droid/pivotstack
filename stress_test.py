@@ -19,7 +19,7 @@ def make_big_prompt(i):
 这是第 {i} 轮测试消息。我需要你仔细阅读以下内容并给出简短回复。
 
 ## 背景信息
-Kiro Stack 是一个将 Kiro (Amazon Q Developer) 账号转换为 OpenAI/Anthropic 兼容 API 的项目。
+PivotStack 是一个将 Kiro (Amazon Q Developer) 账号转换为 OpenAI/Anthropic 兼容 API 的项目。
 它由两个核心组件组成：kiro-go（Go语言，负责Web管理面板、多账号池管理、Token刷新）和
 kiro-gateway（Python/FastAPI，负责稳定代理层，包含重试逻辑和双端点回退）。
 

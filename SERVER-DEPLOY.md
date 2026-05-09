@@ -1,4 +1,4 @@
-# Kiro Stack 服务器部署指南
+# PivotStack 服务器部署指南
 
 > 基于服务器 `115.191.35.73` 实际环境编写，与 kiro-account-shop 同服务器部署。
 

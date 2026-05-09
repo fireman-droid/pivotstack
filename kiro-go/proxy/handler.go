@@ -108,6 +108,11 @@ type CallLog struct {
 	PaidCredits   float64 `json:"paid_credits"`
 	GiftedCredits float64 `json:"gifted_credits"`
 	CostUSD       float64 `json:"cost_usd"`
+	// CostUSDLegacy 是按 v1 旧公式（PoolPriceUSD × ModelMultiplier）算的 shadow 值。
+	// 部署 v2 后 24 小时观察期内 grep 看 cost_usd 跟 cost_usd_legacy 是否始终相等，
+	// 不等说明迁移有偏差，立即回滚。观察期后下个迭代清理这个字段。
+	CostUSDLegacy   float64 `json:"cost_usd_legacy,omitempty"`
+	PriceModel      string  `json:"price_model,omitempty"` // 计费用 model（含 stealth originalModel 信息）
 	Stream          bool    `json:"stream"`
 	Error           string  `json:"error,omitempty"`
 	PayloadKB       int     `json:"payload_kb,omitempty"`
@@ -121,6 +126,26 @@ type CallLog struct {
 }
 
 const maxCallLogs = 5000
+
+// RechargeRecord 充值/赠送/调整流水（金额关键，每条立即落盘）
+// 写入路径：data/recharge_records.jsonl
+type RechargeRecord struct {
+	Time          string  `json:"time"`           // "MM-DD HH:MM:SS" CST
+	Timestamp     int64   `json:"timestamp"`      // unix seconds
+	KeyID         string  `json:"key_id"`         // ApiKey UUID
+	KeyNote       string  `json:"key_note,omitempty"`
+	Type          string  `json:"type"`           // "code_redeem" | "code_redeem_days" | "admin_balance" | "admin_gift" | "admin_adjust"
+	Code          string  `json:"code,omitempty"` // 仅 code_redeem 类型有
+	AmountUSD     float64 `json:"amount_usd"`     // USD face value 增量（带正负号）
+	AmountCNY     float64 `json:"amount_cny"`     // ¥ 等价（cny = usd × 0.05）
+	BalanceBefore float64 `json:"balance_before"`
+	BalanceAfter  float64 `json:"balance_after"`
+	GiftBefore    float64 `json:"gift_before"`
+	GiftAfter     float64 `json:"gift_after"`
+	Operator      string  `json:"operator"` // "user"（自助兑换）| "admin"
+	Note          string  `json:"note,omitempty"`
+	IP            string  `json:"ip,omitempty"`
+}
 
 type thinkingStreamSource int
 
@@ -367,13 +392,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/user/api/"):
 		h.handleUserAPI(w, r)
 
-	case path == "/admin" || path == "/admin/" || strings.HasPrefix(path, "/admin/"):
-		// Serve Vue frontend (SPA fallback)
-		distDir := "web-vue/dist"
-		if _, err := os.Stat(distDir); os.IsNotExist(err) {
-			distDir = "/app/web-vue/dist"
-		}
-		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+	case path == "/admin" || path == "/admin/":
+		// 老 URL 兼容：直接 redirect 到根，让前端 history router 接管
+		http.Redirect(w, r, "/", http.StatusMovedPermanently)
 
 	case strings.HasPrefix(path, "/assets/"):
 		// Serve Vue static assets (JS, CSS)
@@ -383,7 +404,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		http.StripPrefix("/", http.FileServer(http.Dir(distDir))).ServeHTTP(w, r)
 
-	case path == "/health" || path == "/":
+	case path == "/health":
 		h.handleHealth(w, r)
 
 	case path == "/v1/stats":
@@ -396,22 +417,47 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleStats(w, r)
 
 	default:
-		http.Error(w, "Not Found", 404)
+		// SPA fallback：任何非 API 非 assets 路径都返回 index.html，
+		// 让前端 history mode router 接管（/login / /dashboard / /user/dashboard 等）。
+		distDir := "web-vue/dist"
+		if _, err := os.Stat(distDir); os.IsNotExist(err) {
+			distDir = "/app/web-vue/dist"
+		}
+		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
 	}
 }
 
-// ensureValidToken 确保 token 有效，过期前 10 分钟自动刷新
+// tokenRefreshLeadSec 是 token 过期前提前刷新的窗口（秒）。
+//
+// 实测 AWS 偶尔在 expiresAt 之前 ~10 分钟就让 token 失效（上游返回 400 INVALID_MODEL_ID
+// 而非 401），所以必须提前刷新。30 分钟窗口给足缓冲，单 token 寿命通常 1 小时，仍可正常轮换。
+const tokenRefreshLeadSec int64 = 1800
+
+// ensureValidToken 确保 token 有效，过期前 30 分钟自动刷新
 func (h *Handler) ensureValidToken(account *config.Account) error {
-	if account.ExpiresAt == 0 || time.Now().Unix() < account.ExpiresAt-600 {
+	return h.refreshAccountToken(account, false)
+}
+
+// forceRefreshToken 无视到期时间强制刷新（用于上游返回 INVALID_MODEL_ID 等"token 看着没过期但其实已废"的情形）
+func (h *Handler) forceRefreshToken(account *config.Account) error {
+	return h.refreshAccountToken(account, true)
+}
+
+func (h *Handler) refreshAccountToken(account *config.Account, force bool) error {
+	if !force && (account.ExpiresAt == 0 || time.Now().Unix() < account.ExpiresAt-tokenRefreshLeadSec) {
 		return nil
 	}
 
-	fmt.Printf("[ensureValidToken] Refreshing token for %s (expiresAt=%d, now=%d)\n",
-		account.Email, account.ExpiresAt, time.Now().Unix())
+	tag := "ensureValidToken"
+	if force {
+		tag = "forceRefreshToken"
+	}
+	fmt.Printf("[%s] Refreshing token for %s (expiresAt=%d, now=%d)\n",
+		tag, account.Email, account.ExpiresAt, time.Now().Unix())
 
 	accessToken, refreshToken, expiresAt, err := auth.RefreshToken(account)
 	if err != nil {
-		fmt.Printf("[ensureValidToken] Token refresh FAILED for %s: %v\n", account.Email, err)
+		fmt.Printf("[%s] Token refresh FAILED for %s: %v\n", tag, account.Email, err)
 		return err
 	}
 
@@ -423,7 +469,7 @@ func (h *Handler) ensureValidToken(account *config.Account) error {
 	account.ExpiresAt = expiresAt
 
 	config.UpdateAccountToken(account.ID, accessToken, refreshToken, expiresAt)
-	fmt.Printf("[ensureValidToken] Token refreshed OK for %s, new expiresAt=%d\n", account.Email, expiresAt)
+	fmt.Printf("[%s] Token refreshed OK for %s, new expiresAt=%d\n", tag, account.Email, expiresAt)
 
 	return nil
 }

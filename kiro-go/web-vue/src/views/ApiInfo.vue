@@ -89,7 +89,7 @@ const shellOptions = [
           <Terminal :size="22" />
           <span>API 接入说明</span>
         </h1>
-        <p class="page-sub">集成 Kiro-Stack 网关到您的应用</p>
+        <p class="page-sub">集成 PivotStack 网关到您的应用</p>
       </div>
     </header>
 

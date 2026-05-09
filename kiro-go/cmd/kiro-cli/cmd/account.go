@@ -32,7 +32,7 @@ func formatQuotaWithBar(current, limit float64) string {
 var accountCmd = &cobra.Command{
 	Use:   "account",
 	Short: "账号管理",
-	Long:  `管理 Kiro Stack 账号池：列表、刷新、启用、禁用、删除`,
+	Long:  `管理 PivotStack 账号池：列表、刷新、启用、禁用、删除`,
 }
 
 var accountListCmd = &cobra.Command{

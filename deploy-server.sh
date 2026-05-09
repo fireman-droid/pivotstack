@@ -1,11 +1,11 @@
 #!/bin/bash
-# Kiro Stack 服务器首次部署脚本
+# PivotStack 服务器首次部署脚本
 # 在服务器上执行: bash deploy-server.sh
 
 set -e
 
 echo "=========================================="
-echo "  Kiro Stack 服务器部署"
+echo "  PivotStack 服务器部署"
 echo "=========================================="
 echo ""
 

@@ -31,7 +31,7 @@ async function doBatch(action, extra = {}) {
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = `kiro-accounts-${new Date().toISOString().slice(0, 10)}.json`
+        a.download = `pivotstack-accounts-${new Date().toISOString().slice(0, 10)}.json`
         a.click()
         URL.revokeObjectURL(url)
         success('导出成功')

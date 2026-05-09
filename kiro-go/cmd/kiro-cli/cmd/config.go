@@ -18,7 +18,7 @@ var configShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "显示当前配置",
 	Run: func(cmd *cobra.Command, args []string) {
-		color.Cyan("=== Kiro CLI 配置 ===\n")
+		color.Cyan("=== PivotStack CLI 配置 ===\n")
 		fmt.Printf("API 地址: %s\n", viper.GetString("api_url"))
 		fmt.Printf("输出格式: %s\n", viper.GetString("output"))
 

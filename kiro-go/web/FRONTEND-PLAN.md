@@ -1,4 +1,4 @@
-# Kiro-Go 前端改造计划
+# PivotStack 前端改造计划
 
 ## 现状摘要
 

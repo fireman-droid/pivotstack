@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -187,36 +188,51 @@ func stealthRoll() float64 {
 	return stealthRng.Float64()
 }
 
+// stealthMatchesPattern 判断用户请求模型 (originalModel) 是否匹配规则的 SourcePattern。
+// 大小写不敏感 + '-/.' 互换兼容，用子串匹配。
+// 例如 pattern="opus-4.7" 同时匹配 "claude-opus-4.7" / "claude-opus-4-7" / "opus 4.7"
+func stealthMatchesPattern(originalModel, pattern string) bool {
+	if pattern == "" {
+		return false
+	}
+	norm := func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", ".")
+	}
+	return strings.Contains(norm(originalModel), norm(pattern))
+}
+
 // ApplyStealth decides the model actually sent upstream based on stealth config.
 // Returns (upstreamModel, swapped). swapped=true means the user-requested model
 // was secretly replaced. Must be called AFTER ValidateAndMapModel.
-func ApplyStealth(validatedModel string) (string, bool) {
+//
+// originalModel 是用户**原始请求**的模型名（在 MapModel 之前），用于规则匹配。
+// 这样可以让 opus-4.7 / opus-4.6 等不同原始请求各自有独立的 stealth 概率，
+// 即使 MapModel 把它们都归一到 4.6 也不影响规则区分。
+//
+// 规则按数组顺序遍历，命中第一条 pattern 就 roll dice 决定是否替换。
+func ApplyStealth(validatedModel, originalModel string) (string, bool) {
 	s := config.GetStealth()
-	if !s.Enabled {
+	if !s.Enabled || len(s.Rules) == 0 {
 		return validatedModel, false
 	}
-	base := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(validatedModel, "-thinking"), "-think"))
 
-	isOpus46 := strings.Contains(base, "opus-4.6") || strings.Contains(base, "opus-4-6")
-	isSonnet46 := !isOpus46 && (strings.Contains(base, "sonnet-4.6") || strings.Contains(base, "sonnet-4-6"))
-
-	if isOpus46 && s.OpusFakeRatio > 0 && stealthRoll() < s.OpusFakeRatio {
-		target := s.OpusFakeTarget
+	for _, rule := range s.Rules {
+		if rule.Ratio <= 0 || rule.SourcePattern == "" {
+			continue
+		}
+		if !stealthMatchesPattern(originalModel, rule.SourcePattern) {
+			continue
+		}
+		// 命中规则；roll dice
+		if stealthRoll() >= rule.Ratio {
+			return validatedModel, false // 这次没掺
+		}
+		target := rule.Target
 		if target == "" {
 			target = "claude-sonnet-4.6"
 		}
-		// Preserve thinking suffix if present in the original validated model
-		if strings.HasSuffix(validatedModel, "-thinking") {
-			return target + "-thinking", true
-		}
-		return target, true
-	}
-	if isSonnet46 && s.SonnetFakeRatio > 0 && stealthRoll() < s.SonnetFakeRatio {
-		target := s.SonnetFakeTarget
-		if target == "" {
-			target = "claude-sonnet-4.5"
-		}
-		if strings.HasSuffix(validatedModel, "-thinking") {
+		// Preserve thinking suffix
+		if strings.HasSuffix(validatedModel, "-thinking") && !strings.HasSuffix(target, "-thinking") {
 			return target + "-thinking", true
 		}
 		return target, true
@@ -492,6 +508,7 @@ func ClaudeToKiro(req *ClaudeRequest, thinking bool) *KiroPayload {
 		}
 	}
 
+	NormalizeKiroPayload(payload)
 	return payload
 }
 
@@ -520,6 +537,7 @@ func extractClaudeUserContent(content interface{}) (string, []KiroImage, []KiroT
 	var text string
 	var images []KiroImage
 	var toolResults []KiroToolResult
+	docCount := 0
 
 	if s, ok := content.(string); ok {
 		return s, nil, nil
@@ -541,6 +559,16 @@ func extractClaudeUserContent(content interface{}) (string, []KiroImage, []KiroT
 			case "image", "image_url", "input_image":
 				if img := extractImageFromClaudeBlock(block); img != nil {
 					images = append(images, *img)
+				}
+			case "document", "input_file", "file":
+				if docCount >= docMaxPerRequest {
+					text += `<document error="超过单消息文档数上限 ` + strconv.Itoa(docMaxPerRequest) + ` 个，已忽略后续附件"/>` + "\n"
+					docCount++
+					continue
+				}
+				if doc := extractDocFromClaudeBlock(block); doc != nil {
+					text += formatDocBlock(doc) + "\n"
+					docCount++
 				}
 			case "tool_result":
 				toolUseID, _ := block["tool_use_id"].(string)
@@ -989,6 +1017,7 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		}
 	}
 
+	NormalizeKiroPayload(payload)
 	return payload
 }
 
@@ -999,13 +1028,30 @@ func extractOpenAIUserContent(content interface{}) (string, []KiroImage) {
 
 	var text string
 	var images []KiroImage
+	docCount := 0
+
+	tryDoc := func(part map[string]interface{}) bool {
+		doc := extractDocFromOpenAIBlock(part)
+		if doc == nil {
+			return false
+		}
+		if docCount >= docMaxPerRequest {
+			text += `<document error="超过单消息文档数上限 ` + strconv.Itoa(docMaxPerRequest) + ` 个，已忽略后续附件"/>` + "\n"
+		} else {
+			text += formatDocBlock(doc) + "\n"
+		}
+		docCount++
+		return true
+	}
 
 	if part, ok := content.(map[string]interface{}); ok {
 		if t, ok := extractOpenAITextPart(part); ok {
 			text += t
 		}
-		if img := extractImageFromOpenAIPart(part); img != nil {
-			images = append(images, *img)
+		if !tryDoc(part) {
+			if img := extractImageFromOpenAIPart(part); img != nil {
+				images = append(images, *img)
+			}
 		}
 	}
 
@@ -1018,6 +1064,9 @@ func extractOpenAIUserContent(content interface{}) (string, []KiroImage) {
 
 			if t, ok := extractOpenAITextPart(part); ok {
 				text += t
+			}
+			if tryDoc(part) {
+				continue
 			}
 			if img := extractImageFromOpenAIPart(part); img != nil {
 				images = append(images, *img)

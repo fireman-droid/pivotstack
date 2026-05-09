@@ -47,6 +47,16 @@ func main() {
 		config.SetPassword(envPassword)
 	}
 
+	// 注入 supportedModels 表（迁移函数和 fallback 路由要用），必须在 MaybeMigratePricing 之前
+	config.SetSupportedModels(proxy.SupportedModels())
+
+	// 启动时检查并执行 pricing/promotion v1→v2 迁移（一次性）
+	if migrated, err := config.MaybeMigratePricing(); err != nil {
+		log.Fatalf("pricing migration failed: %v", err)
+	} else if migrated {
+		log.Printf("[Migrate] pricing/promotion migrated from v1 (PoolPrice × Multiplier) to v2 (ModelPrices)")
+	}
+
 	// 初始化账号池
 	pool.GetPool()
 
@@ -65,7 +75,7 @@ func main() {
 	}
 	displayAddr := fmt.Sprintf("%s:%d", displayHost, port)
 
-	log.Printf("Kiro-Go starting on http://%s", displayAddr)
+	log.Printf("PivotStack starting on http://%s", displayAddr)
 	log.Printf("Admin panel: http://%s/admin", displayAddr)
 	log.Printf("Claude API: http://%s/v1/messages", displayAddr)
 	log.Printf("OpenAI API: http://%s/v1/chat/completions", displayAddr)

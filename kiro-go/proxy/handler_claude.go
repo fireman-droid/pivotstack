@@ -7,6 +7,7 @@ import (
 	"kiro-api-proxy/config"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,15 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 		allowed, reason := OnRequestStart(keyID, strings.TrimSpace(ip))
 		if !allowed {
-			h.sendClaudeError(w, 429, "rate_limit_error", "Request blocked: "+reason)
+			kind, retryAfter := ParseAbuseReason(reason)
+			if retryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			}
+			msg := "Request blocked: " + kind
+			if kind == "rate_limit" && retryAfter > 0 {
+				msg = fmt.Sprintf("rate limited, retry after %ds", retryAfter)
+			}
+			h.sendClaudeError(w, 429, "rate_limit_error", msg)
 			return
 		}
 		defer OnRequestEnd(keyID)
@@ -119,6 +128,9 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// 提前固定 originalModel，确保 PreAuth/Reconcile/addCallLog 全链路用同一个模型查倍率（Bug #7）
+	originalModel := req.Model
+
 	// Billing: PreAuthorize – lock estimated cost before calling upstream
 	var preChargedPaid, preChargedGift float64
 	if keyID != "" {
@@ -128,7 +140,7 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 			maxTokens = req.MaxTokens
 		}
 		var preErr error
-		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, req.Model, maxTokens, estimatedInput)
+		preChargedPaid, preChargedGift, preErr = PreAuthorize(keyID, originalModel, maxTokens, estimatedInput)
 		if preErr != nil {
 			h.sendClaudeError(w, 402, "insufficient_balance", preErr.Error())
 			return
@@ -140,9 +152,8 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
 	// 决策只算一次，避免重试时 stealthRoll 重抽导致 billing/upstream 漂移。
 	thinkingCfg := config.GetThinkingConfig()
-	originalModel := req.Model
 	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	upstreamModel, stealthSwapped := ApplyStealth(billingModel)
+	upstreamModel, stealthSwapped := ApplyStealth(billingModel, originalModel)
 	if stealthSwapped {
 		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
 	}
@@ -204,11 +215,13 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 		if shouldRetry {
 			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("429 quota exhausted, retrying with next account")
-			fmt.Printf("[Retry] Account %s got 429, trying next account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
+			// shouldRetry 触发于：429 / quota / INVALID_MODEL_ID / token 过早失效。
+			// 不再写死 "got 429"，避免误导排查 — 真实 reason 由 handleClaudeNonStream 内层日志已打印。
+			lastErr = fmt.Errorf("retryable upstream error, switching account")
+			fmt.Printf("[Retry] Account %s retryable upstream error, switching account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
 			continue
 		}
-		return // 成功或已处理非429错误，退出循环
+		return // 成功或已处理非可重试错误，退出循环
 	}
 
 	// 所有重试都失败 – refund pre-auth
@@ -610,6 +623,14 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 				originalModel, model, account.Email, payloadKB)
 			return true
 		}
+		// INVALID_MODEL_ID + 还未发流：token 提前失效，强制刷新后让外层重试
+		if upstreamErr != nil && upstreamErr.StatusCode == 400 && !headersSent && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
+			fmt.Printf("[InvalidModel-Refresh] Stream account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
+			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
+				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
+			}
+			return true
+		}
 		h.recordFailure()
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] Claude Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
@@ -665,7 +686,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		if time.Since(requestStart).Milliseconds() < 15000 {
 			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		}
-		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}
@@ -749,6 +770,15 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 				originalModel, model, account.Email, payloadKB)
 			return true
 		}
+		// INVALID_MODEL_ID 通常是 token 已被 AWS 提前作废（expiresAt 还没到但上游不认）
+		// 强制刷新本号 token 后让外层换号重试，给系统一次自愈机会
+		if upstreamErr != nil && upstreamErr.StatusCode == 400 && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
+			fmt.Printf("[InvalidModel-Refresh] Account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
+			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
+				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
+			}
+			return true
+		}
 		h.recordFailure()
 		// Billing: refund pre-auth on API failure
 		if uc != nil {
@@ -802,7 +832,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		if time.Since(requestStart).Milliseconds() < 15000 {
 			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
 		}
-		actualPaid, actualGift := Reconcile(uc.KeyID, billingModel, actualCredits, preChargedPaid, preChargedGift)
+		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
 		uc.ActualPaidUSD = actualPaid
 		uc.ActualGiftUSD = actualGift
 	}

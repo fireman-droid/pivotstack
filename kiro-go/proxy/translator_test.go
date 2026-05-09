@@ -24,8 +24,17 @@ func TestExtractOpenAIMessageTextStructured(t *testing.T) {
 }
 
 func TestOpenAIToKiroPreservesStructuredAssistantAndToolContent(t *testing.T) {
+	echoTool := OpenAITool{Type: "function"}
+	echoTool.Function.Name = "echo"
+	echoTool.Function.Description = "echo back"
+	echoTool.Function.Parameters = map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+
 	req := &OpenAIRequest{
 		Model: "claude-sonnet-4.5",
+		Tools: []OpenAITool{echoTool},
 		Messages: []OpenAIMessage{
 			{
 				Role: "system",
@@ -40,6 +49,15 @@ func TestOpenAIToKiroPreservesStructuredAssistantAndToolContent(t *testing.T) {
 				Content: []interface{}{
 					map[string]interface{}{"type": "text", "text": "assistant-structured"},
 				},
+				// 必须先 tool_call 才能后接 tool result（OpenAI/Kiro API 要求）
+				ToolCalls: []ToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: "echo", Arguments: "{}"},
+				}},
 			},
 			{
 				Role:       "tool",
@@ -133,8 +151,17 @@ func TestOpenAIToKiroAssistantMapContentInHistory(t *testing.T) {
 }
 
 func TestOpenAIToKiroAssistantToolCallsDoNotInjectPlaceholder(t *testing.T) {
+	weatherTool := OpenAITool{Type: "function"}
+	weatherTool.Function.Name = "get_weather"
+	weatherTool.Function.Description = "get weather"
+	weatherTool.Function.Parameters = map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+
 	req := &OpenAIRequest{
 		Model: "claude-sonnet-4.5",
+		Tools: []OpenAITool{weatherTool},
 		Messages: []OpenAIMessage{
 			{Role: "user", Content: "find weather"},
 			{
@@ -148,6 +175,12 @@ func TestOpenAIToKiroAssistantToolCallsDoNotInjectPlaceholder(t *testing.T) {
 						Arguments string `json:"arguments"`
 					}{Name: "get_weather", Arguments: "{}"},
 				}},
+			},
+			// 配对 tool result：让 call_1 不被当作 orphan
+			{
+				Role:       "tool",
+				ToolCallID: "call_1",
+				Content:    "sunny",
 			},
 			{Role: "user", Content: "continue"},
 		},
@@ -163,6 +196,9 @@ func TestOpenAIToKiroAssistantToolCallsDoNotInjectPlaceholder(t *testing.T) {
 	}
 	if assistant.Content != "" {
 		t.Fatalf("expected empty assistant content for tool-call-only turn, got %q", assistant.Content)
+	}
+	if len(assistant.ToolUses) != 1 || assistant.ToolUses[0].ToolUseID != "call_1" {
+		t.Fatalf("expected toolUses preserved, got %+v", assistant.ToolUses)
 	}
 }
 

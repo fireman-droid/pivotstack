@@ -61,7 +61,7 @@ onMounted(loadPricing)
         </div>
         <div class="space-y-1">
           <label class="text-xs text-[var(--text-secondary)]">PRO 池单价 ($/credit)</label>
-          <div class="text-[10px] text-[var(--text-secondary)] opacity-60">sonnet-4.6, opus-4.6 使用此价格</div>
+          <div class="text-[10px] text-[var(--text-secondary)] opacity-60">sonnet-4.6 / opus-4.6 / opus-4.7 使用此价格</div>
           <input v-model.number="pricing.proPoolPriceUSD" type="number" step="0.01"
             class="w-full h-10 px-4 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-sm outline-none focus:border-[var(--primary)]" />
         </div>
