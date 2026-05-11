@@ -318,6 +318,126 @@ func TestClaudeToKiroConsecutiveUserMessages(t *testing.T) {
 	}
 }
 
+// TestMergeConsecutiveOpenAIMessages 验证 OpenAI 路径的连续同 role 合并。
+// 修复历史 bug：commit 2ed8536 只补了 ClaudeToKiro，OpenAIToKiro 漏改导致
+// Claude Code 走 OpenAI 兼容接口时仍触发 HTTP 400 "Improperly formed request"。
+func TestMergeConsecutiveOpenAIMessages(t *testing.T) {
+	// case 1: 无连续 — 保持不变
+	msgs := []OpenAIMessage{
+		{Role: "user", Content: "a"},
+		{Role: "assistant", Content: "b"},
+		{Role: "user", Content: "c"},
+	}
+	merged := mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 3 {
+		t.Fatalf("case 1: expected 3 messages, got %d", len(merged))
+	}
+
+	// case 2: 连续 user — 合并成 1 条 user，content 为 blocks 数组
+	msgs = []OpenAIMessage{
+		{Role: "user", Content: "a"},
+		{Role: "user", Content: "b"},
+		{Role: "user", Content: "c"},
+	}
+	merged = mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 1 || merged[0].Role != "user" {
+		t.Fatalf("case 2: expected 1 user message, got %+v", merged)
+	}
+	blocks, ok := merged[0].Content.([]interface{})
+	if !ok || len(blocks) != 3 {
+		t.Fatalf("case 2: expected 3 content blocks, got %v", merged[0].Content)
+	}
+
+	// case 3: 混合 user user assistant user user — 缩成 user assistant user
+	msgs = []OpenAIMessage{
+		{Role: "user", Content: "a"},
+		{Role: "user", Content: "b"},
+		{Role: "assistant", Content: "c"},
+		{Role: "user", Content: "d"},
+		{Role: "user", Content: "e"},
+	}
+	merged = mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 3 || merged[0].Role != "user" || merged[1].Role != "assistant" || merged[2].Role != "user" {
+		roles := []string{}
+		for _, m := range merged {
+			roles = append(roles, m.Role)
+		}
+		t.Fatalf("case 3: expected user/assistant/user, got %v", roles)
+	}
+
+	// case 4: 连续 assistant，且各带 tool_calls — content 合并 + tool_calls 拼接
+	msgs = []OpenAIMessage{
+		{Role: "assistant", Content: "first answer", ToolCalls: []ToolCall{{ID: "call_1", Type: "function"}}},
+		{Role: "assistant", Content: "second answer", ToolCalls: []ToolCall{{ID: "call_2", Type: "function"}}},
+	}
+	merged = mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 1 {
+		t.Fatalf("case 4: expected 1 merged assistant, got %d", len(merged))
+	}
+	if len(merged[0].ToolCalls) != 2 {
+		t.Fatalf("case 4: expected 2 tool_calls preserved, got %d", len(merged[0].ToolCalls))
+	}
+	if merged[0].ToolCalls[0].ID != "call_1" || merged[0].ToolCalls[1].ID != "call_2" {
+		t.Fatalf("case 4: tool_calls order wrong, got %+v", merged[0].ToolCalls)
+	}
+
+	// case 5: tool 角色不合并（每条独立 tool_call_id）
+	msgs = []OpenAIMessage{
+		{Role: "tool", Content: "result1", ToolCallID: "call_1"},
+		{Role: "tool", Content: "result2", ToolCallID: "call_2"},
+	}
+	merged = mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 2 {
+		t.Fatalf("case 5: tool messages should NOT merge, got %d", len(merged))
+	}
+
+	// case 6: multimodal blocks + string 混合合并
+	msgs = []OpenAIMessage{
+		{Role: "user", Content: []interface{}{
+			map[string]interface{}{"type": "text", "text": "x"},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:..."}},
+		}},
+		{Role: "user", Content: "y"},
+	}
+	merged = mergeConsecutiveOpenAIMessages(msgs)
+	if len(merged) != 1 {
+		t.Fatalf("case 6: expected 1 merged, got %d", len(merged))
+	}
+	blocks, ok = merged[0].Content.([]interface{})
+	if !ok || len(blocks) != 3 { // 1 text + 1 image + 1 text("y")
+		t.Fatalf("case 6: expected 3 blocks (multimodal preserved), got %d (%v)", len(blocks), merged[0].Content)
+	}
+}
+
+// TestOpenAIToKiroConsecutiveUserMessages：端到端验证 OpenAI 路径不再产生连续 user_input。
+// 这是 5月9日生产 4 笔 HTTP 400 (5,718KB payload) 的根因场景。
+func TestOpenAIToKiroConsecutiveUserMessages(t *testing.T) {
+	req := &OpenAIRequest{
+		Model: "claude-opus-4.6",
+		Messages: []OpenAIMessage{
+			{Role: "user", Content: "u1"},
+			{Role: "user", Content: "u2"},
+			{Role: "user", Content: "u3"},
+		},
+	}
+	payload := OpenAIToKiro(req, false)
+
+	// history 不应有连续 UserInputMessage（合并后应该全部进了 currentMessage）
+	for i := 1; i < len(payload.ConversationState.History); i++ {
+		prev := payload.ConversationState.History[i-1]
+		cur := payload.ConversationState.History[i]
+		if prev.UserInputMessage != nil && cur.UserInputMessage != nil {
+			t.Fatalf("history[%d] and history[%d] both user — Kiro 会拒：Improperly formed request", i-1, i)
+		}
+	}
+
+	// 当前消息应该包含全部 3 条原始内容
+	cur := payload.ConversationState.CurrentMessage.UserInputMessage
+	if !strings.Contains(cur.Content, "u1") || !strings.Contains(cur.Content, "u2") || !strings.Contains(cur.Content, "u3") {
+		t.Fatalf("currentMessage 缺失合并内容，实际: %q", cur.Content)
+	}
+}
+
 func TestClaudeConversationIDStableFromAnchor(t *testing.T) {
 	reqA := &ClaudeRequest{
 		Model:  "claude-sonnet-4.5",

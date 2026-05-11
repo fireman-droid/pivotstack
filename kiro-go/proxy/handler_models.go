@@ -28,18 +28,18 @@ func (h *Handler) handleModels(w http.ResponseWriter, _ *http.Request) {
 
 	var models []map[string]interface{}
 
-	// 根据有哪些账号类型返回对应模型
+	// 根据有哪些账号类型返回对应模型（注意：sonnet 只到 4.6，没有 4.7）
 	if hasPro {
-		// PRO 账号可用的模型
 		models = append(models,
-			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
-			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
+			buildModelInfo("claude-opus-4.7", "anthropic", true),
+			buildModelInfo("claude-opus-4.7"+thinkingSuffix, "anthropic", true),
 			buildModelInfo("claude-opus-4.6", "anthropic", true),
 			buildModelInfo("claude-opus-4.6"+thinkingSuffix, "anthropic", true),
+			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
+			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
 		)
 	}
 	if hasFree {
-		// FREE 账号可用的模型
 		models = append(models,
 			buildModelInfo("claude-sonnet-4.5", "anthropic", true),
 			buildModelInfo("claude-sonnet-4.5"+thinkingSuffix, "anthropic", true),
@@ -49,10 +49,12 @@ func (h *Handler) handleModels(w http.ResponseWriter, _ *http.Request) {
 	// 如果没有任何账号，返回默认列表
 	if len(models) == 0 {
 		models = []map[string]interface{}{
-			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
-			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
+			buildModelInfo("claude-opus-4.7", "anthropic", true),
+			buildModelInfo("claude-opus-4.7"+thinkingSuffix, "anthropic", true),
 			buildModelInfo("claude-opus-4.6", "anthropic", true),
 			buildModelInfo("claude-opus-4.6"+thinkingSuffix, "anthropic", true),
+			buildModelInfo("claude-sonnet-4.6", "anthropic", true),
+			buildModelInfo("claude-sonnet-4.6"+thinkingSuffix, "anthropic", true),
 			buildModelInfo("claude-sonnet-4.5", "anthropic", true),
 			buildModelInfo("claude-sonnet-4.5"+thinkingSuffix, "anthropic", true),
 		}

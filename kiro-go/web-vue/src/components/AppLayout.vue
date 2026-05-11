@@ -178,6 +178,8 @@ function handleLogout() {
   left: 0;
   width: 244px;
   height: 100vh;
+  /* dvh 优先（移动端浏览器 URL 栏收/展开时正确处理） */
+  height: 100dvh;
   z-index: 50;
   display: flex;
   flex-direction: column;
@@ -188,11 +190,18 @@ function handleLogout() {
   border-right: 1px solid var(--world-glass-border);
   transform: translateX(-100%);
   transition: transform 320ms var(--world-transition-fast, cubic-bezier(0.4, 0, 0.2, 1));
+  /* iPhone 底部 home 指示器留白 */
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 [data-world="daogui"] .sidebar { border-right-color: rgba(184, 134, 11, 0.20); }
 .sidebar.is-open { transform: translateX(0); }
 @media (min-width: 1024px) {
-  .sidebar { position: relative; transform: translateX(0); height: 100vh; }
+  .sidebar {
+    position: relative;
+    transform: translateX(0);
+    height: 100vh;
+    height: 100dvh;
+  }
 }
 
 /* Sidebar brand */
@@ -354,7 +363,7 @@ function handleLogout() {
 }
 
 .logout-btn {
-  width: 28px; height: 28px;
+  width: 32px; height: 32px;
   border-radius: var(--world-radius-sm);
   background: transparent;
   border: 1px solid var(--world-glass-border);
@@ -364,11 +373,26 @@ function handleLogout() {
   justify-content: center;
   cursor: pointer;
   transition: all 200ms ease;
+  /* 触控目标至少 44×44（≤1024px 移动端）— 通过透明扩展点击区域，视觉仍 32×32 */
+  position: relative;
+  flex-shrink: 0;
 }
-.logout-btn:hover {
+.logout-btn::after {
+  content: '';
+  position: absolute;
+  inset: -8px; /* 把点击区域扩成 48×48 */
+}
+.logout-btn:hover, .logout-btn:active {
   color: var(--world-error);
   background: rgba(239, 68, 68, 0.10);
   border-color: rgba(239, 68, 68, 0.35);
+}
+@media (max-width: 1023px) {
+  /* 移动端：直接放大视觉尺寸到 44×44，更容易看见 */
+  .logout-btn {
+    width: 44px; height: 44px;
+  }
+  .logout-btn::after { inset: 0; }
 }
 
 /* === Main === */

@@ -24,11 +24,13 @@ type modelMapping struct {
 
 var modelMapOrdered = []modelMapping{
 	{"claude-sonnet-4-20250514", "claude-sonnet-4"},
-	// 4.7 系列：上游不存在 4.7，统一映射到 4.6（PRO 池）
+	// 4.7 系列：Anthropic 只发布了 opus-4.7（无 sonnet-4.7）。
+	//   - opus-4.7：上游 Kiro/Amazon Q 已支持，直传 canonical "claude-opus-4.7"
+	//   - sonnet "4.7" 实际不存在 → fallback 到 claude-sonnet-4.6（最近降级）
 	{"claude-sonnet-4-7", "claude-sonnet-4.6"},
 	{"claude-sonnet-4.7", "claude-sonnet-4.6"},
-	{"claude-opus-4-7", "claude-opus-4.6"},
-	{"claude-opus-4.7", "claude-opus-4.6"},
+	{"claude-opus-4-7", "claude-opus-4.7"},
+	{"claude-opus-4.7", "claude-opus-4.7"},
 	{"claude-sonnet-4-5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4.5", "claude-sonnet-4.5"},
 	{"claude-sonnet-4-6", "claude-sonnet-4.6"},
@@ -95,13 +97,11 @@ func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 		return model, thinking
 	}
 
-	// 4.7 系列简写兜底：上游不存在 4.7，统一映射到 4.6 系列。
-	// 覆盖客户端传不规范简写的所有变体，例如 "opus 4.7" / "opus-4-7" / "OPUS 4.7" / "sonnet 4.7" 等。
-	// 注意：此分支仅命中既无 claude- 前缀、又含 4.7 标识的字符串；其他不识别的形态（如
-	// "claude-3-opus"、"gpt-4o" 已在 modelMapOrdered 中显式掺水到 sonnet-4.5），保持原行为。
+	// 4.7 简写兜底：opus 4.7 真实存在 → claude-opus-4.7；
+	// sonnet "4.7" 不存在（Anthropic 只发布了 opus-4.7）→ fallback 到 sonnet-4.6
 	if strings.Contains(lower, "4.7") || strings.Contains(lower, "4-7") {
 		if strings.Contains(lower, "opus") {
-			return "claude-opus-4.6", thinking
+			return "claude-opus-4.7", thinking
 		}
 		if strings.Contains(lower, "sonnet") {
 			return "claude-sonnet-4.6", thinking
@@ -139,7 +139,7 @@ func DeterminePoolTier(model string) string {
 
 // ValidateAndMapModel 根据号池类型映射模型
 // FREE 池：所有模型映射到 claude-sonnet-4.5
-// PRO 池：只允许 4.6 系列（4.7 经 MapModel 归一为 4.6 后亦放行）
+// PRO 池：允许 sonnet-4.6 / opus-4.6 / opus-4.7（注意：sonnet-4.7 不存在）
 func ValidateAndMapModel(model, subscriptionType string) (string, error) {
 	// 移除 thinking 后缀做基础判断
 	baseModel := strings.TrimSuffix(strings.TrimSuffix(model, "-thinking"), "-think")
@@ -149,16 +149,19 @@ func ValidateAndMapModel(model, subscriptionType string) (string, error) {
 		return "claude-sonnet-4.5", nil
 	}
 
-	// 先经 MapModel 归一（如 4.7 → 4.6），再判定 allowed
+	// MapModel 归一（带点号 canonical），再判定 allowed
 	normalized := MapModel(baseModel)
 	normalizedLower := strings.ToLower(normalized)
 
-	// PRO/PRO_PLUS/POWER 账号：只允许 4.6 系列（归一后）
+	// PRO/PRO_PLUS/POWER 账号：允许实际存在的模型
+	// sonnet 只到 4.6（无 4.7）；opus 到 4.7
 	allowedModels := map[string]bool{
 		"claude-sonnet-4.6": true,
 		"claude-sonnet-4-6": true,
 		"claude-opus-4.6":   true,
 		"claude-opus-4-6":   true,
+		"claude-opus-4.7":   true,
+		"claude-opus-4-7":   true,
 	}
 
 	if allowedModels[normalizedLower] {
@@ -166,7 +169,7 @@ func ValidateAndMapModel(model, subscriptionType string) (string, error) {
 	}
 
 	// 拒绝其他模型
-	return "", fmt.Errorf("model %s is not allowed for subscription type %s. Allowed models: claude-sonnet-4.6, claude-opus-4.6", model, subscriptionType)
+	return "", fmt.Errorf("model %s is not allowed for subscription type %s. Allowed: claude-sonnet-4.6, claude-opus-4.6, claude-opus-4.7", model, subscriptionType)
 }
 
 // DowngradeForFree 向后兼容包装器（已弃用，使用 ValidateAndMapModel）
@@ -847,6 +850,89 @@ type OpenAIUsage struct {
 
 // ==================== OpenAI -> Kiro 转换 ====================
 
+// mergeConsecutiveOpenAIMessages 合并连续的同角色 user/assistant 消息。
+// Kiro/AmazonQ API 严格要求 user/assistant 交替；OpenAI 客户端（含 Claude Code 走 OpenAI 兼容接口）
+// 在长对话/多轮 tool_calls 情况下可能产生连续同 role，触发 HTTP 400 "Improperly formed request"。
+//
+// 行为：
+//   - 只合并 user/user 与 assistant/assistant 相邻同 role
+//   - tool 角色不合并（每条 tool message 必须保留其独立的 tool_call_id 配对）
+//   - 合并时 content 统一转为 [{type:"text",text:...}/multimodal] blocks 数组，下游 extract* 能正确解析
+//   - 合并时 tool_calls 数组按顺序拼接
+//
+// 历史背景：commit 2ed8536 为 Claude API 路径实现了 mergeConsecutiveMessages（针对 ClaudeMessage），
+// 但 OpenAI 路径漏改 —— 本函数补齐 OpenAI 路径同样问题。
+func mergeConsecutiveOpenAIMessages(messages []OpenAIMessage) []OpenAIMessage {
+	if len(messages) <= 1 {
+		return messages
+	}
+	result := make([]OpenAIMessage, 0, len(messages))
+	i := 0
+	for i < len(messages) {
+		cur := messages[i]
+		// 只合并 user / assistant；tool / 其它 role 直接保留
+		if cur.Role != "user" && cur.Role != "assistant" {
+			result = append(result, cur)
+			i++
+			continue
+		}
+		// 与下一条 role 不同（或已是最后一条）→ 不需要合并
+		if i == len(messages)-1 || messages[i+1].Role != cur.Role {
+			result = append(result, cur)
+			i++
+			continue
+		}
+		// 连续同 role → 合并
+		role := cur.Role
+		var mergedBlocks []interface{}
+		var mergedToolCalls []ToolCall
+		for i < len(messages) && messages[i].Role == role {
+			mergedBlocks = append(mergedBlocks, openaiContentToBlocks(messages[i].Content)...)
+			if len(messages[i].ToolCalls) > 0 {
+				mergedToolCalls = append(mergedToolCalls, messages[i].ToolCalls...)
+			}
+			i++
+		}
+		merged := OpenAIMessage{
+			Role:    role,
+			Content: mergedBlocks,
+		}
+		if len(mergedToolCalls) > 0 {
+			merged.ToolCalls = mergedToolCalls
+		}
+		result = append(result, merged)
+	}
+	return result
+}
+
+// openaiContentToBlocks 将 OpenAI content 字段（可能是 string / []block / nil）统一转为 blocks 数组。
+// 用于 mergeConsecutiveOpenAIMessages 合并不同消息的 content 时统一容器形态。
+func openaiContentToBlocks(content interface{}) []interface{} {
+	if content == nil {
+		return nil
+	}
+	if s, ok := content.(string); ok {
+		if s == "" {
+			return nil
+		}
+		return []interface{}{map[string]interface{}{
+			"type": "text",
+			"text": s,
+		}}
+	}
+	if blocks, ok := content.([]interface{}); ok {
+		return blocks
+	}
+	// 其它结构（map 等）尝试 marshal 成字符串塞进 text block，避免数据丢失
+	if raw, err := json.Marshal(content); err == nil {
+		return []interface{}{map[string]interface{}{
+			"type": "text",
+			"text": string(raw),
+		}}
+	}
+	return nil
+}
+
 func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 	modelID := MapModel(req.Model)
 	origin := "AI_EDITOR"
@@ -865,6 +951,9 @@ func OpenAIToKiro(req *OpenAIRequest, thinking bool) *KiroPayload {
 		}
 	}
 	systemPrompt = strings.TrimRight(systemPrompt, "\n")
+
+	// 合并连续的同 role user/assistant 消息（Kiro 严格交替要求）
+	nonSystemMessages = mergeConsecutiveOpenAIMessages(nonSystemMessages)
 
 	// 如果启用 thinking 模式，注入 thinking 提示
 	if thinking {

@@ -29,6 +29,8 @@ const currentPage = ref(parseInt(route.query.page) || 1)
 const totalLogs = ref(0)
 const pageSize = ref(50)
 let eventSource = null
+let reconnectTimer = null
+const seenIds = new Set()
 
 watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
   const q = {}
@@ -39,7 +41,7 @@ watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
 })
 
 function connectSSE() {
-  const password = document.cookie.match(/admin_password=([^;]+)/)?.[1] || ''
+  const password = localStorage.getItem('admin_password') || ''
   const url = `${location.origin}/admin/api/sse/logs?password=${encodeURIComponent(password)}`
   eventSource = new EventSource(url)
   eventSource.addEventListener('log', (e) => {
@@ -59,23 +61,24 @@ function connectSSE() {
           entry.stop_reason?.toLowerCase().includes(q)
         if (!matches) return
       }
+      const id = entry.request_id || `${entry.time}-${entry.actual_model}-${entry.account}`
+      if (seenIds.has(id)) return
+      seenIds.add(id)
       totalLogs.value++
       if (currentPage.value !== 1) return
-      const exists = logs.value.some(l =>
-        l.time === entry.time && l.actual_model === entry.actual_model && l.account === entry.account
-      )
-      if (!exists) {
-        logs.value.unshift(entry)
-        if (logs.value.length > pageSize.value) {
-          logs.value = logs.value.slice(0, pageSize.value)
-        }
+      logs.value.unshift(entry)
+      if (logs.value.length > pageSize.value) {
+        const evicted = logs.value.pop()
+        seenIds.delete(evicted.request_id || `${evicted.time}-${evicted.actual_model}-${evicted.account}`)
       }
     } catch {}
   })
   eventSource.onopen = () => { sseConnected.value = true }
   eventSource.onerror = () => {
     sseConnected.value = false
-    setTimeout(() => {
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
       if (eventSource) { eventSource.close(); connectSSE() }
     }, 3000)
   }
@@ -99,6 +102,10 @@ async function loadLogs(page = 1) {
     if (res.ok) {
       const d = await res.json()
       logs.value = d.logs || []
+      seenIds.clear()
+      logs.value.forEach(l => {
+        seenIds.add(l.request_id || `${l.time}-${l.actual_model}-${l.account}`)
+      })
       totalLogs.value = d.total || 0
       currentPage.value = d.page || 1
     }
@@ -119,6 +126,7 @@ async function clearLogs() {
   try {
     await api('/logs', { method: 'DELETE' })
     logs.value = []
+    seenIds.clear()
     totalLogs.value = 0
     success('日志已清空')
   } catch { toastErr('清空失败') }
@@ -153,11 +161,14 @@ function formatLogTime(t) {
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}`
 }
 
+const apiKeyMap = computed(() => new Map(apiKeys.value.map(k => [
+  k.id,
+  k.note || (k.key || '').slice(0, 10) + '...'
+])))
+
 function getApiKeyDisplay(keyId) {
   if (!keyId) return '未关联'
-  const k = apiKeys.value.find(x => x.id === keyId)
-  if (k) return k.note || (k.key || '').slice(0, 10) + '...'
-  return keyId
+  return apiKeyMap.value.get(keyId) || keyId
 }
 
 let searchTimeout = null
@@ -173,6 +184,8 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   if (eventSource) { eventSource.close(); eventSource = null }
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  if (searchTimeout) clearTimeout(searchTimeout)
 })
 
 const statusOpts = [

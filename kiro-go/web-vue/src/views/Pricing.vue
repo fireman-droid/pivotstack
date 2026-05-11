@@ -3,13 +3,16 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import {
-  Save, Plus, Trash2, ChevronDown, ChevronRight
+  Save, Plus, Trash2
 } from 'lucide-vue-next'
 import WorldCard from '../components/world/WorldCard.vue'
 import WorldButton from '../components/world/WorldButton.vue'
 import WorldChip from '../components/world/WorldChip.vue'
 import WorldSegment from '../components/world/WorldSegment.vue'
 import WorldInput from '../components/world/WorldInput.vue'
+import WorldSelect from '../components/world/WorldSelect.vue'
+import WorldDatePicker from '../components/world/WorldDatePicker.vue'
+import WorldCheckbox from '../components/world/WorldCheckbox.vue'
 
 const auth = useAuthStore()
 const { success, error: toastErr } = useToast()
@@ -20,7 +23,6 @@ const tabOptions = [
   { value: 'config',    label: '售价配置' },
   { value: 'promotion', label: '活动门槛' },
 ]
-const showCostBlock = ref(false) // 成本端配置折叠区
 
 // Promotion state (v2: per-model 活动价 + 兜底)
 const promotion = ref({
@@ -110,6 +112,10 @@ const keysForWhitelist = computed(() => {
     }))
     .sort((a, b) => a.label.localeCompare(b.label))
 })
+// WorldSelect options 形态
+const whitelistSelectOptions = computed(() =>
+  keysForWhitelist.value.map(k => ({ value: k.id, label: k.label }))
+)
 
 const whitelistDetailed = computed(() => {
   const map = {}
@@ -127,12 +133,6 @@ const pricing = ref(null)
 const loading = ref(true)
 const saving = ref(false)
 let timer = null
-
-// 采购成本明细表单（折叠区里）
-const showProForm = ref(false)
-const showFreeForm = ref(false)
-const proForm = ref({ count: 1, costCNY: 60, credits: 1500 })
-const freeForm = ref({ count: 100, costCNY: 9 })
 
 async function fetchAll() {
   try {
@@ -240,63 +240,8 @@ async function savePricing() {
   saving.value = false
 }
 
-async function addCostEntry(pool) {
-  const form = pool === 'pro' ? proForm.value : freeForm.value
-  const entry = pool === 'pro'
-    ? { count: form.count, costCNY: form.costCNY, credits: form.credits }
-    : { count: form.count, costCNY: form.costCNY }
-  try {
-    const res = await fetch('/admin/api/cost-entry', {
-      method: 'POST', headers: headers(),
-      body: JSON.stringify({ pool, entry }),
-    })
-    if (res.ok) {
-      success('已添加')
-      fetchAll()
-      if (pool === 'pro') showProForm.value = false
-      else showFreeForm.value = false
-    }
-  } catch { toastErr('添加失败') }
-}
-
-async function removeCostEntry(pool, id) {
-  try {
-    const res = await fetch('/admin/api/cost-entry', {
-      method: 'DELETE', headers: headers(),
-      body: JSON.stringify({ pool, id }),
-    })
-    if (res.ok) { success('已删除'); fetchAll() }
-  } catch { toastErr('删除失败') }
-}
-
 onMounted(() => { fetchAll(); timer = setInterval(fetchAll, 30000) })
 onUnmounted(() => clearInterval(timer))
-
-// Computed
-const proSummary = computed(() => {
-  const e = pricing.value?.proCostEntries || []
-  let totalCost = 0, totalCredits = 0, totalCount = 0
-  e.forEach(x => { totalCost += x.costCNY; totalCredits += x.count * (x.credits || 0); totalCount += x.count })
-  return {
-    totalCost, totalCredits, totalCount,
-    avgCostPerCredit: totalCredits > 0 ? (totalCost / totalCredits).toFixed(4) : '—',
-  }
-})
-const freeSummary = computed(() => {
-  const e = pricing.value?.freeCostEntries || []
-  let totalCost = 0, totalCount = 0
-  e.forEach(x => { totalCost += x.costCNY; totalCount += x.count })
-  const totalCredits = totalCount * 550
-  return {
-    totalCost, totalCredits, totalCount,
-    avgCostPerCredit: totalCredits > 0 ? (totalCost / totalCredits).toFixed(6) : '—',
-  }
-})
-
-function fmtDate(ts) {
-  if (!ts) return ''
-  return new Date(ts * 1000).toLocaleDateString('zh-CN')
-}
 </script>
 
 <template>
@@ -335,8 +280,6 @@ function fmtDate(ts) {
             <span style="flex: 0.6; min-width: 50px;">池</span>
             <span style="flex: 1.2; min-width: 110px;">单价 ($/cr)</span>
             <span style="flex: 1.0; min-width: 80px;">折合 ¥</span>
-            <span style="flex: 1.0; min-width: 90px;">成本 ¥</span>
-            <span style="flex: 1.0; min-width: 70px;">利润率</span>
             <span style="flex: 0; width: 32px;"></span>
           </div>
           <div v-for="r in modelPriceRows" :key="r.model" class="mpt-row" :class="{ 'is-default': r.isDefault }">
@@ -354,15 +297,6 @@ function fmtDate(ts) {
               />
             </span>
             <span class="dim" style="flex: 1.0; min-width: 80px;">¥{{ r.priceCNYPerCredit.toFixed(4) }}</span>
-            <span class="dim" style="flex: 1.0; min-width: 90px;">
-              <span v-if="r.costIsFallback" title="未填进货明细，无法算真实成本">—</span>
-              <template v-else>¥{{ r.costCNYPerCredit.toFixed(4) }}</template>
-            </span>
-            <span style="flex: 1.0; min-width: 70px;"
-                  :class="r.costIsFallback ? 'dim' : (r.marginPercent >= 0 ? 'margin-good' : 'margin-bad')">
-              <span v-if="r.costIsFallback" title="未填进货明细，无法算利润率">—</span>
-              <template v-else>{{ r.marginPercent.toFixed(1) }}%</template>
-            </span>
             <button v-if="!r.isDefault" class="del-btn" style="flex: 0; width: 32px;" @click="removeModelPrice(r.model)" aria-label="删除">
               <Trash2 :size="12" />
             </button>
@@ -380,121 +314,6 @@ function fmtDate(ts) {
         </div>
       </WorldCard>
 
-      <!-- Shadow 校验提示（迁移健康检查）-->
-      <WorldCard v-if="modelPriceRows.some(r => !r.legacyEqualsActual)" padding="md">
-        <header class="section-head">
-          <h3 style="color: #f59e0b;">⚠️ 迁移校验：检测到新旧公式不一致</h3>
-        </header>
-        <p class="section-hint">
-          下面这些模型的 v2 价格 跟 v1 公式（pool_price × multiplier）算出的价格不一致 — 可能 admin 手动改过 ModelPrices，或者迁移时遇到了边界 case。
-          如果这是 admin 主动调整的结果（在 v1 基础上想给某 model 单独提价/降价），可以忽略此提示。
-        </p>
-        <div class="entry-list">
-          <div v-for="r in modelPriceRows.filter(x => !x.legacyEqualsActual)" :key="r.model" class="entry-row">
-            <code style="flex: 2;">{{ r.model }}</code>
-            <span class="dim">v2: ${{ r.priceUSD.toFixed(4) }}</span>
-            <span class="dim">vs v1: ${{ r.legacyPriceUSD.toFixed(4) }}</span>
-            <span style="color: #f59e0b; font-weight: 800;">差 ${{ Math.abs(r.priceUSD - r.legacyPriceUSD).toFixed(4) }}</span>
-          </div>
-        </div>
-      </WorldCard>
-
-      <!-- 成本端配置（折叠区，默认收起）-->
-      <WorldCard padding="md">
-        <header class="section-head" style="cursor: pointer;" @click="showCostBlock = !showCostBlock">
-          <h3>
-            <component :is="showCostBlock ? ChevronDown : ChevronRight" :size="16" style="vertical-align: -2px;" />
-            成本端配置（采购价 + 进货明细）
-          </h3>
-          <WorldChip size="sm" variant="default">
-            PRO 平均 ¥{{ proSummary.avgCostPerCredit }}/cr · {{ proSummary.totalCount }} 个号
-          </WorldChip>
-        </header>
-
-        <div v-if="showCostBlock">
-          <p class="section-hint">
-            这里管<strong>账号采购成本</strong>（admin 买号花了多少钱），跟"卖给用户的价"无关。
-            用于在「模型售价表」的"利润率"列计算利润 = 售价 - 进货成本。
-          </p>
-
-          <div class="cfg-grid" style="margin-bottom: 16px;">
-            <WorldInput
-              v-model.number="pricing.purchasePriceCNY"
-              type="number" step="0.001"
-              label="PRO 进货价 (¥/credit) — 兜底"
-              hint="如果下方采购明细为空，利润计算会回落到这个值"
-            />
-          </div>
-
-          <!-- PRO 采购 -->
-          <div class="cost-block">
-            <div class="cost-head">
-              <div>
-                <div class="cost-title">PRO 号采购记录</div>
-                <div class="cost-summary">
-                  平均 ¥{{ proSummary.avgCostPerCredit }}/cr · {{ proSummary.totalCount }} 个号 · ¥{{ proSummary.totalCost.toFixed(0) }}
-                </div>
-              </div>
-              <WorldButton variant="secondary" size="sm" @click="showProForm = !showProForm">
-                <Plus :size="13" /><span>{{ showProForm ? '取消' : '添加' }}</span>
-              </WorldButton>
-            </div>
-            <Transition name="fade-slide">
-              <div v-if="showProForm" class="cost-form">
-                <WorldInput v-model.number="proForm.count" type="number" label="数量" size="sm" />
-                <WorldInput v-model.number="proForm.costCNY" type="number" label="花费 (¥)" size="sm" />
-                <WorldInput v-model.number="proForm.credits" type="number" label="每号额度 (cr)" size="sm" />
-                <WorldButton variant="primary" size="sm" @click="addCostEntry('pro')">确定</WorldButton>
-              </div>
-            </Transition>
-            <div class="entry-list">
-              <div v-for="e in (pricing?.proCostEntries || [])" :key="e.id" class="entry-row">
-                <span>{{ e.count }} 个号</span>
-                <span>¥{{ e.costCNY }}</span>
-                <span>{{ e.credits }} cr/号</span>
-                <span class="dim">¥{{ (e.costCNY / (e.count * e.credits)).toFixed(4) }}/cr</span>
-                <span class="date">{{ fmtDate(e.createdAt) }}</span>
-                <button class="del-btn" @click="removeCostEntry('pro', e.id)" aria-label="删除"><Trash2 :size="12" /></button>
-              </div>
-              <div v-if="!(pricing?.proCostEntries?.length)" class="entry-empty">暂无记录</div>
-            </div>
-          </div>
-
-          <!-- FREE 采购 -->
-          <div class="cost-block">
-            <div class="cost-head">
-              <div>
-                <div class="cost-title">FREE 号采购记录</div>
-                <div class="cost-summary">
-                  平均 ¥{{ freeSummary.avgCostPerCredit }}/cr · {{ freeSummary.totalCount }} 个号 · ¥{{ freeSummary.totalCost.toFixed(0) }} · 固定 550 cr/号
-                </div>
-              </div>
-              <WorldButton variant="secondary" size="sm" @click="showFreeForm = !showFreeForm">
-                <Plus :size="13" /><span>{{ showFreeForm ? '取消' : '添加' }}</span>
-              </WorldButton>
-            </div>
-            <Transition name="fade-slide">
-              <div v-if="showFreeForm" class="cost-form">
-                <WorldInput v-model.number="freeForm.count" type="number" label="数量 (个)" size="sm" />
-                <WorldInput v-model.number="freeForm.costCNY" type="number" label="花费 (¥)" size="sm" />
-                <WorldInput :modelValue="550" disabled label="每号额度" size="sm" />
-                <WorldButton variant="primary" size="sm" @click="addCostEntry('free')">确定</WorldButton>
-              </div>
-            </Transition>
-            <div class="entry-list">
-              <div v-for="e in (pricing?.freeCostEntries || [])" :key="e.id" class="entry-row">
-                <span>{{ e.count }} 个号</span>
-                <span>¥{{ e.costCNY }}</span>
-                <span>550 cr/号</span>
-                <span class="dim">¥{{ (e.costCNY / (e.count * 550)).toFixed(6) }}/cr</span>
-                <span class="date">{{ fmtDate(e.createdAt) }}</span>
-                <button class="del-btn" @click="removeCostEntry('free', e.id)" aria-label="删除"><Trash2 :size="12" /></button>
-              </div>
-              <div v-if="!(pricing?.freeCostEntries?.length)" class="entry-empty">暂无记录</div>
-            </div>
-          </div>
-        </div>
-      </WorldCard>
     </template>
 
     <template v-else-if="tab === 'promotion'">
@@ -513,10 +332,7 @@ function fmtDate(ts) {
         </p>
 
         <div class="promo-toggle">
-          <label class="promo-switch">
-            <input type="checkbox" v-model="promotion.enabled" />
-            <span>启用活动</span>
-          </label>
+          <WorldCheckbox v-model="promotion.enabled" label="启用活动" />
           <WorldChip v-if="promotion.enabled" variant="success" :dot="true" size="sm">已启用</WorldChip>
           <WorldChip v-else variant="default" size="sm">未启用</WorldChip>
         </div>
@@ -619,11 +435,11 @@ function fmtDate(ts) {
         <div class="cfg-grid">
           <div class="cfg-item">
             <label class="cfg-label">开始时间</label>
-            <input type="datetime-local" class="dt-input" v-model="promoStartLocal" />
+            <WorldDatePicker v-model="promoStartLocal" mode="datetime" size="md" placeholder="不限" />
           </div>
           <div class="cfg-item">
             <label class="cfg-label">结束时间</label>
-            <input type="datetime-local" class="dt-input" v-model="promoEndLocal" />
+            <WorldDatePicker v-model="promoEndLocal" mode="datetime" size="md" placeholder="不限" />
           </div>
         </div>
       </WorldCard>
@@ -636,10 +452,14 @@ function fmtDate(ts) {
         <p class="section-hint">直接通过资格判定，无视充值额/活跃度门槛。适合"熟人 / 内部测试号"。</p>
 
         <div class="whitelist-form">
-          <select v-model="newWhitelistKeyID" class="dt-input">
-            <option value="">— 选择 key 加入白名单 —</option>
-            <option v-for="k in keysForWhitelist" :key="k.id" :value="k.id">{{ k.label }}</option>
-          </select>
+          <WorldSelect
+            v-model="newWhitelistKeyID"
+            :options="whitelistSelectOptions"
+            size="md"
+            :searchable="true"
+            placeholder="选择 key 加入白名单"
+            class="whitelist-select"
+          />
           <WorldButton variant="primary" size="sm" :disabled="!newWhitelistKeyID" @click="addWhitelist">
             <Plus :size="13" /><span>加入</span>
           </WorldButton>
@@ -930,26 +750,13 @@ function fmtDate(ts) {
 
 /* Promotion */
 .promo-toggle { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.promo-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
-.promo-switch input { width: 18px; height: 18px; cursor: pointer; }
-.promo-switch span { font-size: 0.875rem; font-weight: 700; color: var(--world-text-primary); }
 
 .cfg-item { display: flex; flex-direction: column; gap: 6px; }
 .cfg-label { font-size: 0.75rem; font-weight: 700; color: var(--world-text-mute); }
-.dt-input {
-  width: 100%;
-  padding: 8px 10px;
-  background: var(--world-overlay-light);
-  border: 1px solid var(--world-divider);
-  border-radius: var(--world-radius-sm);
-  color: var(--world-text-primary);
-  font-size: 0.875rem;
-  font-family: var(--world-font-mono);
-}
-.dt-input:focus { outline: none; border-color: var(--world-accent); }
 
 .whitelist-form { display: flex; gap: 10px; align-items: center; }
-.whitelist-form .dt-input { flex: 1 1 auto; }
+.whitelist-select { flex: 1 1 auto; min-width: 240px; }
+.whitelist-select :deep(.ws-trigger) { width: 100%; }
 
 /* Model multiplier */
 .mult-form {

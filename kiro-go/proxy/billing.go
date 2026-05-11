@@ -18,16 +18,17 @@ const (
 // 反向：ResolveModelPool 用关键字模糊匹配（4.6/4-6/opus 等），所以底层路由
 // 一直是动态的；这里仅是给前端展示用的"展示清单"。
 func SupportedModels() map[string][]string {
+	// Anthropic 只发布了 opus-4.7（无 sonnet-4.7）。展示清单与实际可调模型保持一致。
 	return map[string][]string{
 		"free": {"claude-sonnet-4.5"},
-		"pro":  {"claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7"},
+		"pro":  {"claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"},
 	}
 }
 
 // ResolveModelPool determines pool type from model name.
 // 4.5 → "free", 4.6/4.7/opus → "pro"
 // 同时匹配 . 和 - 分隔符（如 "claude-sonnet-4-6" 与 "opus 4.7"）。
-// 4.7 系列上游不存在，统一归到 pro 池后由 ParseModelAndThinking 归一到 4.6。
+// 4.7 系列上游已支持，直传不再做 4.6 降级。
 func ResolveModelPool(model string) string {
 	base := strings.ToLower(model)
 	if strings.Contains(base, "4.6") || strings.Contains(base, "4-6") ||

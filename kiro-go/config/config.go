@@ -142,6 +142,12 @@ type ActivationCode struct {
 	// 仅 type=days/time 用：兑换后写入 ApiKeyInfo.RateLimitPerMin。
 	// 0 = 兑换时不修改 key 的速率（保留 key 现有值）。
 	RateLimitPerMin int `json:"rateLimitPerMin,omitempty"`
+
+	// 仅 type=days/time 用：admin 卖给客户的实际价格（¥）。
+	// 兑换时写入 RechargeRecord.AmountCNY 作为利润计算的"真实收入"来源。
+	// balance 类型不需要这个字段（amount 本身就是 CNY 售价）。
+	// 0 = 历史卡或白送的卡（不计入 revenue）。
+	SalePriceCNY float64 `json:"salePriceCNY,omitempty"`
 }
 
 // PromotionConfig 活动门槛配置：admin 开启后，凡满足 OR 三个条件之一的 key 才享受活动价。
@@ -397,6 +403,10 @@ type Config struct {
 	// 天卡防共享速率限制：仅对 plan=timed/hybrid 且 ExpiresAt 未过期的 key 生效。
 	// 0 = 走老兜底 200/min。默认 10。设值越低，N 人共享一张卡时人均配额越糟糕，自然劝退分发。
 	TimedKeyRPM int `json:"timedKeyRPM,omitempty"`
+
+	// 利润计算时是否把 admin 主动 gift 给 key 的总额计入 revenue。
+	// false（默认）= 不计入；true = 计入"period 内 admin 触发的赠送总额"作为收入。
+	ProfitIncludeGift bool `json:"profitIncludeGift,omitempty"`
 
 	// Global statistics (persisted across restarts)
 	TotalRequests   int     `json:"totalRequests,omitempty"`   // Total API requests received
@@ -1028,6 +1038,21 @@ func UpdateTimedKeyRPM(rpm int) error {
 	return Save()
 }
 
+// GetProfitIncludeGift 返回利润计算是否计入赠送余额。
+func GetProfitIncludeGift() bool {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	return cfg.ProfitIncludeGift
+}
+
+// UpdateProfitIncludeGift 持久化偏好。
+func UpdateProfitIncludeGift(v bool) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.ProfitIncludeGift = v
+	return Save()
+}
+
 func UpdateStats(totalReq, successReq, failedReq, totalTokens int, totalCredits float64) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -1399,6 +1424,17 @@ func ValidateKeyAccess(info *ApiKeyInfo) (string, error) {
 
 // ValidateKeyAccessForModel checks if a key can access a model in the given pool.
 // Returns action: "free" (no charge), "deduct" (charge balance), or error.
+//
+// v3.5 简化（2026-05-09）：取消"free 天卡 vs pro 天卡"区分。
+//   - 任何天卡（plan=timed/hybrid 且未过期）覆盖**所有**模型（free + pro 池），不扣费
+//   - 没天卡但有余额 → deduct
+//   - 都没有 → 错误
+//
+// 历史背景：早期 ApiKeyInfo.Tier ("free"/"pro") 用于限制 free 天卡只能调 sonnet-4.5，
+// 防止低价天卡用户调高成本 PRO 模型。但 admin UI 后来就不暴露 tier 选择了，
+// 字段成了悬空逻辑（旧 key 残留 tier="free" 反而把用户卡住）。
+// 想限制成本走 RateLimitPerMin（速率限制），不走 tier 区分。
+// 字段保留兼容（不读不写）。
 func ValidateKeyAccessForModel(info *ApiKeyInfo, modelPool string) (string, error) {
 	if info == nil || !info.Enabled {
 		return "", fmt.Errorf("api key disabled")
@@ -1407,26 +1443,17 @@ func ValidateKeyAccessForModel(info *ApiKeyInfo, modelPool string) (string, erro
 	hasDayCard := (info.Plan == "timed" || info.Plan == "hybrid") && (info.ExpiresAt == 0 || now <= info.ExpiresAt)
 	hasBalance := info.Balance > 0 || info.GiftBalance > 0
 
-	switch modelPool {
-	case "free":
-		if hasDayCard {
-			return "free", nil // day card covers free pool models
-		}
-		if hasBalance {
-			return "deduct", nil
-		}
-		return "", fmt.Errorf("no active plan or balance")
-	case "pro":
-		if hasDayCard && info.Tier == "pro" {
-			return "free", nil // pro day card covers all models
-		}
-		// free day card + balance OR pure balance → deduct
-		if hasBalance {
-			return "deduct", nil
-		}
-		return "", fmt.Errorf("pro models require pro day-card or balance")
+	// 任何天卡覆盖所有模型，不扣费
+	if hasDayCard {
+		return "free", nil
 	}
-	return "", fmt.Errorf("unknown pool: %s", modelPool)
+	// 余额按需扣（free / pro 池都从同一个 balance 扣）
+	if hasBalance {
+		return "deduct", nil
+	}
+	// modelPool 参数保留是为了不破坏调用方签名（未来如要区分计费规则可重新启用）
+	_ = modelPool
+	return "", fmt.Errorf("api key has no active day-card and no balance")
 }
 
 // ==================== Activation Codes ====================
@@ -1466,11 +1493,9 @@ func RedeemActivationCode(codeStr, keyID string) (string, error) {
 			case "balance":
 				for j, k := range cfg.ApiKeys {
 					if k.ID == keyID {
+						// 激活码面值即 balance，无任何系统层杠杆。
+						// admin 想给 reseller 让利？出卡时手算面值（如客户付 ¥200，admin 给 ¥285 面值卡）。
 						amountUSD := ac.Amount / CNYPerUSDFace
-						// 代理折扣：仅 reseller 自己充值时按 1/discount 放大（< 1 才生效）
-						if cfg.ApiKeys[j].IsReseller && cfg.ApiKeys[j].ResellerDiscount > 0 && cfg.ApiKeys[j].ResellerDiscount < 1 {
-							amountUSD = amountUSD / cfg.ApiKeys[j].ResellerDiscount
-						}
 						cfg.ApiKeys[j].Balance += amountUSD
 						cfg.ApiKeys[j].TotalRecharged += amountUSD
 						// Set plan: if already timed → hybrid, otherwise credit
@@ -1576,9 +1601,18 @@ func GetChildKeys(parentKeyID string) []ApiKeyInfo {
 //   - 校验 to.ParentKeyID == fromKeyID（防横向越权）
 //   - 校验 from.Balance >= amountUSD
 //   - 一次写盘
+// TransferBalance 在 reseller(parent) 与 child key 之间转账。
+//
+// amountUSD 语义（双向）：
+//   - amountUSD > 0: parent → child（充入；同步 parent.SoldToChildren += amount, child.TotalRecharged += amount）
+//   - amountUSD < 0: child → parent（扣回；同步 parent.SoldToChildren -= |amount|, child.TotalRecharged -= |amount|，最少为 0 不到负）
+//   - amountUSD == 0: 拒绝
+//
+// fromKeyID 始终是 reseller(parent) ID（不是资金来源方向）；toKeyID 始终是 child ID。
+// 负数方向由后端语义决定，调用方不需要倒置参数。
 func TransferBalance(fromKeyID, toKeyID string, amountUSD float64) error {
-	if amountUSD <= 0 {
-		return fmt.Errorf("amount must be positive")
+	if amountUSD == 0 {
+		return fmt.Errorf("amount must be non-zero")
 	}
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
@@ -1600,13 +1634,36 @@ func TransferBalance(fromKeyID, toKeyID string, amountUSD float64) error {
 	if cfg.ApiKeys[toIdx].ParentKeyID != fromKeyID {
 		return fmt.Errorf("not your child key") // 横向越权拦截
 	}
-	if cfg.ApiKeys[fromIdx].Balance < amountUSD {
-		return fmt.Errorf("insufficient balance")
+
+	if amountUSD > 0 {
+		// 充入：parent → child
+		if cfg.ApiKeys[fromIdx].Balance < amountUSD {
+			return fmt.Errorf("insufficient balance")
+		}
+		cfg.ApiKeys[fromIdx].Balance -= amountUSD
+		cfg.ApiKeys[fromIdx].SoldToChildren += amountUSD
+		cfg.ApiKeys[toIdx].Balance += amountUSD
+		cfg.ApiKeys[toIdx].TotalRecharged += amountUSD
+	} else {
+		// 扣回：child → parent；amount = -amountUSD（正数）
+		recall := -amountUSD
+		if cfg.ApiKeys[toIdx].Balance < recall {
+			return fmt.Errorf("child balance insufficient for recall")
+		}
+		cfg.ApiKeys[toIdx].Balance -= recall
+		cfg.ApiKeys[fromIdx].Balance += recall
+		// 修正历史统计（不到负）
+		if cfg.ApiKeys[fromIdx].SoldToChildren >= recall {
+			cfg.ApiKeys[fromIdx].SoldToChildren -= recall
+		} else {
+			cfg.ApiKeys[fromIdx].SoldToChildren = 0
+		}
+		if cfg.ApiKeys[toIdx].TotalRecharged >= recall {
+			cfg.ApiKeys[toIdx].TotalRecharged -= recall
+		} else {
+			cfg.ApiKeys[toIdx].TotalRecharged = 0
+		}
 	}
-	cfg.ApiKeys[fromIdx].Balance -= amountUSD
-	cfg.ApiKeys[fromIdx].SoldToChildren += amountUSD
-	cfg.ApiKeys[toIdx].Balance += amountUSD
-	cfg.ApiKeys[toIdx].TotalRecharged += amountUSD
 	return Save()
 }
 

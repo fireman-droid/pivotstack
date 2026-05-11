@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -139,6 +140,8 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiUpdateStealth(w, r)
 	case path == "/profit" && r.Method == "GET":
 		h.apiGetProfit(w, r)
+	case path == "/profit-include-gift" && r.Method == "POST":
+		h.apiUpdateProfitIncludeGift(w, r)
 	case path == "/cost-entry" && r.Method == "POST":
 		h.apiAddCostEntry(w, r)
 	case path == "/cost-entry" && r.Method == "DELETE":
@@ -512,7 +515,26 @@ func (h *Handler) apiGetSettings(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"apiKey": config.GetApiKey(), "requireApiKey": config.IsApiKeyRequired(),
 		"port": config.GetPort(), "host": config.GetHost(),
+		"profitIncludeGift": config.GetProfitIncludeGift(),
 	})
+}
+
+// POST /admin/api/profit-include-gift — 持久化"利润计算是否计入赠送"开关
+func (h *Handler) apiUpdateProfitIncludeGift(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Value bool `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdateProfitIncludeGift(req.Value); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -991,10 +1013,9 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 		Balance          *float64 `json:"balance"`
 		GiftBalance      *float64 `json:"giftBalance"`
 		Note             *string  `json:"note"`
-		// 代理设置
-		IsReseller       *bool    `json:"isReseller"`
-		MaxChildKeys     *int     `json:"maxChildKeys"`
-		ResellerDiscount *float64 `json:"resellerDiscount"`
+		// 代理设置（不再有 ResellerDiscount —— 杠杆由 admin 出卡时手动定面值）
+		IsReseller   *bool `json:"isReseller"`
+		MaxChildKeys *int  `json:"maxChildKeys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -1048,7 +1069,7 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 		// 关闭代理时清空相关字段（保留 SoldToChildren 作为历史统计）
 		if !existing.IsReseller {
 			existing.MaxChildKeys = 0
-			existing.ResellerDiscount = 0
+			existing.ResellerDiscount = 0 // 历史字段：清零，新版不再使用
 		}
 	}
 	if req.MaxChildKeys != nil && existing.IsReseller {
@@ -1057,14 +1078,6 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 		} else {
 			existing.MaxChildKeys = *req.MaxChildKeys
 		}
-	}
-	if req.ResellerDiscount != nil && existing.IsReseller {
-		// 0 = 无折扣；(0,1) = 折扣进货倍率
-		d := *req.ResellerDiscount
-		if d < 0 || d >= 1 {
-			d = 0
-		}
-		existing.ResellerDiscount = d
 	}
 	if err := config.UpdateApiKey(id, *existing); err != nil {
 		w.WriteHeader(500)
@@ -1356,32 +1369,152 @@ func (h *Handler) apiUpdateStealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// GET /admin/api/profit
-func (h *Handler) apiGetProfit(w http.ResponseWriter, _ *http.Request) {
-	h.callLogsMu.RLock()
-	var totalPaidUSDConsumed float64 // Represents "Revenue" (from actual paid balance only)
-	var proCreditConsumed float64    // Used to calculate true underlying Cost
-	var freeCreditConsumed float64   // Used to calculate true underlying Cost
+// GET /admin/api/profit?period=this_month|last_month|7d|30d|all|custom&from=&to=&include_gift=true|false
+//
+// 真现金口径：
+//   revenue = 兑换流水里 type=code_redeem*（实际收款） + (可选) admin_gift（赠送总额）
+//   cost    = period 内新增的 CostEntry.CostCNY 之和
+//
+// 查询参数：
+//   period       — 时间窗口预设；custom 时配合 from/to。默认 this_month
+//   from / to    — unix seconds，仅 period=custom 时生效
+//   include_gift — true|false；不传时回退 Settings.ProfitIncludeGift
+func (h *Handler) apiGetProfit(w http.ResponseWriter, r *http.Request) {
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "this_month"
+	}
+	from, to := resolveProfitPeriod(period, r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 
-	for _, log := range h.callLogs {
-		pool := ResolveModelPool(log.ActualModel)
+	includeGiftQ := r.URL.Query().Get("include_gift")
+	includeGift := config.GetProfitIncludeGift() // 不传时回退持久化偏好
+	if includeGiftQ == "true" {
+		includeGift = true
+	} else if includeGiftQ == "false" {
+		includeGift = false
+	}
 
-		// Revenue = log.CostUSD（addCallLogWithKey 已经把它覆盖为 ActualPaidUSD，含模型倍率）。
-		// 旧版用 CreditsToCostUSD(log.PaidCredits, pool) 不带倍率，会少算 multiplier 部分（Bug #2）。
-		totalPaidUSDConsumed += log.CostUSD
+	balanceCNY, timeCardsCNY, giftCNY := aggregateRechargeRevenue(from, to)
 
-		// Calculates generic cost using ALL Credits (Cost is paid to upstream regardless)
-		if pool == "pro" {
-			proCreditConsumed += log.Credits
-		} else {
-			freeCreditConsumed += log.Credits
+	pricing := config.GetPricing()
+	var proCost, freeCost float64
+	for _, e := range pricing.ProCostEntries {
+		if entryInWindow(e.CreatedAt, from, to) {
+			proCost += e.CostCNY
 		}
 	}
-	h.callLogsMu.RUnlock()
+	for _, e := range pricing.FreeCostEntries {
+		if entryInWindow(e.CreatedAt, from, to) {
+			freeCost += e.CostCNY
+		}
+	}
 
-	// CalcAdminProfit uses (revenue, proCost, freeCost)
-	profit := CalcAdminProfit(totalPaidUSDConsumed, proCreditConsumed, freeCreditConsumed)
-	writeJSON(w, 200, profit)
+	revenueCNY := balanceCNY + timeCardsCNY
+	if includeGift {
+		revenueCNY += giftCNY
+	}
+	costCNY := proCost + freeCost
+	profitCNY := revenueCNY - costCNY
+	margin := 0.0
+	if revenueCNY > 0 {
+		margin = profitCNY / revenueCNY * 100
+	}
+
+	resp := map[string]interface{}{
+		"period":        period,
+		"from":          from,
+		"to":            to,
+		"include_gift":  includeGift,
+		"revenue_cny":   revenueCNY,
+		"revenue_breakdown": map[string]float64{
+			"balance_cards": balanceCNY,
+			"time_cards":    timeCardsCNY,
+			"gift":          map[bool]float64{true: giftCNY, false: 0}[includeGift],
+		},
+		"cost_cny": costCNY,
+		"cost_breakdown": map[string]float64{
+			"pro":  proCost,
+			"free": freeCost,
+		},
+		"profit_cny":     profitCNY,
+		"margin_percent": margin,
+	}
+	writeJSON(w, 200, resp)
+}
+
+// resolveProfitPeriod 把 period 字符串转成 [from, to] 秒时间戳（CST 边界）。
+// custom 模式读 fromStr/toStr。其它模式以 CST 自然月/日为界。
+func resolveProfitPeriod(period, fromStr, toStr string) (int64, int64) {
+	cst := time.FixedZone("CST", 8*3600)
+	now := time.Now().In(cst)
+	switch period {
+	case "all":
+		return 0, math.MaxInt32 // 足够远未来
+	case "custom":
+		from, _ := strconv.ParseInt(fromStr, 10, 64)
+		to, _ := strconv.ParseInt(toStr, 10, 64)
+		if to <= 0 {
+			to = math.MaxInt32
+		}
+		return from, to
+	case "7d":
+		return now.Add(-7 * 24 * time.Hour).Unix(), now.Unix()
+	case "30d":
+		return now.Add(-30 * 24 * time.Hour).Unix(), now.Unix()
+	case "last_month":
+		thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, cst)
+		lastMonthStart := thisMonthStart.AddDate(0, -1, 0)
+		return lastMonthStart.Unix(), thisMonthStart.Unix() - 1
+	case "this_month":
+		fallthrough
+	default:
+		thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, cst)
+		return thisMonthStart.Unix(), now.Unix()
+	}
+}
+
+// entryInWindow 判断 CostEntry 时间戳是否在 [from, to]。
+// 老 entry CreatedAt=0 时归到"all-time"桶 — 即视为永远在窗口内（避免历史数据丢失）。
+func entryInWindow(createdAt, from, to int64) bool {
+	if createdAt == 0 {
+		return true
+	}
+	return createdAt >= from && createdAt <= to
+}
+
+// aggregateRechargeRevenue 扫 recharge_records.jsonl，按 type 分桶累加 amountCNY。
+// 仅返回 [from, to] 内的记录。
+func aggregateRechargeRevenue(from, to int64) (balanceCNY, timeCardsCNY, giftCNY float64) {
+	rechargeFileMu.Lock()
+	defer rechargeFileMu.Unlock()
+
+	logPath := filepath.Join(config.GetDataDir(), "recharge_records.jsonl")
+	f, err := os.Open(logPath)
+	if err != nil {
+		return 0, 0, 0
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var rec RechargeRecord
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		if rec.Timestamp < from || rec.Timestamp > to {
+			continue
+		}
+		switch rec.Type {
+		case "code_redeem":
+			balanceCNY += rec.AmountCNY
+		case "code_redeem_days":
+			timeCardsCNY += rec.AmountCNY
+		case "admin_gift":
+			giftCNY += rec.AmountCNY
+		}
+	}
+	return
 }
 
 // POST /admin/api/cost-entry
@@ -1462,11 +1595,12 @@ func (h *Handler) apiCleanupCodes(w http.ResponseWriter, _ *http.Request) {
 // POST /admin/api/codes - batch create activation codes
 func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Type   string  `json:"type"`   // "balance" | "days"
-		Amount float64 `json:"amount"` // CNY (for balance) or seconds (for days/time)
-		Tier   string  `json:"tier"`   // "free" | "pro" (only for type=days)
-		Count  int     `json:"count"`  // how many codes to generate
-		Note   string  `json:"note"`
+		Type         string  `json:"type"`         // "balance" | "days" | "time"
+		Amount       float64 `json:"amount"`       // CNY (for balance) or days/seconds (for days/time)
+		Tier         string  `json:"tier"`         // "free" | "pro" (only for type=days/time)
+		Count        int     `json:"count"`        // how many codes to generate
+		Note         string  `json:"note"`
+		SalePriceCNY float64 `json:"salePriceCNY"` // 仅 days/time：admin 卖给客户的实际价格（¥），用于利润计算
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -1500,6 +1634,10 @@ func (h *Handler) apiCreateCodes(w http.ResponseWriter, r *http.Request) {
 		}
 		if (req.Type == "days" || req.Type == "time") && (req.Tier == "free" || req.Tier == "pro") {
 			ac.Tier = req.Tier
+		}
+		// 仅天卡需要"售价"字段；balance 类型 amount 本身就是 CNY 售价，不重复填
+		if (req.Type == "days" || req.Type == "time") && req.SalePriceCNY > 0 {
+			ac.SalePriceCNY = req.SalePriceCNY
 		}
 		if err := config.AddActivationCode(ac); err != nil {
 			w.WriteHeader(500)

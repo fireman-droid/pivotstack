@@ -75,6 +75,7 @@ const form = ref({
   tier: 'free',
   count: 1,
   note: '',
+  salePriceCNY: 0, // 仅 type=time 用：admin 卖给客户的实际价格（¥），用于利润统计
 })
 const balancePresets = [5, 10, 50, 100, 300]
 const timePresets = [
@@ -125,6 +126,8 @@ async function generateCodes() {
         tier: form.value.type === 'time' ? form.value.tier : undefined,
         count: form.value.count,
         note: form.value.note,
+        // 仅时间卡需要售价；balance 卡的 amount 本身就是 CNY 售价
+        salePriceCNY: form.value.type === 'time' ? Number(form.value.salePriceCNY) || 0 : 0,
       }),
     })
     if (res.ok) {
@@ -395,6 +398,15 @@ onMounted(loadCodes)
             <WorldInput v-model.number="form.customTime.hours" type="number" label="小时" />
             <WorldInput v-model.number="form.customTime.minutes" type="number" label="分钟" />
           </div>
+          <WorldInput
+            v-model.number="form.salePriceCNY"
+            type="number" step="0.01" min="0"
+            label="售价（¥） — 用户实际付的钱"
+            placeholder="例如 30"
+          />
+          <p class="hint-line">
+            填了售价才会计入「本月利润」。白送给 VIP 留 0；不同价位日卡分开生成。
+          </p>
         </div>
 
         <!-- Common fields -->

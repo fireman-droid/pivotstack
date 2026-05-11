@@ -4,12 +4,10 @@ let echarts = null
 import { api } from '../api/admin'
 import { formatNum } from '../utils/format'
 import { useWorldTheme } from '../stores/worldTheme'
-import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
+import { useRouter } from 'vue-router'
 import {
-  Users, Zap, Crown, CreditCard, Clock,
-  Copy, Terminal, Globe, AlertTriangle, Moon, RefreshCw,
-  DollarSign, BarChart3, TrendingUp, Activity
+  Users, Zap, Crown, Clock, Copy, Terminal, Globe, AlertTriangle, Plus
 } from 'lucide-vue-next'
 import { copyToClipboard } from '../utils/clipboard'
 import WorldCard from '../components/world/WorldCard.vue'
@@ -17,11 +15,10 @@ import WorldStat from '../components/world/WorldStat.vue'
 import WorldChip from '../components/world/WorldChip.vue'
 import WorldProgress from '../components/world/WorldProgress.vue'
 import WorldLoader from '../components/world/WorldLoader.vue'
-import WorldTable from '../components/world/WorldTable.vue'
-import WorldSegment from '../components/world/WorldSegment.vue'
 import WorldButton from '../components/world/WorldButton.vue'
 
 const { success } = useToast()
+const router = useRouter()
 const stats = ref({
   accounts: 0, totalRequests: 0, successRequests: 0, failedRequests: 0,
   totalTokens: 0, totalCredits: 0, uptime: 0,
@@ -30,21 +27,12 @@ const stats = ref({
 })
 const version = ref('')
 const loading = ref(true)
-const profit = ref(null)
-const auth = useAuthStore()
-
-async function fetchProfit() {
-  try {
-    const res = await fetch('/admin/api/profit', {
-      headers: { 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' },
-    })
-    if (res.ok) profit.value = await res.json()
-  } catch (e) { console.error('fetchProfit failed:', e) }
-}
 
 const theme = useWorldTheme()
 const chartRef = ref(null)
 let chart = null
+let resizeHandler = null
+let destroyed = false
 const requestHistory = ref([])
 const chartIncrements = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
@@ -59,22 +47,24 @@ async function loadEcharts() {
 }
 
 async function initChart() {
-  if (!chartRef.value) return
+  if (!chartRef.value || destroyed) return
   await loadEcharts()
+  if (destroyed || !chartRef.value) return
   chart = echarts.init(chartRef.value, theme.currentWorld === 'daogui' ? 'abyss' : null)
-  updateChart()
-  window.addEventListener('resize', () => chart?.resize())
+  initChartOption()
+  resizeHandler = () => chart?.resize()
+  window.addEventListener('resize', resizeHandler)
 }
 
 watch(() => theme.currentWorld, async (newVal) => {
   if (chart && echarts) {
     chart.dispose()
     chart = echarts.init(chartRef.value, newVal === 'daogui' ? 'abyss' : null)
-    updateChart()
+    initChartOption()
   }
 })
 
-function updateChart() {
+function initChartOption() {
   if (!chart) return
   const isDaogui = theme.currentWorld === 'daogui'
   const accentColor = isDaogui ? 'rgba(196, 30, 58, 1)' : 'rgba(2, 132, 199, 1)'
@@ -120,6 +110,11 @@ function updateChart() {
   })
 }
 
+function refreshChartData() {
+  if (!chart || destroyed) return
+  chart.setOption({ series: [{ data: chartIncrements.value }] }, { lazyUpdate: true })
+}
+
 async function loadStats() {
   try {
     const res = await api('/status')
@@ -140,7 +135,7 @@ function processStats(newStats) {
 
   stats.value = newStats
   loading.value = false
-  nextTick(() => { if (!chart) initChart(); else updateChart() })
+  nextTick(() => { if (!chart) initChart(); else refreshChartData() })
 }
 
 let sseSource = null
@@ -158,6 +153,7 @@ function connectStatsSSE() {
     loadStats()
     if (!pollTimer) pollTimer = setInterval(loadStats, 5000)
     setTimeout(() => {
+      if (destroyed) return
       if (!sseSource) {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
         connectStatsSSE()
@@ -173,41 +169,6 @@ async function loadVersion() {
   } catch {}
 }
 
-// === 沉睡用户 ===
-const inactiveDays = ref(30)
-const inactiveDayOptions = [
-  { value: 30, label: '30 天+' },
-  { value: 60, label: '60 天+' },
-  { value: 90, label: '90 天+' },
-]
-const inactiveData = ref({ count: 0, keys: [] })
-const inactiveLoading = ref(false)
-
-async function loadInactive() {
-  inactiveLoading.value = true
-  try {
-    const res = await api(`/inactive-keys?days=${inactiveDays.value}`)
-    if (res.ok) inactiveData.value = await res.json()
-  } catch {}
-  inactiveLoading.value = false
-}
-
-watch(inactiveDays, loadInactive)
-
-const inactiveColumns = [
-  { key: 'note',     label: '备注' },
-  { key: 'daysIdle', label: '闲置天数', align: 'right' },
-  { key: 'balance',  label: '余额',     align: 'right', mono: true },
-  { key: 'giftBalance', label: '赠金',  align: 'right', mono: true },
-  { key: 'requests', label: '总请求',   align: 'right', mono: true },
-  { key: 'lastUsed', label: '末次使用', align: 'left' },
-]
-
-function formatLastUsed(ts) {
-  if (!ts) return '从未使用'
-  return new Date(ts * 1000).toLocaleDateString('zh-CN')
-}
-
 function formatUptime(s) {
   if (!s) return '0s'
   const h = Math.floor(s / 3600)
@@ -220,22 +181,28 @@ function copy(text) {
   success('已复制到剪贴板')
 }
 
+// 跳转到 Insights 营收 tab 并自动开采购 modal
+function gotoPurchase() {
+  router.push({ path: '/insights', query: { tab: 'revenue', purchase: '1' } })
+}
+
 const base = location.origin
 
 onMounted(async () => {
   await loadVersion()
   connectStatsSSE()
-  loadInactive()
-  fetchProfit()
-  // 营收数据每 30s 刷一次（admin 看趋势）
-  setInterval(fetchProfit, 30000)
 })
 
 onUnmounted(() => {
+  destroyed = true
   if (sseSource) { sseSource.close(); sseSource = null }
   if (pollTimer) clearInterval(pollTimer)
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler)
+    resizeHandler = null
+  }
   chart?.dispose()
-  window.removeEventListener('resize', () => chart?.resize())
+  chart = null
 })
 
 const successRate = computed(() => {
@@ -261,36 +228,6 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
         <WorldChip variant="neutral" size="sm"><Clock :size="11" /> 运行 {{ formatUptime(stats.uptime) }}</WorldChip>
       </div>
     </header>
-
-    <!-- 营收概览 4 卡 -->
-    <div class="stats-row" v-if="profit">
-      <WorldStat
-        label="总收入" unit="CNY"
-        :value="`¥${(profit.revenue_cny || 0).toFixed(2)}`"
-        :hint="`面值 $${(profit.revenue_usd || 0).toFixed(2)}`"
-        :icon="DollarSign" variant="success"
-      />
-      <WorldStat
-        label="总成本" unit="CNY"
-        :value="`¥${(profit.total_cost_cny || 0).toFixed(2)}`"
-        :hint="`PRO ¥${(profit.pro_cost_cny || 0).toFixed(2)} · FREE ¥${(profit.free_cost_cny || 0).toFixed(2)}`"
-        :icon="BarChart3" variant="danger"
-      />
-      <WorldStat
-        label="净利润" unit="CNY"
-        :value="`¥${(profit.profit_cny || 0).toFixed(2)}`"
-        :hint="(profit.profit_cny || 0) >= 0 ? '盈利中' : '亏损中'"
-        :icon="TrendingUp"
-        :variant="(profit.profit_cny || 0) >= 0 ? 'success' : 'danger'"
-      />
-      <WorldStat
-        label="利润率" unit="%"
-        :value="(profit.margin_percent || 0).toFixed(1)"
-        :hint="(profit.margin_percent || 0) >= 30 ? '健康' : ((profit.margin_percent || 0) >= 0 ? '偏低' : '亏损')"
-        :icon="Activity"
-        :variant="(profit.margin_percent || 0) >= 30 ? 'info' : ((profit.margin_percent || 0) >= 0 ? 'warning' : 'danger')"
-      />
-    </div>
 
     <!-- 4 Stats -->
     <div class="stats-row">
@@ -328,7 +265,12 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
     <!-- Pool detail with progress -->
     <div class="pool-grid">
       <WorldCard padding="md">
-        <h3 class="section-title">FREE 池配额</h3>
+        <header class="pool-head">
+          <h3 class="section-title">FREE 池配额</h3>
+          <WorldButton variant="ghost" size="sm" @click="gotoPurchase">
+            <Plus :size="13" /><span>录采购</span>
+          </WorldButton>
+        </header>
         <WorldProgress
           v-if="stats.freePool?.trialLimit > 0"
           :value="stats.freePool.trialCurrent || 0"
@@ -356,7 +298,12 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
       </WorldCard>
 
       <WorldCard padding="md">
-        <h3 class="section-title">PRO 池配额</h3>
+        <header class="pool-head">
+          <h3 class="section-title">PRO 池配额</h3>
+          <WorldButton variant="ghost" size="sm" @click="gotoPurchase">
+            <Plus :size="13" /><span>录采购</span>
+          </WorldButton>
+        </header>
         <WorldProgress
           v-if="stats.proPool?.trialLimit > 0"
           :value="stats.proPool.trialCurrent || 0"
@@ -423,57 +370,6 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
         <WorldChip size="sm" variant="info" :dot="true">请求增量 / 5s</WorldChip>
       </header>
       <div ref="chartRef" class="chart-canvas" />
-    </WorldCard>
-
-    <!-- 沉睡用户 -->
-    <WorldCard padding="md">
-      <header class="section-head">
-        <h3>
-          <Moon :size="16" />
-          <span>沉睡用户</span>
-          <WorldChip v-if="inactiveData.count > 0" size="sm" variant="warning">{{ inactiveData.count }}</WorldChip>
-        </h3>
-        <div class="inactive-controls">
-          <WorldSegment v-model="inactiveDays" :options="inactiveDayOptions" size="sm" />
-          <WorldButton variant="secondary" size="sm" @click="loadInactive" :loading="inactiveLoading">
-            <RefreshCw :size="13" />
-          </WorldButton>
-        </div>
-      </header>
-      <p class="section-hint">
-        长期未使用的 API Key（含从未发起请求的）。可用于追踪潜在僵尸账户。
-      </p>
-      <WorldTable
-        :columns="inactiveColumns"
-        :rows="inactiveData.keys"
-        empty-text="暂无沉睡用户"
-        max-height="420px"
-      >
-        <template #cell-note="{ row }">
-          <span class="note-cell">
-            {{ row.note || '—' }}
-            <WorldChip v-if="row.neverUsed" size="sm" variant="neutral">从未使用</WorldChip>
-            <WorldChip v-else-if="!row.enabled" size="sm" variant="danger">已禁用</WorldChip>
-          </span>
-        </template>
-        <template #cell-daysIdle="{ row }">
-          <span :class="['days-cell', row.daysIdle >= 90 && 'is-grave', row.daysIdle >= 60 && 'is-warn']">
-            {{ row.daysIdle }} 天
-          </span>
-        </template>
-        <template #cell-balance="{ row }">
-          <span class="mono">${{ Number(row.balance || 0).toFixed(2) }}</span>
-        </template>
-        <template #cell-giftBalance="{ row }">
-          <span class="mono">${{ Number(row.giftBalance || 0).toFixed(2) }}</span>
-        </template>
-        <template #cell-requests="{ row }">
-          <span class="mono">{{ row.requests || 0 }}</span>
-        </template>
-        <template #cell-lastUsed="{ row }">
-          <span class="mono small">{{ formatLastUsed(row.lastUsed) }}</span>
-        </template>
-      </WorldTable>
     </WorldCard>
   </div>
 
@@ -542,13 +438,20 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
 }
 @media (max-width: 768px) { .pool-grid { grid-template-columns: 1fr; } }
 
+.pool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+}
 .section-title {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 0.875rem;
   font-weight: 800;
-  margin: 0 0 14px;
+  margin: 0;
   color: var(--world-text-primary);
   font-family: var(--world-font-display);
 }
@@ -642,29 +545,4 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
   align-items: center;
   justify-content: center;
 }
-
-/* 沉睡用户 */
-.inactive-controls { display: flex; gap: 8px; align-items: center; }
-.section-hint {
-  margin: -6px 0 12px;
-  font-size: 0.78rem;
-  color: var(--world-text-mute);
-}
-.note-cell {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-weight: 700;
-}
-.days-cell {
-  font-family: var(--world-font-mono);
-  font-weight: 800;
-  color: var(--world-text-primary);
-}
-.days-cell.is-warn  { color: var(--world-warning); }
-.days-cell.is-grave { color: var(--world-error); }
-.mono {
-  font-family: var(--world-font-mono);
-  font-weight: 700;
-  color: var(--world-text-primary);
-}
-.mono.small { font-size: 0.78rem; color: var(--world-text-mute); }
 </style>

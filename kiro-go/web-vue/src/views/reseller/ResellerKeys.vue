@@ -5,7 +5,7 @@ import { useToast } from '../../composables/useToast'
 import { copyToClipboard } from '../../utils/clipboard'
 import {
   Plus, KeyRound, Wallet, Pencil, Trash2, Copy, Eye, EyeOff,
-  Check, ChevronDown, X, Search,
+  Save, ChevronDown, X, Search,
 } from 'lucide-vue-next'
 import WorldCard from '../../components/world/WorldCard.vue'
 import WorldButton from '../../components/world/WorldButton.vue'
@@ -13,6 +13,7 @@ import WorldChip from '../../components/world/WorldChip.vue'
 import WorldInput from '../../components/world/WorldInput.vue'
 import WorldModal from '../../components/world/WorldModal.vue'
 import WorldLoader from '../../components/world/WorldLoader.vue'
+import WorldDatePicker from '../../components/world/WorldDatePicker.vue'
 
 const { success, error: toastErr } = useToast()
 
@@ -28,10 +29,12 @@ const showCreate = ref(false)
 const createForm = reactive({ note: '', initialCNY: 0 })
 const newCreatedKey = ref(null) // 创建后展示完整 key 一次
 
-// 转账 modal
-const showTransfer = ref(false)
-const transferTarget = ref(null)
-const transferForm = reactive({ amountCNY: 0 })
+// 编辑 inline 模式（仿 admin ApiKeys）
+const editingId = ref(null)
+const editForm = reactive({
+  note: '', balanceCNY: 0, expiresAt: 0, expiresAtDt: '',
+})
+const savingEdit = ref(false)
 
 // 删除确认 modal
 const showDelete = ref(false)
@@ -75,30 +78,57 @@ function closeCreate() {
   newCreatedKey.value = null
 }
 
-function openTransfer(k) {
-  transferTarget.value = k
-  transferForm.amountCNY = 0
-  showTransfer.value = true
+// === 编辑模式（仿 admin ApiKeys） ===
+// reseller 编辑子 key：备注 / 余额（绝对值，¥）/ 到期时间。
+// 余额变化由后端自动算 delta + 双向 transfer + 写流水。
+function startEdit(k) {
+  editingId.value = k.id
+  editForm.note = k.note || ''
+  editForm.balanceCNY = ((k.balance || 0) * CNY_PER_USD).toFixed(2)
+  editForm.expiresAt = k.expiresAt || 0
+  editForm.expiresAtDt = k.expiresAt
+    ? new Date(k.expiresAt * 1000).toISOString().slice(0, 16)
+    : ''
 }
 
-async function submitTransfer() {
+function cancelEdit() {
+  editingId.value = null
+}
+
+async function saveEdit(k) {
+  savingEdit.value = true
   try {
-    const amountUSD = (Number(transferForm.amountCNY) || 0) / CNY_PER_USD
-    if (amountUSD <= 0) {
-      toastErr('请输入大于 0 的金额')
-      return
+    const newBalanceUSD = (Number(editForm.balanceCNY) || 0) / CNY_PER_USD
+    if (newBalanceUSD < 0) { toastErr('余额不能为负'); savingEdit.value = false; return }
+    const newExpiresAt = editForm.expiresAtDt
+      ? Math.floor(new Date(editForm.expiresAtDt).getTime() / 1000)
+      : 0
+
+    const body = {
+      note: editForm.note,
+      balance: newBalanceUSD,
+      expiresAt: newExpiresAt,
     }
-    await userApi('/reseller/transfer', {
-      method: 'POST',
-      body: { toKeyId: transferTarget.value.id, amountUSD },
-    })
-    success(`已转账 ¥${Number(transferForm.amountCNY).toFixed(2)}`)
-    showTransfer.value = false
+    await userApi(`/reseller/keys/${k.id}`, { method: 'PATCH', body })
+    success('已保存')
+    editingId.value = null
     await load()
   } catch (e) {
-    toastErr('转账失败：' + e.message)
+    toastErr('保存失败：' + e.message)
   }
+  savingEdit.value = false
 }
+
+// 余额变化预览：用于编辑模式下提示 reseller "这次充入/扣回 多少"
+const editPreview = computed(() => {
+  if (!editingId.value) return null
+  const k = keys.value.find(x => x.id === editingId.value)
+  if (!k) return null
+  const oldCNY = (k.balance || 0) * CNY_PER_USD
+  const newCNY = Number(editForm.balanceCNY) || 0
+  const delta = newCNY - oldCNY
+  return { oldCNY, newCNY, delta }
+})
 
 async function toggleEnabled(k) {
   try {
@@ -248,19 +278,56 @@ onMounted(load)
 
         <Transition name="expand">
           <div v-if="expandedId === k.id" class="key-expanded">
-            <div class="info-grid">
+            <!-- ==================== 编辑模式（inline，仿 admin ApiKeys） ==================== -->
+            <div v-if="editingId === k.id" class="edit-grid">
+              <WorldInput v-model="editForm.note" label="备注" placeholder="user-001" />
+              <WorldInput
+                v-model.number="editForm.balanceCNY"
+                type="number" step="0.01"
+                label="付费余额（¥，可增可减）"
+                placeholder="0.00"
+              />
+              <div class="cfg-item">
+                <label class="cfg-label">到期时间</label>
+                <WorldDatePicker v-model="editForm.expiresAtDt" mode="datetime" size="md" placeholder="永不过期" />
+              </div>
+              <p v-if="editPreview && editPreview.delta !== 0" class="hint" :class="{ warm: editPreview.delta > 0, refund: editPreview.delta < 0 }">
+                <template v-if="editPreview.delta > 0">
+                  💰 将<strong>充入</strong> ¥{{ editPreview.delta.toFixed(2) }}（从你余额扣）
+                </template>
+                <template v-else>
+                  ↩️ 将<strong>扣回</strong> ¥{{ Math.abs(editPreview.delta).toFixed(2) }}（退回你余额）
+                </template>
+                <span class="dim">  ¥{{ editPreview.oldCNY.toFixed(2) }} → ¥{{ editPreview.newCNY.toFixed(2) }}</span>
+              </p>
+              <p v-if="editPreview && editPreview.delta > 0 && editPreview.delta > (summary?.totalBalance || 0) * CNY_PER_USD" class="warn-hint">
+                ⚠️ 充入金额超过你的可用余额（¥{{ ((summary?.totalBalance || 0) * CNY_PER_USD).toFixed(2) }}）
+              </p>
+              <div class="edit-actions">
+                <WorldButton variant="ghost" size="sm" @click="cancelEdit">
+                  <X :size="13" /><span>取消</span>
+                </WorldButton>
+                <WorldButton variant="primary" size="sm" :loading="savingEdit" @click="saveEdit(k)">
+                  <Save :size="13" /><span>保存</span>
+                </WorldButton>
+              </div>
+            </div>
+
+            <!-- ==================== 展示模式 ==================== -->
+            <div v-else class="info-grid">
               <div class="info-cell"><span class="info-label">Key ID</span><span class="info-val mono">{{ k.id }}</span></div>
               <div class="info-cell"><span class="info-label">创建时间</span><span class="info-val">{{ formatDate(k.createdAt) }}</span></div>
               <div class="info-cell"><span class="info-label">最后使用</span><span class="info-val">{{ k.lastUsed ? formatDate(k.lastUsed) : '从未使用' }}</span></div>
               <div class="info-cell"><span class="info-label">总请求</span><span class="info-val">{{ (k.requests || 0).toLocaleString() }}</span></div>
               <div class="info-cell"><span class="info-label">消耗 Credits</span><span class="info-val">{{ (k.credits || 0).toFixed(4) }}</span></div>
-              <div class="info-cell"><span class="info-label">付费余额</span><span class="info-val">${{ (k.balance || 0).toFixed(4) }}</span></div>
-              <div class="info-cell"><span class="info-label">赠送余额</span><span class="info-val">${{ (k.giftBalance || 0).toFixed(4) }}</span></div>
-              <div class="info-cell"><span class="info-label">累计充值</span><span class="info-val">${{ (k.totalRecharged || 0).toFixed(2) }}</span></div>
+              <div class="info-cell"><span class="info-label">付费余额</span><span class="info-val">¥{{ ((k.balance || 0) * CNY_PER_USD).toFixed(2) }} <span class="dim">(${{ (k.balance || 0).toFixed(2) }})</span></span></div>
+              <div class="info-cell"><span class="info-label">赠送余额</span><span class="info-val">¥{{ ((k.giftBalance || 0) * CNY_PER_USD).toFixed(2) }} <span class="dim">(${{ (k.giftBalance || 0).toFixed(2) }})</span></span></div>
+              <div class="info-cell"><span class="info-label">累计充值</span><span class="info-val">¥{{ ((k.totalRecharged || 0) * CNY_PER_USD).toFixed(2) }}</span></div>
+              <div class="info-cell"><span class="info-label">到期时间</span><span class="info-val">{{ k.expiresAt ? formatDate(k.expiresAt) : '永不过期' }}</span></div>
 
               <div class="actions-row">
-                <WorldButton variant="primary" size="sm" @click="openTransfer(k)">
-                  <Wallet :size="13" /><span>充值</span>
+                <WorldButton variant="primary" size="sm" @click="startEdit(k)">
+                  <Pencil :size="13" /><span>编辑</span>
                 </WorldButton>
                 <WorldButton variant="secondary" size="sm" @click="toggleEnabled(k)">
                   <span>{{ k.enabled ? '禁用' : '启用' }}</span>
@@ -319,29 +386,6 @@ onMounted(load)
         <template v-else>
           <WorldButton variant="primary" @click="closeCreate">完成</WorldButton>
         </template>
-      </template>
-    </WorldModal>
-
-    <!-- 转账 modal -->
-    <WorldModal v-model="showTransfer" title="给子 Key 充值" size="md">
-      <div class="create-body" v-if="transferTarget">
-        <p class="hint">
-          目标：<strong>{{ transferTarget.note || transferTarget.id.slice(0, 8) }}</strong>
-          （当前余额 ¥{{ ((transferTarget.totalBalance || 0) * 0.05).toFixed(2) }}）
-        </p>
-        <WorldInput
-          v-model.number="transferForm.amountCNY"
-          type="number"
-          label="充值金额（¥）"
-          placeholder="50"
-        />
-        <p v-if="(transferForm.amountCNY * 1) > (summary?.totalBalance || 0) * 0.05" class="warn-hint">
-          ⚠️ 超过你的余额（¥{{ ((summary?.totalBalance || 0) * 0.05).toFixed(2) }}）
-        </p>
-      </div>
-      <template #footer>
-        <WorldButton variant="ghost" @click="showTransfer = false">取消</WorldButton>
-        <WorldButton variant="primary" @click="submitTransfer">确认充值</WorldButton>
       </template>
     </WorldModal>
 
@@ -503,6 +547,42 @@ onMounted(load)
   justify-content: flex-end;
   padding-top: 8px;
   border-top: 1px solid var(--world-divider);
+}
+
+/* 编辑 inline 模式 */
+.edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.edit-grid > p,
+.edit-grid > .edit-actions { grid-column: 1 / -1; }
+.cfg-item { display: flex; flex-direction: column; gap: 6px; }
+.cfg-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
+  letter-spacing: 0.04em;
+}
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--world-divider);
+}
+.hint .dim {
+  color: var(--world-text-dim);
+  font-family: var(--world-font-mono);
+  font-size: 0.78rem;
+  margin-left: 8px;
+}
+.hint.warm { color: var(--world-warning); }
+.info-val .dim {
+  color: var(--world-text-dim);
+  font-family: var(--world-font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .create-body { display: flex; flex-direction: column; gap: 12px; }

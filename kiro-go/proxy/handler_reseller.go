@@ -61,21 +61,14 @@ func (h *Handler) apiResellerSummary(w http.ResponseWriter, parent *config.ApiKe
 		childTotalCredits += c.Credits
 		childTotalRequests += c.Requests
 	}
-	// 已实现利润 = SoldToChildren × (1 - discount)
-	// 即：每卖出 $1，进价是 $discount，利润是 $(1-discount)；只在转给子 key 后产生利润。
-	// 未卖出的余额仍是"库存"（按进价持有），不算亏损。
-	profit := parent.SoldToChildren
-	if parent.ResellerDiscount > 0 && parent.ResellerDiscount < 1 {
-		profit = parent.SoldToChildren * (1 - parent.ResellerDiscount)
-	}
+	// 不再计算系统层 profit —— 让利由 admin 出激活码时手算面值，
+	// reseller 卖给真实客户的现金流由 reseller 自己记账。
 	writeJSON(w, 200, map[string]interface{}{
 		"balance":            parent.Balance,
 		"giftBalance":        parent.GiftBalance,
 		"totalBalance":       parent.Balance + parent.GiftBalance,
 		"totalRecharged":     parent.TotalRecharged,
 		"soldToChildren":     parent.SoldToChildren,
-		"resellerDiscount":   parent.ResellerDiscount,
-		"profitEstimateUSD":  profit,
 		"maxChildKeys":       parent.MaxChildKeys,
 		"childCount":         len(children),
 		"childTotalBalance":  childTotalBalance,
@@ -183,7 +176,14 @@ func (h *Handler) apiCreateChildKey(w http.ResponseWriter, r *http.Request, pare
 
 // PATCH /user/api/reseller/keys/:id
 //
-// 更新子 key 的部分字段（启用/禁用、改 note）。仅这两个字段可改。
+// 全功能编辑（仿 admin Key 编辑）：enabled/note/balance/expiresAt 都可改。
+//
+// balance 改动：自动算 delta = newBalance - oldBalance，调 TransferBalance 双向转账（正负皆可）。
+//   - 增加余额：从 reseller.Balance 扣 delta 给子 key（reseller 余额不足则 400）
+//   - 减少余额：从子 key.Balance 扣回 |delta| 给 reseller
+// 每次成功的 balance 改动写一条 RechargeRecord（type=reseller_transfer 或 reseller_recall）。
+//
+// 不允许修改 GiftBalance（赠送余额是 admin 直接给的，不属于 reseller 资金链）。
 func (h *Handler) apiPatchChildKey(w http.ResponseWriter, r *http.Request, parent *config.ApiKeyInfo, childID string) {
 	child := config.FindApiKeyByID(childID)
 	if child == nil || child.ParentKeyID != parent.ID {
@@ -191,24 +191,75 @@ func (h *Handler) apiPatchChildKey(w http.ResponseWriter, r *http.Request, paren
 		return
 	}
 	var req struct {
-		Enabled *bool   `json:"enabled,omitempty"`
-		Note    *string `json:"note,omitempty"`
+		Enabled   *bool    `json:"enabled,omitempty"`
+		Note      *string  `json:"note,omitempty"`
+		Balance   *float64 `json:"balance,omitempty"`   // USD face，新值（绝对量）
+		ExpiresAt *int64   `json:"expiresAt,omitempty"` // unix seconds, 0 = 永不过期
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid body"})
 		return
 	}
-	updated := *child
-	if req.Enabled != nil {
-		updated.Enabled = *req.Enabled
+
+	// 1. 余额改动：先做（涉及 reseller 钱包，要原子性 + 校验）
+	if req.Balance != nil {
+		oldBalance := child.Balance
+		newBalance := *req.Balance
+		if newBalance < 0 {
+			writeJSON(w, 400, map[string]string{"error": "balance must be >= 0"})
+			return
+		}
+		delta := newBalance - oldBalance
+		if delta != 0 {
+			if err := config.TransferBalance(parent.ID, child.ID, delta); err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			// 写流水（让 reseller 看历史）
+			recType := "reseller_transfer"
+			if delta < 0 {
+				recType = "reseller_recall"
+			}
+			absUSD := delta
+			if absUSD < 0 {
+				absUSD = -absUSD
+			}
+			appendRechargeRecord(RechargeRecord{
+				Time:      time.Now().In(cstZone()).Format("01-02 15:04:05"),
+				Timestamp: time.Now().Unix(),
+				KeyID:     parent.ID,
+				KeyNote:   parent.Note,
+				Type:      recType,
+				AmountUSD: absUSD,
+				AmountCNY: absUSD * config.CNYPerUSDFace,
+				Operator:  "reseller:" + parent.ID[:8],
+				Note:      fmt.Sprintf("adjust child %s balance: $%.4f → $%.4f", child.Note, oldBalance, newBalance),
+			})
+			// 重新加载 child（TransferBalance 已经持久化）
+			if reloaded := config.FindApiKeyByID(child.ID); reloaded != nil {
+				*child = *reloaded
+			}
+		}
 	}
-	if req.Note != nil {
-		updated.Note = *req.Note
+
+	// 2. 其它字段（note / enabled / expiresAt）— 不涉及钱
+	if req.Enabled != nil || req.Note != nil || req.ExpiresAt != nil {
+		updated := *child
+		if req.Enabled != nil {
+			updated.Enabled = *req.Enabled
+		}
+		if req.Note != nil {
+			updated.Note = *req.Note
+		}
+		if req.ExpiresAt != nil {
+			updated.ExpiresAt = *req.ExpiresAt
+		}
+		if err := config.UpdateApiKey(child.ID, updated); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
 	}
-	if err := config.UpdateApiKey(child.ID, updated); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
+
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -252,7 +303,13 @@ func (h *Handler) apiDeleteChildKey(w http.ResponseWriter, _ *http.Request, pare
 
 // POST /user/api/reseller/transfer
 //
-// reseller→child 转账。校验 child 必须是当前 reseller 的子 key。
+// reseller↔child 双向转账。amountUSD 正负都接受：
+//   - amountUSD > 0: parent → child（充入）
+//   - amountUSD < 0: child → parent（扣回）
+//   - amountUSD = 0: 拒绝
+//
+// 大部分调整余额场景推荐走 PATCH /user/api/reseller/keys/:id（绝对量编辑），
+// 这个 transfer 接口保留作快捷增量入口。
 func (h *Handler) apiResellerTransfer(w http.ResponseWriter, r *http.Request, parent *config.ApiKeyInfo) {
 	var req struct {
 		ToKeyID   string  `json:"toKeyId"`
@@ -262,8 +319,8 @@ func (h *Handler) apiResellerTransfer(w http.ResponseWriter, r *http.Request, pa
 		writeJSON(w, 400, map[string]string{"error": "invalid body"})
 		return
 	}
-	if req.ToKeyID == "" || req.AmountUSD <= 0 {
-		writeJSON(w, 400, map[string]string{"error": "toKeyId and amountUSD required"})
+	if req.ToKeyID == "" || req.AmountUSD == 0 {
+		writeJSON(w, 400, map[string]string{"error": "toKeyId and non-zero amountUSD required"})
 		return
 	}
 	child := config.FindApiKeyByID(req.ToKeyID)
@@ -275,7 +332,26 @@ func (h *Handler) apiResellerTransfer(w http.ResponseWriter, r *http.Request, pa
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	appendRechargeRecord(buildResellerRechargeRecord(parent, child, req.AmountUSD, "transfer by reseller"))
+	// 写流水：正向=transfer，负向=recall
+	recType := "reseller_transfer"
+	note := "transfer by reseller"
+	absUSD := req.AmountUSD
+	if absUSD < 0 {
+		recType = "reseller_recall"
+		note = "recall by reseller"
+		absUSD = -absUSD
+	}
+	appendRechargeRecord(RechargeRecord{
+		Time:      time.Now().In(cstZone()).Format("01-02 15:04:05"),
+		Timestamp: time.Now().Unix(),
+		KeyID:     parent.ID,
+		KeyNote:   parent.Note,
+		Type:      recType,
+		AmountUSD: absUSD,
+		AmountCNY: absUSD * config.CNYPerUSDFace,
+		Operator:  "reseller:" + parent.ID[:8],
+		Note:      fmt.Sprintf("%s, child=%s", note, child.Note),
+	})
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 

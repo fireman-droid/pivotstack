@@ -25,8 +25,8 @@ const searchQuery = ref('')
 const editingId = ref(null)
 const editForm = reactive({
   note: '', balance: 0, giftBalance: 0, expiresAt: 0,
-  // 代理设置
-  isReseller: false, maxChildKeys: 0, resellerDiscountPercent: 100, parentKeyId: '',
+  // 代理设置（不再有 discount —— 让利由 admin 出激活码时手算面值）
+  isReseller: false, maxChildKeys: 0, parentKeyId: '',
 })
 const form = ref({ note: '' })
 
@@ -81,9 +81,6 @@ function startEdit(k) {
   // 代理设置
   editForm.isReseller = !!k.isReseller
   editForm.maxChildKeys = k.maxChildKeys || 0
-  // 后端存的是小数（0.5），UI 显示为百分比（50）；空 / 0 视作 100%（无折扣）
-  const d = Number(k.resellerDiscount || 0)
-  editForm.resellerDiscountPercent = d > 0 && d < 1 ? Math.round(d * 100) : 100
   editForm.parentKeyId = k.parentKeyId || ''
 }
 function cancelEdit() { editingId.value = null }
@@ -93,7 +90,6 @@ async function saveEdit(k) {
     // 子 key 不允许开代理；UI 已 disable 但后端再防一手
     const isChild = !!k.parentKeyId
     const isReseller = !isChild && editForm.isReseller
-    const pct = Math.max(1, Math.min(100, Number(editForm.resellerDiscountPercent) || 100))
     const body = {
       note: editForm.note,
       balance: Number(editForm.balance) / CNY_PER_USD,
@@ -101,7 +97,6 @@ async function saveEdit(k) {
       expiresAt: Number(editForm.expiresAt),
       isReseller: isReseller,
       maxChildKeys: Math.max(0, Number(editForm.maxChildKeys) || 0),
-      resellerDiscount: pct >= 100 ? 0 : pct / 100,  // 100% 存 0（视作无折扣）
     }
     const res = await api(`/apikeys/${k.id}`, { method: 'PUT', body: JSON.stringify(body) })
     if (res.ok) {
@@ -111,7 +106,6 @@ async function saveEdit(k) {
       k.expiresAt = body.expiresAt
       k.isReseller = body.isReseller
       k.maxChildKeys = body.maxChildKeys
-      k.resellerDiscount = body.resellerDiscount
       editingId.value = null
       success('已保存')
     }
@@ -288,9 +282,10 @@ onMounted(loadKeys)
                   </label>
                   <div v-if="editForm.isReseller" class="reseller-fields">
                     <WorldInput v-model.number="editForm.maxChildKeys" type="number" label="子 Key 上限（0=无限）" />
-                    <WorldInput v-model.number="editForm.resellerDiscountPercent" type="number" label="充值折扣率（%，100=无折扣）" />
                     <p class="reseller-hint">
-                      💡 折扣 50% 时 reseller 充 ¥100 = 余额 ¥200（用于赚差价）。100% = 跟普通用户一样无折扣。
+                      💡 让利由 admin 出激活码时手算面值。<br/>
+                      例：跟客户谈好 7 折，他付 ¥200 → 你直接出一张面值 <strong>¥285</strong> 的激活码给他。<br/>
+                      系统不再有自动折扣杠杆，每张卡都是 admin 决定的面值。
                     </p>
                   </div>
                 </details>
@@ -324,7 +319,7 @@ onMounted(loadKeys)
 
               <div v-if="k.isReseller" class="info-cell">
                 <span class="info-label">代理身份</span>
-                <span class="info-val">代理（折扣 {{ k.resellerDiscount > 0 && k.resellerDiscount < 1 ? Math.round(k.resellerDiscount * 100) : 100 }}% · 上限 {{ k.maxChildKeys || '∞' }}）</span>
+                <span class="info-val">代理（子 Key 上限 {{ k.maxChildKeys || '∞' }}）</span>
               </div>
               <div v-if="k.parentKeyId" class="info-cell">
                 <span class="info-label">所属代理</span>

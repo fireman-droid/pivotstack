@@ -172,13 +172,72 @@ func TestTransferBalance_InsufficientFunds(t *testing.T) {
 	}
 }
 
-func TestTransferBalance_NegativeAmount(t *testing.T) {
+// v3.3 起 TransferBalance 支持负数（child → parent 反向扣回），
+// 但要求 child 余额足够；零金额仍被拒。
+func TestTransferBalance_BoundaryAmounts(t *testing.T) {
+	parent, cleanP := makeReseller(t, 100, 0, 0)
+	defer cleanP()
+	child, cleanC := makeChild(t, parent.ID, 0) // child 余额 = 0
+	defer cleanC()
+
+	// case 1: amount = 0 被拒
+	if err := config.TransferBalance(parent.ID, child.ID, 0); err == nil {
+		t.Error("expected error for zero amount")
+	}
+
+	// case 2: 负数扣回但 child 余额 = 0 → 余额不足拒绝
+	if err := config.TransferBalance(parent.ID, child.ID, -5.0); err == nil {
+		t.Error("expected error for recall when child balance is 0")
+	}
+}
+
+// v3.3：双向转账完整 round trip：先充入再扣回。
+func TestTransferBalance_BidirectionalRoundTrip(t *testing.T) {
 	parent, cleanP := makeReseller(t, 100, 0, 0)
 	defer cleanP()
 	child, cleanC := makeChild(t, parent.ID, 0)
 	defer cleanC()
-	if err := config.TransferBalance(parent.ID, child.ID, -5.0); err == nil {
-		t.Error("expected error for negative amount")
+
+	// 1) parent → child: +30
+	if err := config.TransferBalance(parent.ID, child.ID, 30); err != nil {
+		t.Fatalf("transfer +30 failed: %v", err)
+	}
+	pAfter1 := config.FindApiKeyByID(parent.ID)
+	cAfter1 := config.FindApiKeyByID(child.ID)
+	if math.Abs(pAfter1.Balance-70) > 1e-4 || math.Abs(cAfter1.Balance-30) > 1e-4 {
+		t.Fatalf("after +30: parent=%.2f child=%.2f (want 70/30)", pAfter1.Balance, cAfter1.Balance)
+	}
+	if math.Abs(pAfter1.SoldToChildren-30) > 1e-4 {
+		t.Errorf("SoldToChildren after +30: got %.2f want 30", pAfter1.SoldToChildren)
+	}
+
+	// 2) child → parent: -10（扣回 10）
+	if err := config.TransferBalance(parent.ID, child.ID, -10); err != nil {
+		t.Fatalf("recall -10 failed: %v", err)
+	}
+	pAfter2 := config.FindApiKeyByID(parent.ID)
+	cAfter2 := config.FindApiKeyByID(child.ID)
+	if math.Abs(pAfter2.Balance-80) > 1e-4 || math.Abs(cAfter2.Balance-20) > 1e-4 {
+		t.Fatalf("after -10: parent=%.2f child=%.2f (want 80/20)", pAfter2.Balance, cAfter2.Balance)
+	}
+	// SoldToChildren 修正：30 - 10 = 20
+	if math.Abs(pAfter2.SoldToChildren-20) > 1e-4 {
+		t.Errorf("SoldToChildren after -10: got %.2f want 20 (修正历史)", pAfter2.SoldToChildren)
+	}
+
+	// 3) 全扣回：-20
+	if err := config.TransferBalance(parent.ID, child.ID, -20); err != nil {
+		t.Fatalf("full recall -20 failed: %v", err)
+	}
+	pAfter3 := config.FindApiKeyByID(parent.ID)
+	cAfter3 := config.FindApiKeyByID(child.ID)
+	if math.Abs(pAfter3.Balance-100) > 1e-4 || math.Abs(cAfter3.Balance) > 1e-4 {
+		t.Fatalf("after full recall: parent=%.2f child=%.2f (want 100/0)", pAfter3.Balance, cAfter3.Balance)
+	}
+
+	// 4) 试图扣回更多（child 余额为 0）→ 拒
+	if err := config.TransferBalance(parent.ID, child.ID, -1); err == nil {
+		t.Error("expected error when child balance insufficient for further recall")
 	}
 }
 
@@ -220,29 +279,33 @@ func TestRefundChildBalance_NormalFlow(t *testing.T) {
 	}
 }
 
-// ============== Reseller Discount on Activation Code ==============
+// ============== Reseller Activation Code（无杠杆，与普通用户一致）==============
+//
+// 历史背景：
+//   - v1/v2 设计有 ResellerDiscount 字段，兑换时按 1/discount 放大 balance（杠杆）。
+//   - v3 移除杠杆 —— 让利由 admin 出激活码时手算面值（如客户付 ¥200，admin 出 ¥285 卡）。
+//   - 系统层不再做任何自动折扣，reseller 与普通用户兑换激活码语义完全一致。
 
-func TestRedeemActivationCode_ResellerDiscount(t *testing.T) {
-	reseller, cleanR := makeReseller(t, 0, 0.5, 0) // 50% 折扣
+func TestRedeemActivationCode_ResellerNoLeverage(t *testing.T) {
+	// 即使 reseller 上仍有历史 ResellerDiscount=0.5 字段，也不再生效
+	reseller, cleanR := makeReseller(t, 0, 0.5, 0)
 	defer cleanR()
 
-	// 创建一个 ¥10 的激活码（10 / 0.05 = $200 face value 进账，但 reseller 有 50% 折扣 → $400）
 	code := "TEST-RESELLER-" + randomHex(t, 8)
 	if err := config.AddActivationCode(config.ActivationCode{
 		Code: code, Type: "balance", Amount: 10.0, CreatedAt: time.Now().Unix(),
 	}); err != nil {
 		t.Fatalf("AddActivationCode: %v", err)
 	}
-
 	if _, err := config.RedeemActivationCode(code, reseller.ID); err != nil {
 		t.Fatalf("RedeemActivationCode: %v", err)
 	}
 
 	rAfter := config.FindApiKeyByID(reseller.ID)
-	// 期望：amountUSD = 10/0.05 / 0.5 = 200 / 0.5 = 400
-	expected := 10.0 / config.CNYPerUSDFace / 0.5
+	// v3：reseller 无杠杆，跟普通用户一样 10¥ → $200 face value
+	expected := 10.0 / config.CNYPerUSDFace
 	if math.Abs(rAfter.Balance-expected) > 1e-4 {
-		t.Errorf("reseller.Balance: got %.4f, want %.4f (10¥ × 1/0.5 / 0.05)", rAfter.Balance, expected)
+		t.Errorf("reseller.Balance: got %.4f, want %.4f (v3 无杠杆，杠杆字段被忽略)", rAfter.Balance, expected)
 	}
 }
 

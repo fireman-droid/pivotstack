@@ -112,13 +112,16 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	req.Model = upstreamModel
 	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
 
+	var lastAccount string
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		account := h.pool.GetNextByTier(tier)
 		if account == nil {
 			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
+			h.addCallLogErrorWithKey("OpenAI", originalModel, upstreamModel, lastAccount, req.Stream, fmt.Sprintf("No available accounts in %s pool", tier), 0, uc)
 			h.sendOpenAIError(w, 503, "server_error", fmt.Sprintf("No available accounts in %s pool", tier))
 			return
 		}
+		lastAccount = account.Email
 
 		if err := h.ensureValidToken(account); err != nil {
 			h.pool.RecordError(account.ID, false)
@@ -164,6 +167,10 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	if lastErr != nil {
 		errMsg = lastErr.Error()
 	}
+	// retry-exhausted 路径必须写一条 error log，否则 jsonl/前端日志看不到这个失败请求。
+	// 之前 INVALID_MODEL_ID 风暴时所有 attempt 都被 inner-handler 视为 shouldRetry=true 直接 return true，
+	// 不会进入 line 521 的 addCallLogErrorWithKey 分支，导致漏写。
+	h.addCallLogErrorWithKey("OpenAI", originalModel, upstreamModel, lastAccount, req.Stream, "retry exhausted: "+errMsg, 0, uc)
 	h.sendOpenAIError(w, 503, "server_error", errMsg)
 }
 

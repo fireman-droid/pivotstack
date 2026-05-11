@@ -161,15 +161,18 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	req.Model = upstreamModel
 	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
 
+	var lastAccount string
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// 从对应号池获取账号
 		account := h.pool.GetNextByTier(tier)
 
 		if account == nil {
 			RefundPreAuth(keyID, preChargedPaid, preChargedGift) // refund on no account
+			h.addCallLogErrorWithKey("Claude", originalModel, upstreamModel, lastAccount, req.Stream, fmt.Sprintf("No available accounts in %s pool", tier), 0, uc)
 			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))
 			return
 		}
+		lastAccount = account.Email
 
 		// 检查并刷新 token
 		if err := h.ensureValidToken(account); err != nil {
@@ -231,6 +234,10 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	if lastErr != nil {
 		errMsg = lastErr.Error()
 	}
+	// retry-exhausted 路径必须写一条 error log，否则 jsonl/前端日志看不到这个失败请求。
+	// 之前 INVALID_MODEL_ID 风暴时所有 attempt 都被 inner-handler 视为 shouldRetry=true 直接 return true，
+	// 不会进入 line 642 的 addCallLogErrorWithKey 分支，导致漏写。
+	h.addCallLogErrorWithKey("Claude", originalModel, upstreamModel, lastAccount, req.Stream, "retry exhausted: "+errMsg, 0, uc)
 	h.sendClaudeError(w, 503, "api_error", errMsg)
 }
 

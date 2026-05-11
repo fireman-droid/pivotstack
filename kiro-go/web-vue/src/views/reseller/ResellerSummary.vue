@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { userApi } from '../../api/user'
-import { Wallet, Users, TrendingUp, ShoppingCart } from 'lucide-vue-next'
+import { Wallet, Users, ShoppingCart } from 'lucide-vue-next'
 import WorldCard from '../../components/world/WorldCard.vue'
 import WorldStat from '../../components/world/WorldStat.vue'
 import WorldTable from '../../components/world/WorldTable.vue'
@@ -29,23 +29,9 @@ onMounted(load)
 
 const balanceCNY = computed(() => ((summary.value?.totalBalance || 0) * 0.05))
 const soldCNY    = computed(() => ((summary.value?.soldToChildren || 0) * 0.05))
-const profitCNY  = computed(() => ((summary.value?.profitEstimateUSD || 0) * 0.05))
-
-// 利润率（相对售出额）。未售出时显示进货折扣对应的预期利润率。
-const marginPct = computed(() => {
-  const sold = summary.value?.soldToChildren || 0
-  const profit = summary.value?.profitEstimateUSD || 0
-  if (sold > 0) {
-    return Math.round((profit / sold) * 1000) / 10
-  }
-  // 未售出 → 预期利润率 = (1 - discount) × 100
-  const d = summary.value?.resellerDiscount || 0
-  if (d > 0 && d < 1) return Math.round((1 - d) * 1000) / 10
-  return 0
-})
+const rechargedCNY = computed(() => ((summary.value?.totalRecharged || 0) * 0.05))
 
 const balanceVariant = computed(() => (summary.value?.totalBalance || 0) < 1 ? 'danger' : 'success')
-const profitVariant  = computed(() => (summary.value?.profitEstimateUSD || 0) >= 0 ? 'success' : 'danger')
 
 // Top-5 子 key 按 7 天调用排序
 const topChildren = computed(() => {
@@ -60,22 +46,16 @@ const topChildren = computed(() => {
       recent7d: (k.recentCalls7d || 0).toLocaleString(),
     }))
 })
-
-const discountText = computed(() => {
-  const d = summary.value?.resellerDiscount || 0
-  if (d > 0 && d < 1) return `${Math.round(d * 100)}% 进货折扣`
-  return '无折扣'
-})
 </script>
 
 <template>
   <div v-if="!loading" class="summary-page">
-    <!-- 4 个核心指标 -->
+    <!-- 3 个核心指标（移除"估算利润"——利润由 admin 出激活码时手算让利，系统不再估算） -->
     <div class="stat-grid">
       <WorldStat
         label="我的余额"
         :value="`$${(summary?.totalBalance || 0).toFixed(2)}`"
-        :hint="`折合 ¥${balanceCNY.toFixed(2)} · ${discountText}`"
+        :hint="`折合 ¥${balanceCNY.toFixed(2)}`"
         :variant="balanceVariant"
         :icon="Wallet"
       />
@@ -87,18 +67,11 @@ const discountText = computed(() => {
         :icon="Users"
       />
       <WorldStat
-        label="累计已售"
+        label="累计已转出"
         :value="`$${(summary?.soldToChildren || 0).toFixed(2)}`"
-        :hint="`折合 ¥${soldCNY.toFixed(2)}`"
+        :hint="`折合 ¥${soldCNY.toFixed(2)} · 累计进货 ¥${rechargedCNY.toFixed(2)}`"
         variant="primary"
         :icon="ShoppingCart"
-      />
-      <WorldStat
-        label="估算利润"
-        :value="`$${(summary?.profitEstimateUSD || 0).toFixed(2)}`"
-        :hint="`折合 ¥${profitCNY.toFixed(2)} · 利润率 ${marginPct}%`"
-        :variant="profitVariant"
-        :icon="TrendingUp"
       />
     </div>
 
@@ -155,7 +128,7 @@ const discountText = computed(() => {
 .summary-page { display: flex; flex-direction: column; gap: 18px; }
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 @media (max-width: 920px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }

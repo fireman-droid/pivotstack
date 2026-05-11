@@ -1,10 +1,12 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api } from '../api/admin'
 import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import {
-  BarChart3, RefreshCw, Activity, TrendingUp, Users,
-  AlertTriangle, ShieldAlert, Eye, Clock, Calendar, Crown,
+  BarChart3, RefreshCw, TrendingUp, Users, Calendar, Crown,
+  ShieldAlert, Eye, DollarSign, Activity, Plus, Moon
 } from 'lucide-vue-next'
 import WorldCard from '../components/world/WorldCard.vue'
 import WorldStat from '../components/world/WorldStat.vue'
@@ -13,20 +15,124 @@ import WorldButton from '../components/world/WorldButton.vue'
 import WorldSegment from '../components/world/WorldSegment.vue'
 import WorldInput from '../components/world/WorldInput.vue'
 import WorldTable from '../components/world/WorldTable.vue'
+import WorldSelect from '../components/world/WorldSelect.vue'
+import WorldDatePicker from '../components/world/WorldDatePicker.vue'
+import WorldCheckbox from '../components/world/WorldCheckbox.vue'
+import WorldModal from '../components/world/WorldModal.vue'
 
 const auth = useAuthStore()
-const { error: toastErr } = useToast()
+const { success } = useToast()
+const route = useRoute()
+const router = useRouter()
 const headers = () => ({ 'X-Admin-Password': auth.password })
+const adminHeaders = () => ({ 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' })
 
-const tab = ref('overview')
+// === Tab：3 个新 tab + 旧 hash 兼容 ===
 const tabOptions = [
-  { value: 'overview',    label: '总览' },
-  { value: 'whales',      label: '大客户榜' },
-  { value: 'freeloaders', label: '白嫖党检测' },
-  { value: 'daily',       label: '每日报表' },
+  { value: 'revenue', label: '营收' },
+  { value: 'users',   label: '用户' },
+  { value: 'abuse',   label: '风控' },
 ]
+const legacyTabMap = {
+  overview:    'revenue',
+  whales:      'users',
+  freeloaders: 'abuse',
+  daily:       'revenue',
+}
+function resolveInitialTab() {
+  const q = String(route.query.tab || '').toLowerCase()
+  if (legacyTabMap[q]) return legacyTabMap[q]
+  if (['revenue', 'users', 'abuse'].includes(q)) return q
+  const h = (typeof window !== 'undefined' ? (window.location.hash || '') : '').replace('#', '')
+  if (legacyTabMap[h]) return legacyTabMap[h]
+  if (['revenue', 'users', 'abuse'].includes(h)) return h
+  return 'revenue'
+}
+const tab = ref(resolveInitialTab())
+watch(tab, (v) => {
+  router.replace({ query: { ...route.query, tab: v } }).catch(() => {})
+})
 
-// State
+// === 利润总览（搬自 Dashboard） ===
+const profit = ref(null)
+const profitPeriod = ref('this_month')
+const profitIncludeGift = ref(false)
+const profitPeriodOptions = [
+  { value: 'this_month', label: '本月' },
+  { value: 'last_month', label: '上月' },
+  { value: '7d',         label: '近 7 天' },
+  { value: '30d',        label: '近 30 天' },
+  { value: 'all',        label: '全部' },
+]
+const showPurchaseModal = ref(false)
+const purchasePoolOptions = [
+  { value: 'pro',  label: 'PRO' },
+  { value: 'free', label: 'FREE' },
+]
+const purchaseForm = ref({ pool: 'pro', count: 1, costCNY: 0, credits: 1500, note: '' })
+const savingPurchase = ref(false)
+
+async function fetchProfit() {
+  try {
+    const qs = new URLSearchParams({
+      period: profitPeriod.value,
+      include_gift: String(profitIncludeGift.value),
+    })
+    const res = await fetch('/admin/api/profit?' + qs.toString(), { headers: adminHeaders() })
+    if (res.ok) profit.value = await res.json()
+  } catch (e) { console.error('fetchProfit failed:', e) }
+}
+async function loadProfitIncludeGiftPref() {
+  try {
+    const res = await fetch('/admin/api/settings', { headers: adminHeaders() })
+    if (res.ok) {
+      const d = await res.json()
+      if (typeof d.profitIncludeGift === 'boolean') profitIncludeGift.value = d.profitIncludeGift
+    }
+  } catch {}
+}
+async function toggleIncludeGift(v) {
+  profitIncludeGift.value = v
+  try {
+    await fetch('/admin/api/profit-include-gift', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ value: v }),
+    })
+  } catch {}
+  fetchProfit()
+}
+async function submitPurchase() {
+  if (!purchaseForm.value.costCNY || purchaseForm.value.costCNY <= 0) return success('请填花费 (¥)')
+  if (!purchaseForm.value.count || purchaseForm.value.count < 1) return
+  savingPurchase.value = true
+  try {
+    const entry = { count: purchaseForm.value.count, costCNY: purchaseForm.value.costCNY, note: purchaseForm.value.note }
+    if (purchaseForm.value.pool === 'pro') entry.credits = purchaseForm.value.credits
+    const res = await fetch('/admin/api/cost-entry', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ pool: purchaseForm.value.pool, entry }),
+    })
+    if (res.ok) {
+      success('采购已入账')
+      showPurchaseModal.value = false
+      purchaseForm.value = { pool: 'pro', count: 1, costCNY: 0, credits: 1500, note: '' }
+      fetchProfit()
+    }
+  } catch (e) { console.error(e) }
+  savingPurchase.value = false
+}
+
+// === 按日明细（吞掉旧每日报表） ===
+const dailyDate = ref(new Date().toISOString().slice(0, 10))
+const dailyData = ref(null)
+const dailyExpanded = ref(false)
+async function fetchDaily() {
+  try {
+    const res = await fetch(`/admin/api/insights/daily?date=${dailyDate.value}`, { headers: headers() })
+    if (res.ok) dailyData.value = await res.json()
+  } catch (e) { console.error(e) }
+}
+
+// === 用户 tab ===
 const funnel = ref(null)
 const whales = ref([])
 const whaleMetric = ref('credits')
@@ -36,15 +142,6 @@ const whaleMetricOptions = [
   { value: 'recharge', label: '充值额 ¥' },
   { value: 'requests', label: '调用次数' },
 ]
-const freeloaders = ref([])
-const freeloaderSince = ref('')
-const freeloaderMinCalls = ref(5)
-const dailyData = ref(null)
-const dailyDate = ref(new Date().toISOString().slice(0, 10))
-
-const loading = ref(false)
-let refreshTimer = null
-
 async function fetchFunnel() {
   try {
     const res = await fetch('/admin/api/insights/funnel', { headers: headers() })
@@ -52,7 +149,6 @@ async function fetchFunnel() {
   } catch (e) { console.error(e) }
 }
 async function fetchWhales() {
-  loading.value = true
   try {
     const res = await fetch(`/admin/api/insights/whales?metric=${whaleMetric.value}&limit=20&days=${whaleDays.value}`, { headers: headers() })
     if (res.ok) {
@@ -60,10 +156,45 @@ async function fetchWhales() {
       whales.value = data.rows || []
     }
   } catch (e) { console.error(e) }
-  loading.value = false
 }
+
+// === 沉睡用户（搬自 Dashboard） ===
+const inactiveDays = ref(30)
+const inactiveDayOptions = [
+  { value: 30, label: '30 天+' },
+  { value: 60, label: '60 天+' },
+  { value: 90, label: '90 天+' },
+]
+const inactiveData = ref({ count: 0, keys: [] })
+const inactiveLoading = ref(false)
+async function loadInactive() {
+  inactiveLoading.value = true
+  try {
+    const res = await api(`/inactive-keys?days=${inactiveDays.value}`)
+    if (res.ok) inactiveData.value = await res.json()
+  } catch {}
+  inactiveLoading.value = false
+}
+watch(inactiveDays, loadInactive)
+
+const inactiveColumns = [
+  { key: 'note',     label: '备注' },
+  { key: 'daysIdle', label: '闲置天数', align: 'right' },
+  { key: 'balance',  label: '余额',     align: 'right', mono: true },
+  { key: 'giftBalance', label: '赠金',  align: 'right', mono: true },
+  { key: 'requests', label: '总请求',   align: 'right', mono: true },
+  { key: 'lastUsed', label: '末次使用', align: 'left' },
+]
+function formatLastUsed(ts) {
+  if (!ts) return '从未使用'
+  return new Date(ts * 1000).toLocaleDateString('zh-CN')
+}
+
+// === 风控（白嫖党） ===
+const freeloaders = ref([])
+const freeloaderSince = ref('')
+const freeloaderMinCalls = ref(5)
 async function fetchFreeloaders() {
-  loading.value = true
   try {
     let url = `/admin/api/insights/freeloaders?min_calls=${freeloaderMinCalls.value}`
     if (freeloaderSince.value) {
@@ -79,36 +210,40 @@ async function fetchFreeloaders() {
       }
     }
   } catch (e) { console.error(e) }
-  loading.value = false
-}
-async function fetchDaily() {
-  loading.value = true
-  try {
-    const res = await fetch(`/admin/api/insights/daily?date=${dailyDate.value}`, { headers: headers() })
-    if (res.ok) dailyData.value = await res.json()
-  } catch (e) { console.error(e) }
-  loading.value = false
 }
 
+// === 公共刷新 ===
+let refreshTimer = null
 function refreshActiveTab() {
-  fetchFunnel()
-  if (tab.value === 'whales')      fetchWhales()
-  if (tab.value === 'freeloaders') fetchFreeloaders()
-  if (tab.value === 'daily')       fetchDaily()
+  if (tab.value === 'revenue') {
+    fetchProfit(); fetchDaily()
+  } else if (tab.value === 'users') {
+    fetchFunnel(); fetchWhales(); loadInactive()
+  } else if (tab.value === 'abuse') {
+    fetchFreeloaders()
+  }
 }
 
-onMounted(() => {
-  fetchFunnel()
+onMounted(async () => {
+  // 处理 ?purchase=1 跳转自动开 modal（来自 Dashboard 的 ghost 入口）
+  if (route.query.purchase === '1' || route.query.purchase === 'true') {
+    showPurchaseModal.value = true
+    const next = { ...route.query }
+    delete next.purchase
+    router.replace({ query: next }).catch(() => {})
+  }
+  await loadProfitIncludeGiftPref()
+  fetchProfit()
   fetchDaily()
+  fetchFunnel()
   fetchWhales()
+  loadInactive()
   fetchFreeloaders()
-  refreshTimer = setInterval(fetchFunnel, 30000)
+  refreshTimer = setInterval(fetchProfit, 30000)
 })
 onUnmounted(() => clearInterval(refreshTimer))
 
-const cnyPerUSD = 0.05
-
-// 漏斗：横向条形，宽度 ∝ 当前值/注册总数
+// === Computed ===
 const funnelSteps = computed(() => {
   const f = funnel.value || {}
   const raw = [
@@ -127,18 +262,6 @@ const funnelSteps = computed(() => {
     const dropFromPrev = i === 0 ? null : (arr[i-1].val > 0 ? Math.round(((arr[i-1].val - s.val) / arr[i-1].val) * 100) : 0)
     return { ...s, widthPct, totalPct, dropFromPrev }
   })
-})
-
-const dailyHero = computed(() => {
-  const d = dailyData.value || {}
-  const costCNY = (d.costUSD || 0) * cnyPerUSD
-  const upstreamCNY = (d.upstreamCredits || 0) * 1.4 * cnyPerUSD
-  const profit = costCNY - upstreamCNY
-  return {
-    revenue: costCNY, profit, upstream: upstreamCNY,
-    calls: d.calls || 0, errors: d.errors || 0, uniqueKeys: d.uniqueKeys || 0,
-    credits: d.credits || 0, recharge: d.rechargeCNY || 0,
-  }
 })
 
 const whaleRows = computed(() => (whales.value || []).map((r, i) => ({
@@ -182,13 +305,32 @@ const fLeaderSummary = computed(() => {
   }
 })
 
-function fmtNum(n) { return Number(n || 0).toLocaleString() }
-function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
+const dailyCoreFields = computed(() => {
+  const d = dailyData.value || {}
+  return [
+    { label: '总调用',     val: (d.calls || 0).toLocaleString() },
+    { label: '独立 keys',  val: d.uniqueKeys || 0 },
+    { label: '收入 ¥',     val: '¥' + (d.costCNY || 0).toFixed(2),     accent: true },
+    { label: '当日充值',   val: '¥' + (d.rechargeCNY || 0).toFixed(2), warm: true },
+    { label: '错误数',     val: d.errors || 0,                          alert: (d.errors || 0) > 50 },
+    { label: '下游 credits', val: (d.credits || 0).toFixed(2) },
+  ]
+})
+const dailyDetailFields = computed(() => {
+  const d = dailyData.value || {}
+  return [
+    { label: '上游 credits',  val: (d.upstreamCredits || 0).toFixed(2) },
+    { label: '收入 USD face', val: '$' + (d.costUSD || 0).toFixed(2) },
+    { label: 'paid_credits',  val: (d.paidCredits || 0).toFixed(2) },
+    { label: 'gifted_credits', val: (d.giftedCredits || 0).toFixed(2) },
+    { label: '充值人数',      val: d.rechargersCount || 0 },
+    { label: '充值 USD face', val: '$' + (d.rechargeUSD || 0).toFixed(2) },
+  ]
+})
 </script>
 
 <template>
   <div class="insights-page">
-    <!-- ============ Header（与 Dashboard / Pricing 同款）============ -->
     <header class="page-head">
       <div class="title-wrap">
         <div class="eyebrow">运营数据</div>
@@ -196,59 +338,83 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
       </div>
       <div class="status-row">
         <WorldChip variant="success" :dot="true" :pulse="true">实时</WorldChip>
-        <WorldButton variant="ghost" size="sm" @click="refreshActiveTab" :disabled="loading">
-          <RefreshCw :size="13" :class="{ spin: loading }" />
+        <WorldButton variant="ghost" size="sm" @click="refreshActiveTab">
+          <RefreshCw :size="13" />
           <span>刷新</span>
         </WorldButton>
       </div>
     </header>
 
-    <!-- Tab -->
     <WorldSegment v-model="tab" :options="tabOptions" />
 
-    <!-- ============ 总览 ============ -->
-    <template v-if="tab === 'overview'">
-      <!-- 今日核心：左大数 + 右辅数（hero pattern）-->
-      <WorldCard padding="lg" class="hero-card">
-        <div class="hero-grid">
-          <div class="hero-main">
-            <div class="hero-label">
-              <TrendingUp :size="14" />
-              <span>今日营收</span>
+    <!-- ============ 营收 tab ============ -->
+    <template v-if="tab === 'revenue'">
+      <WorldCard padding="md" v-if="profit">
+        <header class="profit-head">
+          <div class="profit-title-row">
+            <div class="section-title-wrap">
+              <DollarSign :size="16" />
+              <h3 class="section-title">利润总览</h3>
             </div>
-            <div class="hero-num">{{ fmtCny(dailyHero.revenue) }}</div>
-            <div class="hero-foot">
-              <span>总调用 <strong>{{ fmtNum(dailyHero.calls) }}</strong></span>
-              <span class="dot">·</span>
-              <span>独立用户 <strong>{{ dailyHero.uniqueKeys }}</strong></span>
-              <span class="dot">·</span>
-              <span :class="{ alert: dailyHero.errors > 50 }">错误 <strong>{{ dailyHero.errors }}</strong></span>
-            </div>
+            <WorldSegment v-model="profitPeriod" :options="profitPeriodOptions" size="sm" @update:modelValue="fetchProfit" />
           </div>
-          <div class="hero-side">
-            <div class="side-row">
-              <span class="side-label">净利润</span>
-              <span class="side-val" :class="dailyHero.profit >= 0 ? 'positive' : 'negative'">
-                {{ fmtCny(dailyHero.profit) }}
-              </span>
-            </div>
-            <div class="side-row">
-              <span class="side-label">上游成本</span>
-              <span class="side-val negative">{{ fmtCny(dailyHero.upstream) }}</span>
-            </div>
-            <div class="side-row">
-              <span class="side-label">总 credits</span>
-              <span class="side-val">{{ dailyHero.credits.toFixed(2) }}</span>
-            </div>
-            <div class="side-row">
-              <span class="side-label">当日充值</span>
-              <span class="side-val warm">{{ fmtCny(dailyHero.recharge) }}</span>
-            </div>
+          <div class="profit-controls">
+            <WorldCheckbox :modelValue="profitIncludeGift" @update:modelValue="toggleIncludeGift" label="计入赠送余额" />
+            <WorldButton variant="primary" size="sm" @click="showPurchaseModal = true">
+              <Plus :size="13" /><span>采购入账</span>
+            </WorldButton>
           </div>
+        </header>
+        <div class="stats-row">
+          <WorldStat label="收入" unit="CNY"
+            :value="`¥${(profit.revenue_cny || 0).toFixed(2)}`"
+            :hint="`余额卡 ¥${((profit.revenue_breakdown && profit.revenue_breakdown.balance_cards) || 0).toFixed(2)} · 天卡 ¥${((profit.revenue_breakdown && profit.revenue_breakdown.time_cards) || 0).toFixed(2)}${profitIncludeGift ? ` · 赠送 ¥${((profit.revenue_breakdown && profit.revenue_breakdown.gift) || 0).toFixed(2)}` : ''}`"
+            :icon="DollarSign" variant="success" />
+          <WorldStat label="成本" unit="CNY"
+            :value="`¥${(profit.cost_cny || 0).toFixed(2)}`"
+            :hint="`PRO ¥${((profit.cost_breakdown && profit.cost_breakdown.pro) || 0).toFixed(2)} · FREE ¥${((profit.cost_breakdown && profit.cost_breakdown.free) || 0).toFixed(2)}`"
+            :icon="BarChart3" variant="danger" />
+          <WorldStat label="净利润" unit="CNY"
+            :value="`¥${(profit.profit_cny || 0).toFixed(2)}`"
+            :hint="(profit.profit_cny || 0) >= 0 ? '盈利中' : '亏损中'"
+            :icon="TrendingUp"
+            :variant="(profit.profit_cny || 0) >= 0 ? 'success' : 'danger'" />
+          <WorldStat label="利润率" unit="%"
+            :value="(profit.revenue_cny || 0) > 0 ? (profit.margin_percent || 0).toFixed(1) : '—'"
+            :hint="(profit.revenue_cny || 0) > 0 ? ((profit.margin_percent || 0) >= 30 ? '健康' : ((profit.margin_percent || 0) >= 0 ? '偏低' : '亏损')) : '本期暂无收入'"
+            :icon="Activity"
+            :variant="(profit.revenue_cny || 0) > 0 ? ((profit.margin_percent || 0) >= 30 ? 'info' : ((profit.margin_percent || 0) >= 0 ? 'warning' : 'danger')) : 'default'" />
         </div>
       </WorldCard>
 
-      <!-- 活跃度漏斗：横向条形递减 -->
+      <WorldCard padding="md">
+        <header class="section-head">
+          <div class="section-title-wrap">
+            <Calendar :size="16" />
+            <h3 class="section-title">按日明细</h3>
+          </div>
+          <WorldDatePicker v-model="dailyDate" mode="date" size="sm" :clearable="false" @change="fetchDaily" />
+        </header>
+        <div class="detail-grid">
+          <div v-for="f in dailyCoreFields" :key="f.label" class="dl-item">
+            <span class="dl-label">{{ f.label }}</span>
+            <span class="dl-val" :class="{ accent: f.accent, warm: f.warm, alert: f.alert }">{{ f.val }}</span>
+          </div>
+        </div>
+        <div v-if="dailyExpanded" class="detail-grid extra-grid">
+          <div v-for="f in dailyDetailFields" :key="f.label" class="dl-item">
+            <span class="dl-label">{{ f.label }}</span>
+            <span class="dl-val">{{ f.val }}</span>
+          </div>
+        </div>
+        <button class="expand-btn" @click="dailyExpanded = !dailyExpanded" type="button">
+          {{ dailyExpanded ? '收起完整字段' : `展开完整字段（${dailyDetailFields.length} 项）` }}
+        </button>
+      </WorldCard>
+    </template>
+
+    <!-- ============ 用户 tab ============ -->
+    <template v-if="tab === 'users'">
       <WorldCard padding="md">
         <header class="section-head">
           <div class="section-title-wrap">
@@ -279,10 +445,7 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
           </div>
         </div>
       </WorldCard>
-    </template>
 
-    <!-- ============ 大客户榜 ============ -->
-    <template v-if="tab === 'whales'">
       <WorldCard padding="md">
         <header class="section-head">
           <div class="section-title-wrap">
@@ -307,10 +470,58 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
           empty-text="暂无数据"
         />
       </WorldCard>
+
+      <WorldCard padding="md">
+        <header class="section-head">
+          <div class="section-title-wrap">
+            <Moon :size="16" />
+            <h3 class="section-title">沉睡用户</h3>
+            <WorldChip v-if="inactiveData.count > 0" size="sm" variant="warning">{{ inactiveData.count }}</WorldChip>
+          </div>
+          <div class="filter-row">
+            <WorldSegment v-model="inactiveDays" :options="inactiveDayOptions" size="sm" />
+            <WorldButton variant="ghost" size="sm" @click="loadInactive">
+              <RefreshCw :size="13" :class="{ spin: inactiveLoading }" />
+            </WorldButton>
+          </div>
+        </header>
+        <p class="section-hint">长期未使用的 API Key（含从未发起请求的）。可用于追踪潜在僵尸账户。</p>
+        <WorldTable
+          :columns="inactiveColumns"
+          :rows="inactiveData.keys"
+          empty-text="暂无沉睡用户"
+          max-height="420px"
+        >
+          <template #cell-note="{ row }">
+            <span class="note-cell">
+              {{ row.note || '—' }}
+              <WorldChip v-if="row.neverUsed" size="sm" variant="neutral">从未使用</WorldChip>
+              <WorldChip v-else-if="!row.enabled" size="sm" variant="danger">已禁用</WorldChip>
+            </span>
+          </template>
+          <template #cell-daysIdle="{ row }">
+            <span :class="['days-cell', row.daysIdle >= 90 && 'is-grave', row.daysIdle >= 60 && 'is-warn']">
+              {{ row.daysIdle }} 天
+            </span>
+          </template>
+          <template #cell-balance="{ row }">
+            <span class="mono">${{ Number(row.balance || 0).toFixed(2) }}</span>
+          </template>
+          <template #cell-giftBalance="{ row }">
+            <span class="mono">${{ Number(row.giftBalance || 0).toFixed(2) }}</span>
+          </template>
+          <template #cell-requests="{ row }">
+            <span class="mono">{{ row.requests || 0 }}</span>
+          </template>
+          <template #cell-lastUsed="{ row }">
+            <span class="mono small">{{ formatLastUsed(row.lastUsed) }}</span>
+          </template>
+        </WorldTable>
+      </WorldCard>
     </template>
 
-    <!-- ============ 白嫖党检测 ============ -->
-    <template v-if="tab === 'freeloaders'">
+    <!-- ============ 风控 tab ============ -->
+    <template v-if="tab === 'abuse'">
       <WorldCard padding="md">
         <header class="section-head">
           <div class="section-title-wrap">
@@ -322,13 +533,13 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
         <div class="scanner">
           <div class="scan-field">
             <label>活动起点</label>
-            <input type="datetime-local" v-model="freeloaderSince" />
+            <WorldDatePicker v-model="freeloaderSince" mode="datetime" size="sm" placeholder="选起始时刻" />
           </div>
           <div class="scan-field">
             <label>最少活动期调用</label>
-            <input type="number" v-model.number="freeloaderMinCalls" min="1"/>
+            <WorldInput v-model.number="freeloaderMinCalls" type="number" size="sm" />
           </div>
-          <WorldButton variant="primary" size="md" :loading="loading" @click="fetchFreeloaders">
+          <WorldButton variant="primary" size="md" @click="fetchFreeloaders">
             <Eye :size="14" /><span>开始扫描</span>
           </WorldButton>
         </div>
@@ -341,7 +552,7 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
             <h3 class="section-title">嫌疑分布</h3>
           </div>
         </header>
-        <div class="stats-row">
+        <div class="abuse-stats-row">
           <WorldStat label="🔴 极纯白嫖" :value="fLeaderSummary.r1" variant="danger" />
           <WorldStat label="🟡 白嫖嫌疑" :value="fLeaderSummary.r2" variant="warning" />
           <WorldStat label="🟠 突击"   :value="fLeaderSummary.r3" variant="info" />
@@ -375,71 +586,31 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
       </WorldCard>
     </template>
 
-    <!-- ============ 每日报表 ============ -->
-    <template v-if="tab === 'daily'">
-      <WorldCard padding="md">
-        <header class="section-head">
-          <div class="section-title-wrap">
-            <Calendar :size="16" />
-            <h3 class="section-title">每日报表</h3>
+    <!-- 采购入账 modal（搬自 Dashboard） -->
+    <WorldModal v-model="showPurchaseModal" title="采购入账">
+      <div class="purchase-form">
+        <p class="hint-line">
+          这里登记你<strong>买号花了多少钱</strong>。会在选定时间区间内被计入"成本"，参与利润计算。
+        </p>
+        <div class="dual">
+          <div class="lab">
+            <label class="lab-text">账号类型</label>
+            <WorldSelect v-model="purchaseForm.pool" :options="purchasePoolOptions" size="md" />
           </div>
-          <input type="date" v-model="dailyDate" @change="fetchDaily" class="date-picker" />
-        </header>
-        <div class="hero-grid">
-          <div class="hero-main">
-            <div class="hero-label">
-              <TrendingUp :size="14" />
-              <span>当日营收 · {{ dailyDate }}</span>
-            </div>
-            <div class="hero-num">{{ fmtCny(dailyHero.revenue) }}</div>
-            <div class="hero-foot">
-              <span>总调用 <strong>{{ fmtNum(dailyHero.calls) }}</strong></span>
-              <span class="dot">·</span>
-              <span>独立用户 <strong>{{ dailyHero.uniqueKeys }}</strong></span>
-            </div>
-          </div>
-          <div class="hero-side">
-            <div class="side-row">
-              <span class="side-label">净利润</span>
-              <span class="side-val" :class="dailyHero.profit >= 0 ? 'positive' : 'negative'">
-                {{ fmtCny(dailyHero.profit) }}
-              </span>
-            </div>
-            <div class="side-row">
-              <span class="side-label">上游成本</span>
-              <span class="side-val negative">{{ fmtCny(dailyHero.upstream) }}</span>
-            </div>
-            <div class="side-row">
-              <span class="side-label">充值</span>
-              <span class="side-val warm">{{ fmtCny(dailyHero.recharge) }}</span>
-            </div>
-          </div>
+          <WorldInput v-model.number="purchaseForm.count" type="number" label="数量（个）" />
         </div>
-      </WorldCard>
-
-      <WorldCard padding="md" v-if="dailyData">
-        <header class="section-head">
-          <div class="section-title-wrap">
-            <BarChart3 :size="16" />
-            <h3 class="section-title">详细数据</h3>
-          </div>
-        </header>
-        <div class="detail-grid">
-          <div class="dl-item"><span class="dl-label">总调用</span><span class="dl-val">{{ dailyData.calls }}</span></div>
-          <div class="dl-item"><span class="dl-label">错误数</span><span class="dl-val">{{ dailyData.errors }}</span></div>
-          <div class="dl-item"><span class="dl-label">独立 keys</span><span class="dl-val">{{ dailyData.uniqueKeys }}</span></div>
-          <div class="dl-item"><span class="dl-label">下游 credits</span><span class="dl-val">{{ (dailyData.credits || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">上游 credits</span><span class="dl-val">{{ (dailyData.upstreamCredits || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">收入 USD face</span><span class="dl-val">${{ (dailyData.costUSD || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">收入 ¥</span><span class="dl-val accent">¥{{ (dailyData.costCNY || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">paid_credits</span><span class="dl-val">{{ (dailyData.paidCredits || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">gifted_credits</span><span class="dl-val">{{ (dailyData.giftedCredits || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">充值人数</span><span class="dl-val">{{ dailyData.rechargersCount }}</span></div>
-          <div class="dl-item"><span class="dl-label">充值额 ¥</span><span class="dl-val warm">¥{{ (dailyData.rechargeCNY || 0).toFixed(2) }}</span></div>
-          <div class="dl-item"><span class="dl-label">充值 USD face</span><span class="dl-val">${{ (dailyData.rechargeUSD || 0).toFixed(2) }}</span></div>
+        <div class="dual">
+          <WorldInput v-model.number="purchaseForm.costCNY" type="number" step="0.01" label="花费 (¥)" placeholder="比如 60" />
+          <WorldInput v-if="purchaseForm.pool === 'pro'" v-model.number="purchaseForm.credits" type="number" label="每号额度 (cr)" />
+          <WorldInput v-else :modelValue="550" disabled label="每号额度" />
         </div>
-      </WorldCard>
-    </template>
+        <WorldInput v-model="purchaseForm.note" label="备注（可选）" placeholder="批次说明" />
+      </div>
+      <template #footer>
+        <WorldButton variant="ghost" @click="showPurchaseModal = false">取消</WorldButton>
+        <WorldButton variant="primary" :loading="savingPurchase" @click="submitPurchase">入账</WorldButton>
+      </template>
+    </WorldModal>
   </div>
 </template>
 
@@ -450,7 +621,7 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
   gap: 18px;
 }
 
-/* === Header（跟 Dashboard 同款）==================== */
+/* === Header（与 Dashboard 同款）==================== */
 .page-head {
   display: flex;
   align-items: flex-end;
@@ -488,7 +659,12 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
-.section-title-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--world-text-primary); }
+.section-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--world-text-primary);
+}
 .section-title {
   margin: 0;
   font-size: 1rem;
@@ -499,106 +675,45 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
 .section-hint { font-size: 0.78rem; color: var(--world-text-mute); }
 .filter-row { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-/* === Hero (今日核心) =============================== */
-.hero-card { position: relative; overflow: hidden; }
-.hero-card::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 3px;
-  background: linear-gradient(180deg, var(--world-accent), var(--world-accent-soft, var(--world-accent)));
-}
-.hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  gap: 0;
-}
-@media (max-width: 880px) { .hero-grid { grid-template-columns: 1fr; } }
-.hero-main {
-  padding-right: 28px;
-  border-right: 1px dashed var(--world-divider);
+/* === 利润总览 head ================================== */
+.profit-head {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 14px;
 }
-@media (max-width: 880px) {
-  .hero-main { border-right: none; border-bottom: 1px dashed var(--world-divider); padding-right: 0; padding-bottom: 18px; }
-}
-.hero-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
-.hero-num {
-  font-family: var(--world-font-mono, ui-monospace, monospace);
-  font-size: 3.2rem;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.03em;
-  color: var(--world-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.hero-foot {
+.profit-title-row {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  font-size: 0.85rem;
-  color: var(--world-text-mute);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
 }
-.hero-foot strong {
-  font-weight: 800;
-  color: var(--world-text-primary);
-  margin-left: 2px;
-  font-variant-numeric: tabular-nums;
-}
-.hero-foot .alert strong { color: var(--world-error); }
-.hero-foot .dot { color: var(--world-text-dim); }
-
-.hero-side {
-  padding-left: 28px;
+.profit-controls {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 12px;
-}
-@media (max-width: 880px) { .hero-side { padding-left: 0; padding-top: 18px; } }
-.side-row {
-  display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  padding-bottom: 10px;
-  border-bottom: 1px dashed var(--world-divider);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* === Stats row =================================== */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
-.side-row:last-child { border-bottom: none; padding-bottom: 0; }
-.side-label {
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
-}
-.side-val {
-  font-family: var(--world-font-mono, ui-monospace, monospace);
-  font-size: 1.05rem;
-  font-weight: 800;
-  color: var(--world-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.side-val.positive { color: var(--world-success); }
-.side-val.negative { color: var(--world-error); }
-.side-val.warm     { color: var(--world-warning); }
+@media (max-width: 920px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .stats-row { grid-template-columns: 1fr; } }
 
-/* === Funnel (横向条形漏斗) ========================= */
-.funnel {
-  display: flex;
-  flex-direction: column;
-  margin: -4px 0;
+.abuse-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
 }
+
+/* === Funnel ====================================== */
+.funnel { display: flex; flex-direction: column; margin: -4px 0; }
 .f-row {
   display: grid;
   grid-template-columns: 130px 1fr 100px;
@@ -615,11 +730,7 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
   font-weight: 700;
   color: var(--world-text-dim);
 }
-.f-cn {
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: var(--world-text-primary);
-}
+.f-cn { font-size: 0.9rem; font-weight: 700; color: var(--world-text-primary); }
 .live-dot {
   width: 8px; height: 8px;
   background: var(--world-accent);
@@ -668,13 +779,6 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
 .f-drop { font-size: 0.75rem; font-weight: 600; color: var(--world-text-dim); }
 .f-drop.heavy { color: var(--world-error); font-weight: 800; }
 
-/* === Stats row（白嫖党嫌疑分布）==================== */
-.stats-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-}
-
 /* === Scanner ====================================== */
 .scanner {
   display: grid;
@@ -684,23 +788,11 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
 }
 @media (max-width: 768px) { .scanner { grid-template-columns: 1fr; } }
 .scan-field { display: flex; flex-direction: column; gap: 6px; }
-.scan-field label {
+.scan-field > label {
   font-size: 0.75rem;
   font-weight: 700;
   color: var(--world-text-mute);
 }
-.scan-field input,
-.date-picker {
-  background: var(--world-overlay-light);
-  border: 1px solid var(--world-divider);
-  border-radius: var(--world-radius-sm);
-  color: var(--world-text-primary);
-  padding: 8px 12px;
-  font-size: 0.85rem;
-  font-family: var(--world-font-mono, ui-monospace, monospace);
-}
-.scan-field input:focus,
-.date-picker:focus { outline: none; border-color: var(--world-accent); }
 
 /* === Detail grid =================================== */
 .detail-grid {
@@ -708,6 +800,7 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
+.extra-grid { margin-top: 10px; }
 .dl-item {
   display: flex;
   flex-direction: column;
@@ -726,10 +819,69 @@ function fmtCny(n) { return '¥' + Number(n || 0).toFixed(2) }
 }
 .dl-val.accent { color: var(--world-accent); }
 .dl-val.warm   { color: var(--world-warning); }
+.dl-val.alert  { color: var(--world-error); }
+
+.expand-btn {
+  margin-top: 12px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--world-text-mute);
+  background: transparent;
+  border: 1px dashed var(--world-divider);
+  border-radius: var(--world-radius-sm);
+  cursor: pointer;
+  transition: all 200ms;
+}
+.expand-btn:hover {
+  color: var(--world-accent);
+  border-color: var(--world-accent);
+}
+
+/* === 沉睡用户表格细节 ============================== */
+.note-cell { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.days-cell {
+  font-family: var(--world-font-mono);
+  font-weight: 800;
+  color: var(--world-text-primary);
+}
+.days-cell.is-warn  { color: var(--world-warning); }
+.days-cell.is-grave { color: var(--world-error); }
+.mono {
+  font-family: var(--world-font-mono);
+  font-weight: 700;
+  color: var(--world-text-primary);
+}
+.mono.small { font-size: 0.78rem; color: var(--world-text-mute); }
+
+/* === 采购 modal 表单 =============================== */
+.purchase-form { display: flex; flex-direction: column; gap: 12px; padding: 8px 4px; }
+.purchase-form .hint-line {
+  color: var(--world-text-mute);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+}
+.purchase-form .dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+.purchase-form .lab {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.purchase-form .lab-text {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
+  letter-spacing: 0.04em;
+}
 
 /* 响应式 */
 @media (max-width: 768px) {
-  .hero-num { font-size: 2.4rem; }
   .f-row { grid-template-columns: 100px 1fr 70px; gap: 10px; }
   .f-cn { font-size: 0.82rem; }
 }

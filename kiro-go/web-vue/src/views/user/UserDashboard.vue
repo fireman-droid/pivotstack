@@ -6,7 +6,7 @@ import { userApi } from '../../api/user'
 import PlanStatusBadge from '../../components/user/PlanStatusBadge.vue'
 import {
   AlertTriangle, Gift, Wallet, Clock, Activity,
-  Copy, Check, LayoutGrid, ServerCog
+  Copy, Check, LayoutGrid, ServerCog, BookOpen, ArrowUpRight
 } from 'lucide-vue-next'
 import { copyToClipboard } from '../../utils/clipboard'
 import WorldCard from '../../components/world/WorldCard.vue'
@@ -273,6 +273,27 @@ function goRecharge() { router.push('/user/recharge') }
       </WorldCard>
     </div>
 
+    <!-- 使用教程（子 key 不显示，他们用的是上级代理包装的服务） -->
+    <a
+      v-if="!isChildKey"
+      class="tutorial-card"
+      href="https://my.feishu.cn/wiki/QncUwmmnxim6KbkB7ZocASFYn3d?from=from_copylink"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <span class="tutorial-icon">
+        <BookOpen :size="20" />
+      </span>
+      <span class="tutorial-text">
+        <span class="tutorial-title">📖 新手使用教程</span>
+        <span class="tutorial-sub">详细配置 Claude Code / Cursor / Cline 等客户端 — 飞书文档</span>
+      </span>
+      <span class="tutorial-cta">
+        <span>查看教程</span>
+        <ArrowUpRight :size="14" />
+      </span>
+    </a>
+
     <!-- 计费标准 -->
     <WorldCard v-if="pricing" padding="md">
       <h3 class="section-title">
@@ -301,6 +322,120 @@ function goRecharge() { router.push('/user/recharge') }
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* === 使用教程卡（飞书外链） === */
+.tutorial-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: linear-gradient(
+    100deg,
+    rgba(2, 132, 199, 0.06) 0%,
+    rgba(2, 132, 199, 0.02) 60%,
+    transparent 100%
+  );
+  border: 1px solid var(--world-glass-border);
+  border-radius: var(--world-radius-md);
+  text-decoration: none;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-sans);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+}
+.tutorial-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--world-accent), transparent);
+  opacity: 0.7;
+}
+.tutorial-card:hover {
+  border-color: var(--world-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px -8px rgba(2, 132, 199, 0.35);
+}
+.tutorial-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--world-radius-sm);
+  background: rgba(2, 132, 199, 0.10);
+  color: var(--world-accent);
+  flex-shrink: 0;
+}
+.tutorial-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.tutorial-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--world-text-primary);
+  font-family: var(--world-font-display);
+}
+.tutorial-sub {
+  font-size: 0.78rem;
+  color: var(--world-text-mute);
+  line-height: 1.4;
+}
+.tutorial-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 14px;
+  background: var(--world-accent);
+  color: #fff;
+  border-radius: var(--world-radius-sm);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: filter 200ms ease;
+}
+.tutorial-card:hover .tutorial-cta {
+  filter: brightness(1.10);
+}
+
+/* daogui 主题适配 */
+[data-world="daogui"] .tutorial-card {
+  background: linear-gradient(
+    100deg,
+    rgba(196, 30, 58, 0.10) 0%,
+    rgba(184, 134, 11, 0.04) 60%,
+    transparent 100%
+  );
+}
+[data-world="daogui"] .tutorial-card::before {
+  background: linear-gradient(180deg, var(--world-accent), transparent);
+}
+[data-world="daogui"] .tutorial-card:hover {
+  box-shadow: 0 0 18px rgba(196, 30, 58, 0.30);
+}
+[data-world="daogui"] .tutorial-icon {
+  background: rgba(196, 30, 58, 0.16);
+  color: var(--world-paper-aged, #b8860b);
+}
+[data-world="daogui"] .tutorial-cta {
+  background: linear-gradient(135deg, #c41e3a, #8b1626);
+}
+
+/* 移动端：垂直堆叠 */
+@media (max-width: 600px) {
+  .tutorial-card {
+    flex-wrap: wrap;
+  }
+  .tutorial-cta {
+    margin-left: auto;
+  }
 }
 
 .page-head {

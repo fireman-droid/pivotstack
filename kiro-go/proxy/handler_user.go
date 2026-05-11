@@ -345,12 +345,14 @@ func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info 
 	expiresAtBefore := info.ExpiresAt
 
 	// 在兑换前先记下激活码金额（兑换后激活码会被删除）
-	var codeAmountInput float64 // 兑换码原始 amount（balance 类型为 ¥CNY，days 类型为天数）
+	var codeAmountInput float64  // 兑换码原始 amount（balance 类型为 ¥CNY，days 类型为天数）
+	var codeSalePriceCNY float64 // 仅 days/time 类型：admin 设的销售价格（¥），写入流水作 revenue 来源
 	{
 		codes := config.GetActivationCodes()
 		for _, ac := range codes {
 			if ac.Code == req.Code {
 				codeAmountInput = ac.Amount
+				codeSalePriceCNY = ac.SalePriceCNY
 				break
 			}
 		}
@@ -385,9 +387,10 @@ func (h *Handler) handleUserRedeem(w http.ResponseWriter, r *http.Request, info 
 			amountUSD = codeAmountInput / config.CNYPerUSDFace
 		case "days", "time":
 			recType = "code_redeem_days"
-			// days 类型不增加余额，amount 字段记原始天数（语义不同，但流水仍要存）
-			amountUSD = 0
-			amountCNY = 0
+			// 天卡兑换收入 = ac.SalePriceCNY（admin 创建天卡时填的售价）。
+			// 老天卡 / 白送 → 0，不计入 revenue（向前兼容）。
+			amountCNY = codeSalePriceCNY
+			amountUSD = amountCNY / config.CNYPerUSDFace
 		}
 		ip := r.RemoteAddr
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
