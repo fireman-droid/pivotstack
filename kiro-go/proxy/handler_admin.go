@@ -4,6 +4,7 @@ import (
 	"bufio"
 	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"kiro-api-proxy/auth"
 	"kiro-api-proxy/config"
@@ -43,10 +44,11 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 
 	// SSE 流：走一次性 token（/sse/token 自身仍走 session 分支）
 	if strings.HasPrefix(path, "/sse/") && path != "/sse/token" {
-		if !h.requireSSEToken(w, r, path) {
+		r2, ok := h.requireSSEToken(w, r, path)
+		if !ok {
 			return
 		}
-		h.routeAdminAPI(path, w, r)
+		h.routeAdminAPI(path, w, r2)
 		return
 	}
 
@@ -251,6 +253,7 @@ func (h *Handler) routeAdminAPI(path string, w http.ResponseWriter, r *http.Requ
 // 401: { error, remainingAttempts }
 // 423: { error, locked, retryAfter }
 func (h *Handler) apiAdminLogin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	ip := clientIP(r)
 	if locked, retryAfter := h.adminSessions.limiter.IsLocked(ip); locked {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
@@ -321,6 +324,7 @@ func (h *Handler) apiAdminLogout(w http.ResponseWriter, _ *http.Request, sess *a
 // Body: { "oldPassword": "...", "newPassword": "...", "confirmPassword": "..." }
 // 成功后所有 session 失效（踢出所有设备），客户端要重新登录
 func (h *Handler) apiChangeAdminPassword(w http.ResponseWriter, r *http.Request, _ *adminSession) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
 	if config.IsPasswordEnvOverride() {
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "password managed by ADMIN_PASSWORD env"})
 		return
@@ -344,7 +348,12 @@ func (h *Handler) apiChangeAdminPassword(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := config.ChangeAdminPassword(req.OldPassword, req.NewPassword); err != nil {
-		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		// 旧密码错 → 401；hash/写盘失败 → 500（错误分类便于排障 + 前端正确提示）
+		if errors.Is(err, config.ErrInvalidOldPassword) {
+			writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		} else {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 
@@ -357,6 +366,7 @@ func (h *Handler) apiChangeAdminPassword(w http.ResponseWriter, r *http.Request,
 // Body: { "stream": "stats" | "logs" }
 // 返回一次性 token（5min TTL），客户端拼到 EventSource URL：?sse_token=...
 func (h *Handler) apiCreateSSEToken(w http.ResponseWriter, r *http.Request, sess *adminSession) {
+	r.Body = http.MaxBytesReader(w, r.Body, 512)
 	var req struct {
 		Stream string `json:"stream"`
 	}

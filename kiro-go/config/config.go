@@ -28,9 +28,9 @@ import (
 )
 
 // argon2id parameters for admin password hashing.
-// 65 MiB / 3 iterations / 2 lanes — OWASP 2026 recommended baseline.
+// 64 MiB / 3 iterations / 2 lanes — OWASP 2026 recommended baseline.
 const (
-	adminPasswordArgonMemory      uint32 = 64 * 1024
+	adminPasswordArgonMemory      uint32 = 64 * 1024 // KiB → 64 MiB
 	adminPasswordArgonTime        uint32 = 3
 	adminPasswordArgonParallelism uint8  = 2
 	adminPasswordSaltLen                 = 16
@@ -40,6 +40,10 @@ const (
 // passwordEnvOverride 标记当前内存中的 cfg.Password 是否来自 ADMIN_PASSWORD 环境变量。
 // 为真时，UI 上的改密接口会直接拒绝（防止 admin 改完发现重启后又被 env 覆盖）。
 var passwordEnvOverride bool
+
+// ErrInvalidOldPassword 用于 ChangeAdminPassword：调用方据此区分
+// "旧密码错"（401 给前端）vs hash/写盘等服务端错（500）。
+var ErrInvalidOldPassword = fmt.Errorf("invalid old password")
 
 // GenerateMachineId generates a UUID v4 format machine identifier.
 // This ID is used to uniquely identify the proxy instance in Kiro API requests,
@@ -577,8 +581,10 @@ func Load() error {
 		migrated = true
 	}
 	cfg = &c
+	// 密码迁移失败不阻止启动 —— 否则备份/写盘失败会让管理员被锁在后台外面，
+	// 反而比"暂时还是明文"更糟。verifyAdminPasswordHash 在迁移期支持明文兜底。
 	if err := migrateAdminPasswordLocked(); err != nil {
-		return err
+		fmt.Printf("[config] WARN: admin password migration skipped: %v\n", err)
 	}
 	if migrated {
 		return Save()
@@ -657,7 +663,7 @@ func ChangeAdminPassword(oldPassword, newPassword string) error {
 		return fmt.Errorf("password managed by ADMIN_PASSWORD env")
 	}
 	if !verifyAdminPasswordHash(oldPassword, cfg.Password) {
-		return fmt.Errorf("invalid old password")
+		return ErrInvalidOldPassword
 	}
 	hash, err := HashAdminPassword(newPassword)
 	if err != nil {

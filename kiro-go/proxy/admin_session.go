@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+type adminCtxKey string
+
+// adminSessionHashCtxKey 用于在 SSE handler 中拿到 session hash，
+// 长连接 loop 定时校验 session 是否仍有效，无效则主动断开。
+const adminSessionHashCtxKey adminCtxKey = "adminSessionHash"
+
 const (
 	adminSessionCookieName = "admin_session"
 	adminSessionTokenBytes = 32
@@ -115,6 +121,22 @@ func (s *adminSessionStore) Get(r *http.Request) (*adminSession, bool) {
 
 	sess.LastSeen = now
 	return sess, true
+}
+
+// IsValid 检查 session token 是否仍有效（未过期、未被踢出）。
+// SSE 长连接 loop 定时调用，配合 InvalidateAll() 在改密后真正踢出所有设备。
+func (s *adminSessionStore) IsValid(tokenHash string) bool {
+	if tokenHash == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, ok := s.sessions[tokenHash]
+	if !ok {
+		return false
+	}
+	now := time.Now()
+	return !now.After(sess.ExpiresAt) && now.Sub(sess.LastSeen) <= adminSessionIdleTTL
 }
 
 func (s *adminSessionStore) Invalidate(tokenHash string) {
@@ -253,16 +275,12 @@ func hashAdminToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// clientIP 用于 admin login 的 IP 速率限制。
+// 故意只信任 r.RemoteAddr —— 不读 X-Forwarded-For / CF-Connecting-IP，
+// 因为攻击者可以伪造这俩 header 绕过 "同 IP 5 次失败锁 10 分钟" 限速。
+// 如果将来部署在可信反代（nginx/cloudflare）后面，需要走显式配置 + 校验
+// 代理来源 IP（trusted_proxies）才能启用，否则永远只看 socket 层 IP。
 func clientIP(r *http.Request) string {
-	if cf := r.Header.Get("CF-Connecting-IP"); cf != "" {
-		return strings.TrimSpace(cf)
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil && host != "" {
 		return host
@@ -280,14 +298,27 @@ func (h *Handler) requireAdminSession(w http.ResponseWriter, r *http.Request) (*
 	return sess, true
 }
 
-func (h *Handler) requireSSEToken(w http.ResponseWriter, r *http.Request, path string) bool {
+// requireSSEToken 验证一次性 SSE token，成功时把 session hash 写入 request.Context()
+// 供下游 handleSSEStats / handleSSELogs 长连接 loop 定时校验 session 有效性。
+// 返回 (新 request, ok)；ok=false 时调用方直接 return（错误响应已写）。
+func (h *Handler) requireSSEToken(w http.ResponseWriter, r *http.Request, path string) (*http.Request, bool) {
 	stream := strings.TrimPrefix(path, "/sse/")
 	raw := r.URL.Query().Get("sse_token")
-	if _, ok := h.adminSessions.ConsumeSSEToken(raw, stream); !ok {
+	sessionHash, ok := h.adminSessions.ConsumeSSEToken(raw, stream)
+	if !ok {
 		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired SSE token"})
-		return false
+		return r, false
 	}
-	return true
+	return r.WithContext(context.WithValue(r.Context(), adminSessionHashCtxKey, sessionHash)), true
+}
+
+// adminSessionHashFromCtx 从 SSE handler 的 request context 里读 session hash。
+// 配合 adminSessionStore.IsValid 实现长连接侧的 session invalidation。
+func adminSessionHashFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(adminSessionHashCtxKey).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // writeJSONStatus writes a JSON body with a status code. Project handlers use

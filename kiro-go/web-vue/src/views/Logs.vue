@@ -40,6 +40,8 @@ watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
   router.replace({ query: q }).catch(() => {})
 })
 
+let sseRetryDelay = 3000
+
 async function connectSSE() {
   if (eventSource) { eventSource.close(); eventSource = null }
   // 一次性 SSE token（5min TTL）。URL 不再含任何长期凭证。
@@ -49,11 +51,14 @@ async function connectSSE() {
     const data = await res.json()
     token = data.token
   } catch {
-    setTimeout(() => connectSSE(), 5000)
+    const delay = sseRetryDelay
+    sseRetryDelay = Math.min(sseRetryDelay * 2, 30000)
+    setTimeout(() => connectSSE(), delay)
     return
   }
   const url = `${location.origin}/admin/api/sse/logs?sse_token=${encodeURIComponent(token)}`
   eventSource = new EventSource(url)
+  eventSource.addEventListener('open', () => { sseRetryDelay = 3000 })
   eventSource.addEventListener('log', (e) => {
     try {
       const entry = JSON.parse(e.data)

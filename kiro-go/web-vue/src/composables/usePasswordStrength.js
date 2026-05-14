@@ -2,13 +2,15 @@ import { computed } from 'vue'
 
 const STRENGTH_TEXTS = ['极弱', '很弱', '弱', '中', '强', '极强']
 
+// 优先用 World 系统的语义颜色 token，硬编码 hex 作为 fallback。
+// 实际渲染时 CSS 变量未定义会回退到逗号后的颜色，主题切换不破。
 const STRENGTH_COLORS = [
-  '#9ca3af',
-  '#dc2626',
-  '#ea580c',
-  '#f59e0b',
-  '#10b981',
-  '#059669',
+  'var(--world-text-mute, #9ca3af)',
+  'var(--world-danger, #dc2626)',
+  'var(--world-warning-strong, #ea580c)',
+  'var(--world-warning, #f59e0b)',
+  'var(--world-success-soft, #10b981)',
+  'var(--world-success, #059669)',
 ]
 
 export function usePasswordStrength(password) {
