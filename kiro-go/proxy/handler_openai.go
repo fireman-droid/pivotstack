@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"kiro-api-proxy/config"
@@ -34,10 +35,6 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		h.sendOpenAIError(w, 400, "invalid_request_error", "Invalid JSON")
 		return
 	}
-
-	// 请求内故障转移：最多尝试 3 个账号
-	maxRetries := 3
-	var lastErr error
 
 	uc := getUserContext(r.Context())
 	var keyID string
@@ -80,8 +77,30 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Billing: PreAuthorize – lock estimated cost before calling upstream
-	// 提前固定 originalModel，确保 PreAuth/Reconcile/addCallLog 全链路用同一个模型查倍率（Bug #7）
+	// v3 渠道分发：channels 非空时所有渠道（含 Kiro）统一走 token 计费。
+	if router := h.currentChannelRouter(); router != nil && router.HasChannels() {
+		ch, found := router.Resolve(req.Model)
+		if !found {
+			h.sendOpenAIError(w, 404, "model_not_found",
+				fmt.Sprintf("model %q is not available in any configured channel", req.Model))
+			return
+		}
+		maxOutput := 4096
+		if req.MaxTokens > 0 {
+			maxOutput = req.MaxTokens
+		}
+		h.handleChannelRequest(w, r, ch, &channelDispatch{
+			Protocol:       ProtocolOpenAI,
+			OriginalModel:  req.Model,
+			Stream:         req.Stream,
+			EstimatedInput: estimateOpenAIRequestInputTokens(&req),
+			MaxOutput:      maxOutput,
+			RawBody:        body,
+		}, uc)
+		return
+	}
+
+	// === Legacy 路径（channels=[] 兜底，按 credit 计费）===
 	originalModel := req.Model
 
 	var preChargedPaid, preChargedGift float64
@@ -99,85 +118,59 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// === 路由决策：先做 stealth 再用 upstream 模型决定 tier ===
-	// 让 sonnet-4.6 stealth 到 sonnet-4.5 时自然落 FREE 池，
-	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
-	thinkingCfg := config.GetThinkingConfig()
-	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	upstreamModel, stealthSwapped := ApplyStealth(billingModel, originalModel)
-	if stealthSwapped {
-		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
-	}
-	tier := ResolveModelPool(upstreamModel)
-	req.Model = upstreamModel
-	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
-
-	var lastAccount string
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		account := h.pool.GetNextByTier(tier)
-		if account == nil {
+	requestID := genRequestID()
+	result, execErr := h.executeKiroChat(r.Context(), w, &req, body, uc, requestID)
+	if execErr != nil {
+		responseStarted := false
+		payloadKB := 0
+		var ke *KiroExecError
+		if errors.As(execErr, &ke) {
+			responseStarted = ke.ResponseStarted
+			payloadKB = ke.PayloadKB
+		}
+		if !responseStarted {
 			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
-			h.addCallLogErrorWithKey("OpenAI", originalModel, upstreamModel, lastAccount, req.Stream, fmt.Sprintf("No available accounts in %s pool", tier), 0, uc)
-			h.sendOpenAIError(w, 503, "server_error", fmt.Sprintf("No available accounts in %s pool", tier))
-			return
 		}
-		lastAccount = account.Email
-
-		if err := h.ensureValidToken(account); err != nil {
-			h.pool.RecordError(account.ID, false)
-			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("token refresh failed: %v", err)
-			continue
-		}
-
-		// 防御性校验：upstream 模型必须与账号订阅类型兼容。
-		if _, validateErr := ValidateAndMapModel(upstreamModel, account.SubscriptionType); validateErr != nil {
-			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("model/account mismatch: %v", validateErr)
-			continue
-		}
-
-		if originalModel != upstreamModel {
-			fmt.Printf("[Request] OpenAI API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)
-		} else {
-			fmt.Printf("[Request] OpenAI API | model: %s | account: %s | stream: %v | attempt: %d\n", upstreamModel, account.Email, req.Stream, attempt+1)
-		}
-
-		kiroPayload := OpenAIToKiro(&req, thinking)
-
-		var shouldRetry bool
-		if req.Stream {
-			shouldRetry = h.handleOpenAIStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
-		} else {
-			shouldRetry = h.handleOpenAINonStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
-		}
-		if shouldRetry {
-			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("429 quota exhausted, retrying with next account")
-			fmt.Printf("[Retry] Account %s got 429, trying next account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
-			continue
-		}
+		h.recordFailure()
+		h.addCallLogErrorWithKey("OpenAI", originalModel, "", "", req.Stream, execErr.Error(), payloadKB, uc)
+		return
+	}
+	if result == nil {
+		RefundPreAuth(keyID, preChargedPaid, preChargedGift)
+		h.recordFailure()
+		h.addCallLogErrorWithKey("OpenAI", originalModel, "", "", req.Stream, "executeKiroChat returned nil result", 0, uc)
 		return
 	}
 
-	// 所有重试都失败 – refund pre-auth
-	RefundPreAuth(keyID, preChargedPaid, preChargedGift)
-	h.recordFailure()
-	errMsg := "All accounts failed"
-	if lastErr != nil {
-		errMsg = lastErr.Error()
+	billingCredits := result.UpstreamCredits
+	if billingCredits <= 0 {
+		billingCredits = EstimateCredits(result.OutputTokens, result.InputTokens)
 	}
-	// retry-exhausted 路径必须写一条 error log，否则 jsonl/前端日志看不到这个失败请求。
-	// 之前 INVALID_MODEL_ID 风暴时所有 attempt 都被 inner-handler 视为 shouldRetry=true 直接 return true，
-	// 不会进入 line 521 的 addCallLogErrorWithKey 分支，导致漏写。
-	h.addCallLogErrorWithKey("OpenAI", originalModel, upstreamModel, lastAccount, req.Stream, "retry exhausted: "+errMsg, 0, uc)
-	h.sendOpenAIError(w, 503, "server_error", errMsg)
+	billingCredits = ApplyLowOutputProtection(result.OutputTokens, billingCredits, result.InputTokens)
+	if result.BillingModel != "" && result.ActualModel != "" && result.BillingModel != result.ActualModel {
+		billingCredits *= StealthCreditMultiplier(result.BillingModel, result.ActualModel)
+	}
+	paid, gift := ReconcileWithBillingModel(keyID, originalModel, result.BillingModel, billingCredits, preChargedPaid, preChargedGift)
+	if uc != nil {
+		uc.ActualPaidUSD = paid
+		uc.ActualGiftUSD = gift
+	}
+	h.recordSuccess(result.InputTokens, result.OutputTokens, billingCredits)
+	h.addCallLogWithKey("OpenAI", originalModel, result.ActualModel, result.Account, result.Subscription, result.InputTokens, result.OutputTokens, req.Stream, billingCredits, result.UpstreamCredits, "", "", result.StopReason, result.RequestID, result.DurationMs, uc)
 }
 
-// handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+// handleOpenAIStream OpenAI 流式响应。返回 ChannelResult（成功）或 KiroExecError（错误）。
+// 此函数**不**做计费、不写日志、不更新 success/failure stats — 由 caller 负责。
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, upstreamModel, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, requestID string) (*ChannelResult, *KiroExecError) {
 	requestStart := time.Now()
-	requestID := genRequestID()
+	if requestID == "" {
+		requestID = genRequestID()
+	}
+	model := upstreamModel
+	payloadKB := 0
+	if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
+		payloadKB = len(payloadBytes) / 1024
+	}
 	fmt.Printf("[req-%s] → OpenAI Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
 		requestID, originalModel, model, account.Email, estimatedInputTokens/1000, thinking)
 
@@ -187,8 +180,9 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		err := fmt.Errorf("streaming not supported")
 		h.sendOpenAIError(w, 500, "server_error", "Streaming not supported")
-		return
+		return nil, &KiroExecError{Err: err, Retryable: false, ResponseStarted: false, PayloadKB: payloadKB}
 	}
 
 	// 获取 thinking 输出格式配置
@@ -500,14 +494,10 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	if err != nil {
 		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
 		h.pool.RecordError(account.ID, isQuotaErr)
-		payloadKB := 0
-		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
-			payloadKB = len(payloadBytes) / 1024
-		}
 		if isQuotaErr && !headersSent {
 			fmt.Printf("[429-Retry] OpenAI Stream | %s → %s | account: %s | payload: %dKB | will retry\n",
 				originalModel, model, account.Email, payloadKB)
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
 		// INVALID_MODEL_ID + 还未发流：token 提前失效，强制刷新后让外层重试
 		if upstreamErr != nil && upstreamErr.StatusCode == 400 && !headersSent && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
@@ -515,9 +505,8 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
 				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
 			}
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
-		h.recordFailure()
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] OpenAI Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
@@ -525,11 +514,36 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			fmt.Printf("[ERROR] OpenAI Stream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogErrorWithKey("OpenAI", originalModel, model, account.Email, true, err.Error(), payloadKB, uc)
+		var appErr *AppError
 		if upstreamErr != nil {
-			WriteOpenAIStreamError(w, upstreamErr.ToAppError(""))
+			appErr = upstreamErr.ToAppError(requestID)
+			if headersSent {
+				WriteOpenAIStreamError(w, appErr)
+			} else {
+				WriteOpenAIError(w, appErr, upstreamErr.StatusCode)
+			}
+		} else if headersSent {
+			// mid-stream 无结构化错误 → 仍发 SSE error chunk，保证客户端流不被截断成不完整状态
+			WriteOpenAIStreamError(w, NewAppError(ErrorTypeUpstreamError, err.Error(), false, requestID))
+		} else {
+			h.sendOpenAIError(w, 500, "server_error", err.Error())
 		}
-		return false
+		var partial *ChannelResult
+		if headersSent {
+			partial = &ChannelResult{
+				ActualModel:     model,
+				Account:         account.Email,
+				Subscription:    account.SubscriptionType,
+				InputTokens:     inputTokens,
+				OutputTokens:    outputTokens,
+				UpstreamCredits: credits,
+				BillingModel:    billingModel,
+				RequestID:       requestID,
+				DurationMs:      time.Since(requestStart).Milliseconds(),
+				PayloadKB:       payloadKB,
+			}
+		}
+		return partial, &KiroExecError{Err: err, Retryable: false, ResponseStarted: headersSent, PayloadKB: payloadKB, UpstreamAppError: appErr}
 	}
 
 	// 刷新剩余缓冲区
@@ -554,26 +568,8 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		outputTokens += estimateApproxTokens(tc.Function.Arguments)
 	}
 
-	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
-	billingCredits := credits
-	if stealthSwapped && billingCredits > 0 {
-		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
-	}
-	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-
-	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
-	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := billingCredits
-		if actualCredits <= 0 {
-			actualCredits = EstimateCredits(outputTokens, inputTokens)
-		}
-		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
-		uc.ActualPaidUSD = actualPaid
-		uc.ActualGiftUSD = actualGift
-	}
 
 	// 发送结束
 	finishReason := "stop"
@@ -582,7 +578,6 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	}
 
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, billingCredits, credits, "", "", finishReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, finishReason, credits, durationMs)
 
@@ -606,13 +601,33 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	fmt.Fprintf(w, "data: %s\n\n", string(data))
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
-	return false
+	return &ChannelResult{
+		ActualModel:     model,
+		Account:         account.Email,
+		Subscription:    account.SubscriptionType,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		UpstreamCredits: credits,
+		BillingModel:    billingModel,
+		StopReason:      finishReason,
+		RequestID:       requestID,
+		DurationMs:      durationMs,
+		PayloadKB:       payloadKB,
+	}, nil
 }
 
-// handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+// handleOpenAINonStream OpenAI 非流式响应。返回 ChannelResult（成功）或 KiroExecError（错误）。
+// 不做计费、不写日志、不更新 success/failure stats — 由 caller 负责。
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, upstreamModel, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, requestID string) (*ChannelResult, *KiroExecError) {
 	requestStart := time.Now()
-	requestID := genRequestID()
+	if requestID == "" {
+		requestID = genRequestID()
+	}
+	model := upstreamModel
+	payloadKB := 0
+	if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
+		payloadKB = len(payloadBytes) / 1024
+	}
 	fmt.Printf("[req-%s] → OpenAI NonStream | %s → %s | account: %s | input≈%dK\n",
 		requestID, originalModel, model, account.Email, estimatedInputTokens/1000)
 
@@ -640,26 +655,17 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	if err != nil {
 		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
 		h.pool.RecordError(account.ID, isQuotaErr)
-		payloadKB := 0
-		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
-			payloadKB = len(payloadBytes) / 1024
-		}
 		if isQuotaErr {
 			fmt.Printf("[429-Retry] OpenAI NonStream | %s → %s | account: %s | payload: %dKB | will retry\n",
 				originalModel, model, account.Email, payloadKB)
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
-		// INVALID_MODEL_ID 通常是 token 已被 AWS 提前作废，强制刷新本号 token 让外层重试
 		if upstreamErr != nil && upstreamErr.StatusCode == 400 && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
 			fmt.Printf("[InvalidModel-Refresh] OpenAI NonStream account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
 			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
 				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
 			}
-			return true
-		}
-		h.recordFailure()
-		if uc != nil {
-			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] OpenAI NonStream | %s → %s | account: %s | payload: %dKB | error: %s\n",
@@ -668,14 +674,14 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 			fmt.Printf("[ERROR] OpenAI NonStream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogErrorWithKey("OpenAI", originalModel, model, account.Email, false, err.Error(), payloadKB, uc)
+		var appErr *AppError
 		if upstreamErr != nil {
-			appErr := upstreamErr.ToAppError("")
+			appErr = upstreamErr.ToAppError(requestID)
 			WriteOpenAIError(w, appErr, upstreamErr.StatusCode)
 		} else {
 			h.sendOpenAIError(w, 500, "server_error", err.Error())
 		}
-		return false
+		return nil, &KiroExecError{Err: err, Retryable: false, ResponseStarted: false, PayloadKB: payloadKB, UpstreamAppError: appErr}
 	}
 
 	// 解析 content 中的 <thinking> 标签
@@ -689,33 +695,14 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	inputTokens = estimatedInputTokens
 	outputTokens = estimateOpenAIOutputTokens(finalContent, reasoningContent, toolUses)
 
-	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
-	billingCredits := credits
-	if stealthSwapped && billingCredits > 0 {
-		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
-	}
-	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-
-	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
-	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := billingCredits
-		if actualCredits <= 0 {
-			actualCredits = EstimateCredits(outputTokens, inputTokens)
-		}
-		actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
-		uc.ActualPaidUSD = actualPaid
-		uc.ActualGiftUSD = actualGift
-	}
 
 	stopReason := "stop"
 	if len(toolUses) > 0 {
 		stopReason = "tool_use"
 	}
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("OpenAI", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
@@ -723,7 +710,19 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	resp := KiroToOpenAIResponseWithReasoning(finalContent, reasoningContent, toolUses, inputTokens, outputTokens, originalModel, thinkingFormat)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
-	return false
+	return &ChannelResult{
+		ActualModel:     model,
+		Account:         account.Email,
+		Subscription:    account.SubscriptionType,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		UpstreamCredits: credits,
+		BillingModel:    billingModel,
+		StopReason:      stopReason,
+		RequestID:       requestID,
+		DurationMs:      durationMs,
+		PayloadKB:       payloadKB,
+	}, nil
 }
 
 func (h *Handler) sendOpenAIError(w http.ResponseWriter, status int, errType, message string) {

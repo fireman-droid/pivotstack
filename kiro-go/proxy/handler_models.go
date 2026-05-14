@@ -13,6 +13,17 @@ import (
 func (h *Handler) handleModels(w http.ResponseWriter, _ *http.Request) {
 	thinkingSuffix := config.GetThinkingConfig().Suffix
 
+	// v3：channels 配置时从渠道列表构建（每个渠道贡献自己的 models）
+	channels := config.GetChannels()
+	if len(channels) > 0 {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"object": "list",
+			"data":   buildModelsFromChannels(channels, thinkingSuffix),
+		})
+		return
+	}
+
 	// 判断当前可用账号的主要类型
 	accounts := h.pool.GetAllAccounts()
 	hasFree := false
@@ -115,6 +126,43 @@ func buildModelInfo(id, ownedBy string, supportsImage bool) map[string]interface
 			},
 		},
 	}
+}
+
+// buildModelsFromChannels v3：按 channels 配置构建 /v1/models 列表。
+// 每个 enabled 渠道贡献其 Models 列表，多渠道支持同一 model 时去重（保留首次出现）。
+// 同时给 Kiro 渠道的每个 model 额外添加 -thinking 变体（保持与旧行为一致）。
+func buildModelsFromChannels(channels []config.ChannelConfig, thinkingSuffix string) []map[string]interface{} {
+	seen := make(map[string]struct{})
+	var models []map[string]interface{}
+	for _, c := range channels {
+		if !c.Enabled {
+			continue
+		}
+		ownedBy := "kiro-proxy"
+		if c.Type != "" {
+			ownedBy = c.Type
+		}
+		for _, m := range c.Models {
+			key := strings.ToLower(strings.TrimSpace(m))
+			if key == "" {
+				continue
+			}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			models = append(models, buildModelInfo(m, ownedBy, true))
+			if strings.ToLower(c.Type) == "kiro" && thinkingSuffix != "" {
+				thinkID := m + thinkingSuffix
+				thinkKey := strings.ToLower(thinkID)
+				if _, dup := seen[thinkKey]; !dup {
+					seen[thinkKey] = struct{}{}
+					models = append(models, buildModelInfo(thinkID, ownedBy, true))
+				}
+			}
+		}
+	}
+	return models
 }
 
 // refreshModelsCache 从 Kiro API 拉取模型列表并缓存

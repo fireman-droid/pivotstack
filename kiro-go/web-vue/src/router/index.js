@@ -6,6 +6,7 @@ const routes = [
 
   // Admin routes
   { path: '/',         name: 'Dashboard',      component: () => import('../views/Dashboard.vue'),       meta: { auth: true } },
+  { path: '/channels', name: 'Channels',       component: () => import('../views/Channels.vue'),        meta: { auth: true } },
   { path: '/accounts', name: 'Accounts',       component: () => import('../views/Accounts.vue'),        meta: { auth: true } },
   { path: '/apikeys',  name: 'ApiKeys',        component: () => import('../views/ApiKeys.vue'),         meta: { auth: true } },
   { path: '/settings', name: 'Settings',       component: () => import('../views/Settings.vue'),        meta: { auth: true } },

@@ -7,5 +7,9 @@ services:
       - ./data:/app/data
     environment:
       - CONFIG_PATH=/app/data/config.json
-      - VPN_PROXY_URL=http://172.20.0.1:7890
+      # 走宿主机的 clash 代理（http://host.docker.internal:7897）
+      # Windows / Mac Docker Desktop 自带 host.docker.internal；Linux 需要 extra_hosts 声明
+      - VPN_PROXY_URL=http://host.docker.internal:7897
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped

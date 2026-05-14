@@ -227,7 +227,12 @@ func (h *Handler) apiInsightsWhales(w http.ResponseWriter, r *http.Request) {
 			}
 			s := stat[entry.ApiKeyID]
 			s.Calls++
-			s.Credits += entry.Credits
+			// v3 token 模式 Credits=0 但 UpstreamCredits>0；活跃度排名兜底用 UpstreamCredits
+			if entry.Credits > 0 {
+				s.Credits += entry.Credits
+			} else if entry.UpstreamCredits > 0 {
+				s.Credits += entry.UpstreamCredits
+			}
 		}
 		f.Close()
 	}

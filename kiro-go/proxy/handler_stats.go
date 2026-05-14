@@ -373,12 +373,18 @@ func (h *Handler) loadLogsFromDisk() {
 	h.callLogsMu.Unlock()
 
 	// 恢复 CreditPredictor 历史 + API Key 统计
+	// v3 token 模式下 Credits=0 但 UpstreamCredits>0 — 用 UpstreamCredits 兜底，
+	// 否则 token 调用不会进预测器，账号配额预测会被错估
 	creditRestored := 0
 	for _, entry := range allLogs {
-		if entry.Credits > 0 && entry.Timestamp > 0 {
+		predictorCredits := entry.Credits
+		if predictorCredits == 0 && entry.UpstreamCredits > 0 {
+			predictorCredits = entry.UpstreamCredits
+		}
+		if predictorCredits > 0 && entry.Timestamp > 0 {
 			rec := CreditRecord{
 				Timestamp: entry.Timestamp,
-				Credits:   entry.Credits,
+				Credits:   predictorCredits,
 				Model:     entry.ActualModel,
 				Tokens:    entry.TotalTokens,
 			}

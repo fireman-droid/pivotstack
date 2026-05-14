@@ -18,3 +18,28 @@ export async function api(path, opts = {}) {
   }
   return res
 }
+
+// ==================== Channels (v3) ====================
+export async function listChannels() {
+  return (await api('/channels')).json()
+}
+export async function createChannel(channel) {
+  return api('/channels', { method: 'POST', body: JSON.stringify(channel) })
+}
+export async function updateChannel(id, channel) {
+  return api(`/channels/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(channel) })
+}
+export async function deleteChannel(id) {
+  return api(`/channels/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+export async function testChannel(id) {
+  return (await api(`/channels/${encodeURIComponent(id)}/test`, { method: 'POST' })).json()
+}
+
+// ==================== Sell Prices (v3) ====================
+export async function getSellPrices() {
+  return (await api('/sell-prices')).json()
+}
+export async function updateSellPrices(prices) {
+  return api('/sell-prices', { method: 'PUT', body: JSON.stringify(prices) })
+}

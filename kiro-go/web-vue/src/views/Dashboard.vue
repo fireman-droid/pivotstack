@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 let echarts = null
-import { api } from '../api/admin'
+import { api, listChannels } from '../api/admin'
 import { formatNum } from '../utils/format'
 import { useWorldTheme } from '../stores/worldTheme'
 import { useToast } from '../composables/useToast'
@@ -27,6 +27,16 @@ const stats = ref({
 })
 const version = ref('')
 const loading = ref(true)
+const channels = ref([])
+
+async function loadChannels() {
+  try {
+    channels.value = await listChannels()
+  } catch (e) {
+    // silent: channels API 仅 v3 才有
+    console.warn('loadChannels:', e?.message)
+  }
+}
 
 const theme = useWorldTheme()
 const chartRef = ref(null)
@@ -190,6 +200,7 @@ const base = location.origin
 
 onMounted(async () => {
   await loadVersion()
+  loadChannels()
   connectStatsSSE()
 })
 
@@ -261,6 +272,28 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
         :variant="isErrorHigh ? 'danger' : 'success'"
       />
     </div>
+
+    <!-- v3 渠道健康（channels 非空时显示）-->
+    <WorldCard v-if="channels.length" padding="md">
+      <header class="pool-head">
+        <h3 class="section-title">
+          <Globe :size="14" style="margin-right: 6px;" /> 渠道路由
+        </h3>
+        <WorldButton variant="ghost" size="sm" @click="router.push('/channels')">
+          <span>管理 →</span>
+        </WorldButton>
+      </header>
+      <div class="channel-grid-dash">
+        <div v-for="ch in channels" :key="ch.id" class="channel-tile" :class="{ disabled: !ch.enabled }">
+          <span class="dot" :class="ch.enabled ? 'ok' : 'off'"></span>
+          <span class="icon-emoji">{{ ch.type === 'kiro' ? '🔵' : '🟢' }}</span>
+          <span class="ch-id">{{ ch.id }}</span>
+          <WorldChip :variant="ch.type === 'kiro' ? 'info' : 'success'" size="sm">{{ ch.type }}</WorldChip>
+          <span class="ch-models">服务 {{ ch.models?.length || 0 }} 个模型</span>
+          <WorldChip v-if="!ch.enabled" variant="warning" size="sm">已禁用</WorldChip>
+        </div>
+      </div>
+    </WorldCard>
 
     <!-- Pool detail with progress -->
     <div class="pool-grid">
@@ -430,6 +463,32 @@ const proAvailable  = computed(() => stats.value.proPool?.available || 0)
 }
 @media (max-width: 920px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .stats-row { grid-template-columns: 1fr; } }
+
+.channel-grid-dash {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.channel-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--world-divider, rgba(255,255,255,0.06));
+  border-radius: 6px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+.channel-tile.disabled { opacity: 0.6; }
+.channel-tile .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.channel-tile .dot.ok { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+.channel-tile .dot.off { background: #94a3b8; }
+.channel-tile .icon-emoji { font-size: 1rem; }
+.channel-tile .ch-id { font-family: var(--world-font-mono, monospace); font-weight: 700; }
+.channel-tile .ch-models { color: var(--world-text-mute); font-size: 0.75rem; margin-left: auto; }
 
 .pool-grid {
   display: grid;

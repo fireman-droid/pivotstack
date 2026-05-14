@@ -195,6 +195,34 @@ type CostEntry struct {
 const FreeAccountCredits = 550.0 // fixed credits per FREE account
 const CNYPerUSDFace = 0.05       // $1 face value = ¥0.05 real CNY
 
+// ModelSellPrice 是按 token 计费的模型售价 + 成本（virtual$/1M token）。
+//
+// InputPerM / OutputPerM：售价 — 用于实际扣费（PreAuthorizeTokens / ReconcileTokenUsage）
+// CostInputPerM / CostOutputPerM：成本 — admin 追踪进货成本，用于利润率显示与对账
+//
+// 成本字段可选；为 0 表示未追踪（旧配置兼容）。计费逻辑只看售价，不读成本。
+type ModelSellPrice struct {
+	InputPerM      float64 `json:"inputPerM"`
+	OutputPerM     float64 `json:"outputPerM"`
+	CostInputPerM  float64 `json:"costInputPerM,omitempty"`
+	CostOutputPerM float64 `json:"costOutputPerM,omitempty"`
+}
+
+// ChannelConfig 是上游 API 渠道配置。BillingMode != "" 时由 ChannelRouter 路由请求。
+// channels 为空时回退到 legacy Kiro 路径（零破坏）。
+//
+// ModelPrices 是渠道内部售价 — 同一个 model 名从两个不同渠道接入时可以分别定价。
+// 查询优先级：channel.ModelPrices[model] → pricing.SellPrices[model]（全局兜底）→ ErrSellPriceMissing
+type ChannelConfig struct {
+	ID          string                    `json:"id"`
+	Type        string                    `json:"type"` // "kiro" | "openai"
+	BaseURL     string                    `json:"baseUrl,omitempty"`
+	APIKey      string                    `json:"apiKey,omitempty"` // 外部渠道 API key，admin 接口返回时必须 mask
+	Models      []string                  `json:"models"`
+	ModelPrices map[string]ModelSellPrice `json:"modelPrices,omitempty"` // v3：渠道内部售价（同 model 不同渠道可独立定价）
+	Enabled     bool                      `json:"enabled"`
+}
+
 // PricingConfig holds credit-based pricing.
 //
 // 模型级定价（v2，主路径）：
@@ -214,6 +242,9 @@ type PricingConfig struct {
 	// === 成本端（不变，定价端跟成本端独立）===
 	ProCostEntries  []CostEntry `json:"proCostEntries,omitempty"`
 	FreeCostEntries []CostEntry `json:"freeCostEntries,omitempty"`
+
+	// === Token 计费路径（与 credit 路径并行；BillingMode="token" 才生效）===
+	SellPrices map[string]ModelSellPrice `json:"sellPrices,omitempty"`
 
 	// === Deprecated v1 字段（保留 JSON 兼容；启动时 MigratePricingToModelLevel 自动迁移）===
 	FreePoolPriceUSD float64            `json:"freePoolPriceUSD,omitempty"` // 旧：FREE 池单价
@@ -418,6 +449,12 @@ type Config struct {
 	// Leaderboard configuration
 	LeaderboardEnabled   bool `json:"leaderboardEnabled,omitempty"`   // Whether to expose user-side leaderboard
 	LeaderboardFakeUsers int  `json:"leaderboardFakeUsers,omitempty"` // Number of synthetic entries mixed into user-side top (0 = disabled, max 30)
+
+	// === 渠道与计费模式（v3 新增；空值 = 走 legacy Kiro 路径，零破坏）===
+	// Channels 为空时 ChannelRouter.HasChannels() = false，handler 走老路；
+	// BillingMode="" 或 "legacy_credits" 走 credit 路径；"token" 走 SellPrices 路径。
+	Channels    []ChannelConfig `json:"channels,omitempty"`
+	BillingMode string          `json:"billingMode,omitempty"`
 }
 
 // GetLeaderboardConfig returns leaderboard settings (enabled, fakeUsers).
@@ -1699,6 +1736,113 @@ func RefundChildBalance(childKeyID string) (float64, error) {
 	cfg.ApiKeys[childIdx].Balance = 0
 	cfg.ApiKeys[childIdx].GiftBalance = 0
 	return refund, Save()
+}
+
+// ==================== Channels & BillingMode (v3) ====================
+
+// GetChannels 返回已配置渠道的线程安全副本。
+func GetChannels() []ChannelConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	out := make([]ChannelConfig, len(cfg.Channels))
+	for i, c := range cfg.Channels {
+		cp := c
+		if len(c.Models) > 0 {
+			cp.Models = append([]string{}, c.Models...)
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+// UpdateChannels 替换渠道列表（admin 接口用）。
+func UpdateChannels(channels []ChannelConfig) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.Channels = channels
+	return Save()
+}
+
+// GetBillingMode 返回当前计费模式（""/"legacy_credits"=旧路径，"token"=新路径）。
+func GetBillingMode() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	return cfg.BillingMode
+}
+
+// UpdateBillingMode 切换计费模式。
+func UpdateBillingMode(mode string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.BillingMode = mode
+	return Save()
+}
+
+// GetSellPrice 查全局售价（兜底用）。优先用 GetSellPriceForChannel。
+func GetSellPrice(model string) (ModelSellPrice, bool) {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	return lookupSellPriceLocked(cfg.Pricing.SellPrices, model)
+}
+
+// GetSellPriceForChannel 渠道感知的售价查找。
+//
+// 查询优先级：
+//  1. channel.ModelPrices[model]  ← 渠道独立定价（同 model 不同渠道可不同价）
+//  2. pricing.SellPrices[model]   ← 全局兜底
+//  3. ok=false → ErrSellPriceMissing（fail closed，防漏扣）
+//
+// channelID 为空时只查全局；用于 legacy path 或孤儿调用。
+func GetSellPriceForChannel(channelID, model string) (ModelSellPrice, bool) {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if channelID != "" {
+		for _, ch := range cfg.Channels {
+			if ch.ID != channelID {
+				continue
+			}
+			if price, ok := lookupSellPriceLocked(ch.ModelPrices, model); ok {
+				return price, true
+			}
+			break
+		}
+	}
+	return lookupSellPriceLocked(cfg.Pricing.SellPrices, model)
+}
+
+// lookupSellPriceLocked 在给定 map 里查 model 单价（'-/.' 互换、大小写不敏感、剥离 thinking 后缀）。
+// 调用方必须持有 cfgLock。
+func lookupSellPriceLocked(m map[string]ModelSellPrice, model string) (ModelSellPrice, bool) {
+	if len(m) == 0 || model == "" {
+		return ModelSellPrice{}, false
+	}
+	low := strings.ToLower(strings.TrimSpace(model))
+	if v, ok := m[low]; ok {
+		return v, true
+	}
+	target := normalizeSellPriceKey(low)
+	for k, v := range m {
+		if normalizeSellPriceKey(strings.ToLower(k)) == target {
+			return v, true
+		}
+	}
+	stripped := strings.TrimSuffix(strings.TrimSuffix(low, "-thinking"), "-think")
+	if stripped != low {
+		if v, ok := m[stripped]; ok {
+			return v, true
+		}
+		st := normalizeSellPriceKey(stripped)
+		for k, v := range m {
+			if normalizeSellPriceKey(strings.ToLower(k)) == st {
+				return v, true
+			}
+		}
+	}
+	return ModelSellPrice{}, false
+}
+
+func normalizeSellPriceKey(s string) string {
+	return strings.ReplaceAll(s, "-", ".")
 }
 
 // CleanupUsedCodes completely removes all voided/used activation codes from the storage.
