@@ -18,29 +18,69 @@ import (
 )
 
 // ==================== 管理 API ====================
-
+//
+// 鉴权模型（v2 之后）：
+//   - URL 显式拒绝 ?password=（旧版漏洞，无条件 401）
+//   - POST /login            → apiAdminLogin（不要 session；走 IP 速率限制）
+//   - GET  /sse/*            → 一次性 SSE token 验证（5min TTL，用过即焚）
+//   - 其余                    → 必须带 admin_session cookie；unsafe method 还要 X-CSRF-Token
+//
+// 旧的「明文密码 header / cookie / query」三路兜底已全部移除。
 func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
-	password := r.Header.Get("X-Admin-Password")
-	if password == "" {
-		cookie, _ := r.Cookie("admin_password")
-		if cookie != nil {
-			password = cookie.Value
-		}
-	}
-	// SSE EventSource 不支持自定义 Header/Cookie，支持 query 参数
-	if password == "" {
-		password = r.URL.Query().Get("password")
-	}
-
-	if password != config.GetPassword() {
-		w.WriteHeader(401)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Unauthorized"})
-		return
-	}
-
 	path := strings.TrimPrefix(r.URL.Path, "/admin/api")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
+	if r.URL.Query().Has("password") {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "password query is forbidden"})
+		return
+	}
+
+	// /login 不要求 session，但要过 IP 速率限制
+	if path == "/login" && r.Method == http.MethodPost {
+		h.apiAdminLogin(w, r)
+		return
+	}
+
+	// SSE 流：走一次性 token（/sse/token 自身仍走 session 分支）
+	if strings.HasPrefix(path, "/sse/") && path != "/sse/token" {
+		if !h.requireSSEToken(w, r, path) {
+			return
+		}
+		h.routeAdminAPI(path, w, r)
+		return
+	}
+
+	sess, ok := h.requireAdminSession(w, r)
+	if !ok {
+		return
+	}
+
+	if isUnsafeMethod(r.Method) && !h.validateAdminCSRF(r, sess) {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "CSRF token required"})
+		return
+	}
+
+	switch {
+	case path == "/session" && r.Method == http.MethodGet:
+		h.apiAdminSession(w, r, sess)
+		return
+	case path == "/logout" && r.Method == http.MethodPost:
+		h.apiAdminLogout(w, r, sess)
+		return
+	case path == "/password" && r.Method == http.MethodPost:
+		h.apiChangeAdminPassword(w, r, sess)
+		return
+	case path == "/sse/token" && r.Method == http.MethodPost:
+		h.apiCreateSSEToken(w, r, sess)
+		return
+	}
+
+	h.routeAdminAPI(path, w, r)
+}
+
+// routeAdminAPI 路由所有已鉴权的常规 admin endpoint。
+// 调用方负责确保鉴权 + CSRF 已通过。
+func (h *Handler) routeAdminAPI(path string, w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/accounts" && r.Method == "GET":
 		h.apiGetAccounts(w, r)
@@ -201,6 +241,139 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
 	}
+}
+
+// ==================== 新版鉴权 endpoint ====================
+
+// POST /admin/api/login
+// Body: { "password": "..." }
+// 200: { success, csrfToken, expiresAt }  + Set-Cookie admin_session
+// 401: { error, remainingAttempts }
+// 423: { error, locked, retryAfter }
+func (h *Handler) apiAdminLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if locked, retryAfter := h.adminSessions.limiter.IsLocked(ip); locked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+		writeJSONStatus(w, http.StatusLocked, map[string]interface{}{
+			"error":      "too many login failures, try later",
+			"locked":     true,
+			"retryAfter": int(retryAfter.Seconds()),
+		})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+
+	if !config.VerifyAdminPassword(req.Password) {
+		locked, retryAfter := h.adminSessions.limiter.RecordFailure(ip)
+		if locked {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+			writeJSONStatus(w, http.StatusLocked, map[string]interface{}{
+				"error":      "too many login failures, try later",
+				"locked":     true,
+				"retryAfter": int(retryAfter.Seconds()),
+			})
+			return
+		}
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]interface{}{
+			"error":             "invalid password",
+			"remainingAttempts": h.adminSessions.limiter.RemainingAttempts(ip),
+		})
+		return
+	}
+
+	h.adminSessions.limiter.RecordSuccess(ip)
+	sess, err := h.adminSessions.Create(w, r)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
+		return
+	}
+	writeJSONStatus(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"csrfToken": sess.CSRFToken,
+		"expiresAt": sess.ExpiresAt.Unix(),
+	})
+}
+
+// GET /admin/api/session - SPA 刷新页面时拿 csrfToken
+func (h *Handler) apiAdminSession(w http.ResponseWriter, _ *http.Request, sess *adminSession) {
+	writeJSONStatus(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"csrfToken": sess.CSRFToken,
+		"expiresAt": sess.ExpiresAt.Unix(),
+	})
+}
+
+// POST /admin/api/logout
+func (h *Handler) apiAdminLogout(w http.ResponseWriter, _ *http.Request, sess *adminSession) {
+	h.adminSessions.Invalidate(sess.TokenHash)
+	h.adminSessions.ClearCookie(w)
+	writeJSONStatus(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// POST /admin/api/password
+// Body: { "oldPassword": "...", "newPassword": "...", "confirmPassword": "..." }
+// 成功后所有 session 失效（踢出所有设备），客户端要重新登录
+func (h *Handler) apiChangeAdminPassword(w http.ResponseWriter, r *http.Request, _ *adminSession) {
+	if config.IsPasswordEnvOverride() {
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "password managed by ADMIN_PASSWORD env"})
+		return
+	}
+
+	var req struct {
+		OldPassword     string `json:"oldPassword"`
+		NewPassword     string `json:"newPassword"`
+		ConfirmPassword string `json:"confirmPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "passwords do not match"})
+		return
+	}
+	if len(req.NewPassword) < 12 {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "password too short (min 12 chars)"})
+		return
+	}
+	if err := config.ChangeAdminPassword(req.OldPassword, req.NewPassword); err != nil {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	h.adminSessions.InvalidateAll()
+	h.adminSessions.ClearCookie(w)
+	writeJSONStatus(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// POST /admin/api/sse/token
+// Body: { "stream": "stats" | "logs" }
+// 返回一次性 token（5min TTL），客户端拼到 EventSource URL：?sse_token=...
+func (h *Handler) apiCreateSSEToken(w http.ResponseWriter, r *http.Request, sess *adminSession) {
+	var req struct {
+		Stream string `json:"stream"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.Stream != "stats" && req.Stream != "logs" {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "stream must be stats or logs"})
+		return
+	}
+	token, err := h.adminSessions.NewSSEToken(sess.TokenHash, req.Stream, adminSSETokenTTL)
+	if err != nil {
+		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
+		return
+	}
+	writeJSONStatus(w, http.StatusOK, map[string]string{"token": token})
 }
 
 func (h *Handler) apiGetAccounts(w http.ResponseWriter, _ *http.Request) {
@@ -539,16 +712,21 @@ func (h *Handler) apiUpdateProfitIncludeGift(w http.ResponseWriter, r *http.Requ
 
 func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ApiKey        string `json:"apiKey"`
-		RequireApiKey bool   `json:"requireApiKey"`
-		Password      string `json:"password"`
+		ApiKey        string  `json:"apiKey"`
+		RequireApiKey bool    `json:"requireApiKey"`
+		Password      *string `json:"password,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
 		return
 	}
-	if err := config.UpdateSettings(req.ApiKey, req.RequireApiKey, req.Password); err != nil {
+	// 改密走专用 endpoint，settings 不再接受 password 字段（防 admin 通过 /settings 改密码绕过 旧密码校验）
+	if req.Password != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "use POST /admin/api/password to change admin password"})
+		return
+	}
+	if err := config.UpdateSettings(req.ApiKey, req.RequireApiKey); err != nil {
 		w.WriteHeader(500)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return

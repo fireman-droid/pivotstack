@@ -59,6 +59,8 @@ type Handler struct {
 	creditPredictor     *CreditPredictor
 	proCreditPredictor  *CreditPredictor
 	freeCreditPredictor *CreditPredictor
+	// Admin auth 运行时状态：session/csrf/sse-token/login-limiter 集中管理
+	adminSessions *adminSessionStore
 }
 
 type contextKeyType string
@@ -190,6 +192,7 @@ func NewHandler() *Handler {
 		creditPredictor:     newCreditPredictor(200, 0.3),
 		proCreditPredictor:  newCreditPredictor(200, 0.3),
 		freeCreditPredictor: newCreditPredictor(200, 0.3),
+		adminSessions:       newAdminSessionStore(),
 	}
 	// 从磁盘恢复历史日志和 CreditPredictor
 	h.loadLogsFromDisk()
@@ -199,6 +202,8 @@ func NewHandler() *Handler {
 	go h.backgroundRefresh()
 	// 启动后台统计保存 (每5分钟批量写入)
 	go h.backgroundStatsSaver()
+	// 启动 admin session / SSE token / login limiter 后台清理
+	go h.adminSessions.StartCleanup(context.Background())
 	return h
 }
 
@@ -347,7 +352,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, anthropic-version, anthropic-beta, x-api-key, x-stainless-os, x-stainless-lang, x-stainless-package-version, x-stainless-runtime, x-stainless-runtime-version, x-stainless-arch")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, X-CSRF-Token, anthropic-version, anthropic-beta, x-api-key, x-stainless-os, x-stainless-lang, x-stainless-package-version, x-stainless-runtime, x-stainless-runtime-version, x-stainless-arch")
 	w.Header().Set("Access-Control-Expose-Headers", "x-request-id, x-ratelimit-limit-requests, x-ratelimit-limit-tokens, x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens, x-ratelimit-reset-requests, x-ratelimit-reset-tokens")
 
 	if r.Method == "OPTIONS" {

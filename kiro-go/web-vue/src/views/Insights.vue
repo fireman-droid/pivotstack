@@ -2,7 +2,6 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api/admin'
-import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
 import {
   BarChart3, RefreshCw, TrendingUp, Users, Calendar, Crown,
@@ -20,12 +19,9 @@ import WorldDatePicker from '../components/world/WorldDatePicker.vue'
 import WorldCheckbox from '../components/world/WorldCheckbox.vue'
 import WorldModal from '../components/world/WorldModal.vue'
 
-const auth = useAuthStore()
 const { success } = useToast()
 const route = useRoute()
 const router = useRouter()
-const headers = () => ({ 'X-Admin-Password': auth.password })
-const adminHeaders = () => ({ 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' })
 
 // === Tab：3 个新 tab + 旧 hash 兼容 ===
 const tabOptions = [
@@ -78,25 +74,21 @@ async function fetchProfit() {
       period: profitPeriod.value,
       include_gift: String(profitIncludeGift.value),
     })
-    const res = await fetch('/admin/api/profit?' + qs.toString(), { headers: adminHeaders() })
-    if (res.ok) profit.value = await res.json()
+    const res = await api('/profit?' + qs.toString())
+    profit.value = await res.json()
   } catch (e) { console.error('fetchProfit failed:', e) }
 }
 async function loadProfitIncludeGiftPref() {
   try {
-    const res = await fetch('/admin/api/settings', { headers: adminHeaders() })
-    if (res.ok) {
-      const d = await res.json()
-      if (typeof d.profitIncludeGift === 'boolean') profitIncludeGift.value = d.profitIncludeGift
-    }
+    const res = await api('/settings')
+    const d = await res.json()
+    if (typeof d.profitIncludeGift === 'boolean') profitIncludeGift.value = d.profitIncludeGift
   } catch {}
 }
 async function toggleIncludeGift(v) {
   profitIncludeGift.value = v
   try {
-    await fetch('/admin/api/profit-include-gift', {
-      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ value: v }),
-    })
+    await api('/profit-include-gift', { method: 'POST', body: JSON.stringify({ value: v }) })
   } catch {}
   fetchProfit()
 }
@@ -107,16 +99,11 @@ async function submitPurchase() {
   try {
     const entry = { count: purchaseForm.value.count, costCNY: purchaseForm.value.costCNY, note: purchaseForm.value.note }
     if (purchaseForm.value.pool === 'pro') entry.credits = purchaseForm.value.credits
-    const res = await fetch('/admin/api/cost-entry', {
-      method: 'POST', headers: adminHeaders(),
-      body: JSON.stringify({ pool: purchaseForm.value.pool, entry }),
-    })
-    if (res.ok) {
-      success('采购已入账')
-      showPurchaseModal.value = false
-      purchaseForm.value = { pool: 'pro', count: 1, costCNY: 0, credits: 1500, note: '' }
-      fetchProfit()
-    }
+    await api('/cost-entry', { method: 'POST', body: JSON.stringify({ pool: purchaseForm.value.pool, entry }) })
+    success('采购已入账')
+    showPurchaseModal.value = false
+    purchaseForm.value = { pool: 'pro', count: 1, costCNY: 0, credits: 1500, note: '' }
+    fetchProfit()
   } catch (e) { console.error(e) }
   savingPurchase.value = false
 }
@@ -127,8 +114,8 @@ const dailyData = ref(null)
 const dailyExpanded = ref(false)
 async function fetchDaily() {
   try {
-    const res = await fetch(`/admin/api/insights/daily?date=${dailyDate.value}`, { headers: headers() })
-    if (res.ok) dailyData.value = await res.json()
+    const res = await api(`/insights/daily?date=${dailyDate.value}`)
+    dailyData.value = await res.json()
   } catch (e) { console.error(e) }
 }
 
@@ -144,17 +131,15 @@ const whaleMetricOptions = [
 ]
 async function fetchFunnel() {
   try {
-    const res = await fetch('/admin/api/insights/funnel', { headers: headers() })
-    if (res.ok) funnel.value = await res.json()
+    const res = await api('/insights/funnel')
+    funnel.value = await res.json()
   } catch (e) { console.error(e) }
 }
 async function fetchWhales() {
   try {
-    const res = await fetch(`/admin/api/insights/whales?metric=${whaleMetric.value}&limit=20&days=${whaleDays.value}`, { headers: headers() })
-    if (res.ok) {
-      const data = await res.json()
-      whales.value = data.rows || []
-    }
+    const res = await api(`/insights/whales?metric=${whaleMetric.value}&limit=20&days=${whaleDays.value}`)
+    const data = await res.json()
+    whales.value = data.rows || []
   } catch (e) { console.error(e) }
 }
 
@@ -196,13 +181,13 @@ const freeloaderSince = ref('')
 const freeloaderMinCalls = ref(5)
 async function fetchFreeloaders() {
   try {
-    let url = `/admin/api/insights/freeloaders?min_calls=${freeloaderMinCalls.value}`
+    let path = `/insights/freeloaders?min_calls=${freeloaderMinCalls.value}`
     if (freeloaderSince.value) {
       const ts = Math.floor(new Date(freeloaderSince.value).getTime() / 1000)
-      if (ts > 0) url += `&since=${ts}`
+      if (ts > 0) path += `&since=${ts}`
     }
-    const res = await fetch(url, { headers: headers() })
-    if (res.ok) {
+    const res = await api(path)
+    {
       const data = await res.json()
       freeloaders.value = data.rows || []
       if (data.since && !freeloaderSince.value) {

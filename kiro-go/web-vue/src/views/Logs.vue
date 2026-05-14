@@ -40,9 +40,19 @@ watch([statusFilter, keyFilter, currentPage], ([s, k, p]) => {
   router.replace({ query: q }).catch(() => {})
 })
 
-function connectSSE() {
-  const password = localStorage.getItem('admin_password') || ''
-  const url = `${location.origin}/admin/api/sse/logs?password=${encodeURIComponent(password)}`
+async function connectSSE() {
+  if (eventSource) { eventSource.close(); eventSource = null }
+  // 一次性 SSE token（5min TTL）。URL 不再含任何长期凭证。
+  let token
+  try {
+    const res = await api('/sse/token', { method: 'POST', body: JSON.stringify({ stream: 'logs' }) })
+    const data = await res.json()
+    token = data.token
+  } catch {
+    setTimeout(() => connectSSE(), 5000)
+    return
+  }
+  const url = `${location.origin}/admin/api/sse/logs?sse_token=${encodeURIComponent(token)}`
   eventSource = new EventSource(url)
   eventSource.addEventListener('log', (e) => {
     try {

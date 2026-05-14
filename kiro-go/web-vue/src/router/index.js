@@ -59,7 +59,8 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   if (to.meta.auth) {
     const auth = useAuthStore()
-    if (!auth.password) return '/login'
+    const ok = await auth.ensureSession()
+    if (!ok) return '/login'
   }
   if (to.meta.userAuth || to.matched.some(r => r.meta.userAuth)) {
     const apiKey = localStorage.getItem('user_api_key') || sessionStorage.getItem('user_api_key')

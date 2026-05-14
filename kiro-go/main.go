@@ -42,9 +42,11 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// 环境变量覆盖密码
+	// 环境变量覆盖密码（容器化部署常用；不写盘，仅存内存 hash）
 	if envPassword := os.Getenv("ADMIN_PASSWORD"); envPassword != "" {
-		config.SetPassword(envPassword)
+		if err := config.SetPassword(envPassword); err != nil {
+			log.Fatalf("invalid ADMIN_PASSWORD: %v", err)
+		}
 	}
 
 	// 注入 supportedModels 表（迁移函数和 fallback 路由要用），必须在 MaybeMigratePricing 之前

@@ -1,11 +1,11 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useUserAuth } from '../stores/userAuth'
 import { useWorldTheme } from '../stores/worldTheme'
 import WorldCard from '../components/world/WorldCard.vue'
-import WorldInput from '../components/world/WorldInput.vue'
+import WorldPasswordInput from '../components/world/WorldPasswordInput.vue'
 import WorldButton from '../components/world/WorldButton.vue'
 import WorldChip from '../components/world/WorldChip.vue'
 import WorldSwitcher from '../components/WorldSwitcher.vue'
@@ -19,23 +19,62 @@ const input = ref('')
 const error = ref('')
 const loading = ref(false)
 
+// 锁定 / 失败次数提示（来自后端 admin login 限流返回）
+const lockedUntil = ref(0)       // 时间戳 ms；0 表示未锁
+const tickNow = ref(Date.now())
+const remainingAttempts = ref(null)
+const lockCountdown = computed(() => {
+  if (!lockedUntil.value) return 0
+  return Math.max(0, Math.ceil((lockedUntil.value - tickNow.value) / 1000))
+})
+let tickTimer = null
+function startTick() {
+  if (tickTimer) return
+  tickTimer = setInterval(() => {
+    tickNow.value = Date.now()
+    if (lockCountdown.value <= 0) {
+      lockedUntil.value = 0
+      clearInterval(tickTimer)
+      tickTimer = null
+    }
+  }, 500)
+}
+onUnmounted(() => { if (tickTimer) clearInterval(tickTimer) })
+
 async function handleLogin() {
   if (!input.value.trim() || loading.value) return
+  if (lockedUntil.value && Date.now() < lockedUntil.value) return
   loading.value = true
   error.value = ''
   const val = input.value.trim()
 
+  // 先尝试用户 key（短路返回）
   try {
     const userOk = await userAuth.login(val, true)
     if (userOk) { router.push('/user/dashboard'); return }
   } catch {}
 
+  // 再尝试 admin 登录
+  let adminRes
   try {
-    const adminOk = await auth.login(val)
-    if (adminOk) { router.push('/'); return }
-  } catch {}
+    adminRes = await auth.login(val)
+  } catch {
+    adminRes = { ok: false, error: '凭证无效' }
+  }
+  if (adminRes && adminRes.ok) { router.push('/'); return }
 
-  error.value = '凭证无效'
+  // 失败分类提示
+  if (adminRes && adminRes.locked) {
+    const sec = Number(adminRes.retryAfter || 600)
+    lockedUntil.value = Date.now() + sec * 1000
+    startTick()
+    error.value = `登录已锁定，请在 ${sec} 秒后重试`
+  } else if (adminRes && typeof adminRes.remainingAttempts === 'number') {
+    remainingAttempts.value = adminRes.remainingAttempts
+    error.value = `凭证无效（剩余 ${adminRes.remainingAttempts} 次后将被锁定）`
+  } else {
+    error.value = (adminRes && adminRes.error) || '凭证无效'
+  }
   userAuth.logout()
   loading.value = false
 }
@@ -88,12 +127,10 @@ async function handleLogin() {
         </div>
 
         <form @submit.prevent="handleLogin" class="login-form">
-          <WorldInput
+          <WorldPasswordInput
             v-model="input"
-            type="password"
             label="凭证 / Credential"
             placeholder="请输入访问凭证"
-            :monospace="true"
             size="lg"
             :error="error || ''"
             @enter="handleLogin"
@@ -104,10 +141,12 @@ async function handleLogin() {
             variant="primary"
             size="lg"
             :loading="loading"
+            :disabled="lockCountdown > 0"
             :block="true"
           >
-            <span>{{ loading ? '验证中' : '登录' }}</span>
-            <ArrowRight v-if="!loading" :size="16" />
+            <span v-if="lockCountdown > 0">已锁定 · {{ lockCountdown }}s</span>
+            <span v-else>{{ loading ? '验证中' : '登录' }}</span>
+            <ArrowRight v-if="!loading && lockCountdown === 0" :size="16" />
           </WorldButton>
         </form>
 
