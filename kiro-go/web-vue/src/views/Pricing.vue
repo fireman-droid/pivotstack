@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useAuthStore } from '../stores/auth'
+import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import {
   Save, Plus, Trash2, AlertTriangle
@@ -15,9 +15,7 @@ import WorldSelect from '../components/world/WorldSelect.vue'
 import WorldDatePicker from '../components/world/WorldDatePicker.vue'
 import WorldCheckbox from '../components/world/WorldCheckbox.vue'
 
-const auth = useAuthStore()
 const { success, error: toastErr } = useToast()
-const headers = () => ({ 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' })
 
 const tab = ref('config')
 const tabOptions = [
@@ -347,9 +345,9 @@ let timer = null
 async function fetchAll() {
   try {
     const [p3, p4, p5] = await Promise.all([
-      fetch('/admin/api/apikeys',   { headers: headers() }),
-      fetch('/admin/api/pricing',   { headers: headers() }),
-      fetch('/admin/api/promotion', { headers: headers() }),
+      api('/apikeys'),
+      api('/pricing'),
+      api('/promotion'),
     ])
     if (p5.ok) {
       const pd = await p5.json()
@@ -400,13 +398,9 @@ async function savePromotion() {
   if (promotion.value.enabled && !confirm('确认启用活动门槛？\n\n开启后符合资格（白名单 / 充值 / 活跃度）的 key 将享受活动价。请确认价格和门槛设置无误。')) return
   savingPromo.value = true
   try {
-    const res = await fetch('/admin/api/promotion', {
-      method: 'PUT',
-      headers: headers(),
-      body: JSON.stringify(promotion.value),
-    })
-    if (res.ok) { success('活动配置已保存'); fetchAll() }
-    else toastErr('保存失败')
+    await api('/promotion', { method: 'PUT', body: JSON.stringify(promotion.value) })
+    success('活动配置已保存')
+    fetchAll()
   } catch { toastErr('网络错误') }
   savingPromo.value = false
 }
@@ -415,25 +409,19 @@ async function addWhitelist() {
   const kid = (newWhitelistKeyID.value || '').trim()
   if (!kid) return
   try {
-    const res = await fetch('/admin/api/promotion/whitelist', {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({ keyID: kid }),
-    })
-    if (res.ok) { success('已加入白名单'); newWhitelistKeyID.value = ''; fetchAll() }
-    else toastErr('添加失败')
+    await api('/promotion/whitelist', { method: 'POST', body: JSON.stringify({ keyID: kid }) })
+    success('已加入白名单')
+    newWhitelistKeyID.value = ''
+    fetchAll()
   } catch { toastErr('网络错误') }
 }
 
 async function removeWhitelist(kid) {
   if (!confirm(`确认从白名单移除 ${kid.slice(0, 8)}？`)) return
   try {
-    const res = await fetch(`/admin/api/promotion/whitelist/${kid}`, {
-      method: 'DELETE',
-      headers: headers(),
-    })
-    if (res.ok) { success('已移除'); fetchAll() }
-    else toastErr('删除失败')
+    await api(`/promotion/whitelist/${kid}`, { method: 'DELETE' })
+    success('已移除')
+    fetchAll()
   } catch { toastErr('网络错误') }
 }
 
@@ -441,11 +429,9 @@ async function savePricing() {
   if (!pricing.value) return
   saving.value = true
   try {
-    const res = await fetch('/admin/api/pricing', {
-      method: 'PUT', headers: headers(), body: JSON.stringify(pricing.value),
-    })
-    if (res.ok) { success('定价已保存'); fetchAll() }
-    else toastErr('保存失败')
+    await api('/pricing', { method: 'PUT', body: JSON.stringify(pricing.value) })
+    success('定价已保存')
+    fetchAll()
   } catch { toastErr('网络错误') }
   saving.value = false
 }

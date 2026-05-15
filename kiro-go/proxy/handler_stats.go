@@ -1007,12 +1007,19 @@ func (h *Handler) handleSSELogs(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	// 持续监听
+	// 持续监听 + 定时校验 session 有效性（改密时 InvalidateAll 后这里要主动断开）
 	ctx := r.Context()
+	sessionHash := adminSessionHashFromCtx(ctx)
+	sessionCheck := time.NewTicker(15 * time.Second)
+	defer sessionCheck.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-sessionCheck.C:
+			if sessionHash != "" && !h.adminSessions.IsValid(sessionHash) {
+				return // session 被踢出，主动关闭 SSE
+			}
 		case entry := <-ch:
 			data, _ := json.Marshal(entry)
 			fmt.Fprintf(w, "event: log\ndata: %s\n\n", string(data))
@@ -1066,10 +1073,17 @@ func (h *Handler) handleSSEStats(w http.ResponseWriter, r *http.Request) {
 	// 立即发送一次
 	sendStats()
 
+	sessionHash := adminSessionHashFromCtx(ctx)
+	sessionCheck := time.NewTicker(15 * time.Second)
+	defer sessionCheck.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-sessionCheck.C:
+			if sessionHash != "" && !h.adminSessions.IsValid(sessionHash) {
+				return // session 被踢出，主动关闭 SSE
+			}
 		case <-ticker.C:
 			sendStats()
 		}

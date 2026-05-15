@@ -1,14 +1,18 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api/admin'
+import { useAuthStore } from '../stores/auth'
 import { useToast } from '../composables/useToast'
+import { usePasswordStrength } from '../composables/usePasswordStrength'
 import {
-  Key, Wand2, ShieldAlert, Lock, Cpu, Route, Save, Zap,
+  Key, Wand2, ShieldAlert, Lock, Cpu, Route, Save, Zap, Check, X, Copy, Shield,
   RefreshCw, FileX, DollarSign, XCircle, Trophy, Gift
 } from 'lucide-vue-next'
 import WorldCard from '../components/world/WorldCard.vue'
 import WorldButton from '../components/world/WorldButton.vue'
 import WorldInput from '../components/world/WorldInput.vue'
+import WorldPasswordInput from '../components/world/WorldPasswordInput.vue'
 import WorldSegment from '../components/world/WorldSegment.vue'
 import WorldSelect from '../components/world/WorldSelect.vue'
 import WorldModal from '../components/world/WorldModal.vue'
@@ -31,6 +35,7 @@ const endpointOptions = [
 ]
 
 const { success, error } = useToast()
+const router = useRouter()
 
 const requireApiKey = ref(false)
 const apiKey = ref('')
@@ -38,7 +43,17 @@ const thinkingSuffix = ref('-thinking')
 const openaiFormat = ref('reasoning_content')
 const claudeFormat = ref('thinking')
 const preferredEndpoint = ref('auto')
-const newPassword = ref('')
+// === 修改密码表单（v2：旧密码 + 新密码 + 确认 + 强度 + 生成器） ===
+const pwdForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const pwdErrors = ref({ old: '', confirm: '' })
+const pwdCopied = ref(false)
+const { strength, rules, strengthText, strengthColor, canSubmit: pwdStrengthOK } =
+  usePasswordStrength(computed(() => pwdForm.value.newPassword))
+const canSubmitPwd = computed(() =>
+  pwdForm.value.oldPassword.length > 0 &&
+  pwdStrengthOK.value &&
+  pwdForm.value.newPassword === pwdForm.value.confirmPassword
+)
 const maxConcurrentPerKey = ref(20)
 const maxInFlightPerAccountFree = ref(50)
 const maxInFlightPerAccountPro = ref(50)
@@ -184,19 +199,68 @@ async function saveConcurrency() {
   loading.value.concurrency = false
 }
 
+function generateStrongPassword() {
+  // 20 位密码字符集（排除易混的 0/O/1/l/I）
+  const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
+  const len = 20
+  const arr = new Uint32Array(len)
+  crypto.getRandomValues(arr)
+  const out = Array.from(arr, x => charset[x % charset.length]).join('')
+  pwdForm.value.newPassword = out
+  pwdForm.value.confirmPassword = out
+  success('已生成 20 位强密码，建议立即复制保存')
+}
+
+async function copyNewPassword() {
+  if (!pwdForm.value.newPassword) return
+  try {
+    await navigator.clipboard.writeText(pwdForm.value.newPassword)
+    pwdCopied.value = true
+    success('已复制，2 秒后将清空剪贴板')
+    setTimeout(() => {
+      pwdCopied.value = false
+      navigator.clipboard.writeText('').catch(() => {})
+    }, 2000)
+  } catch {
+    error('复制失败，请手动复制')
+  }
+}
+
 async function changePassword() {
-  if (!newPassword.value) return error('请输入新密码')
+  pwdErrors.value = { old: '', confirm: '' }
+  if (!pwdForm.value.oldPassword) {
+    pwdErrors.value.old = '请输入当前密码'
+    return
+  }
+  if (pwdForm.value.newPassword !== pwdForm.value.confirmPassword) {
+    pwdErrors.value.confirm = '两次输入的新密码不一致'
+    return
+  }
+  if (!pwdStrengthOK.value) {
+    return error('新密码强度不足（长度需 ≥ 12 且达到「中」强度以上）')
+  }
   loading.value.pwd = true
-  const res = await api('/settings', { method: 'POST', body: JSON.stringify({ password: newPassword.value }) })
-  if (res.ok) {
-    const { useAuthStore } = await import('../stores/auth')
+  try {
+    await api('/password', { method: 'POST', body: JSON.stringify({
+      oldPassword: pwdForm.value.oldPassword,
+      newPassword: pwdForm.value.newPassword,
+      confirmPassword: pwdForm.value.confirmPassword,
+    }) })
+    success('密码已修改，所有设备需要重新登录')
+    pwdForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
     const auth = useAuthStore()
-    auth.password = newPassword.value
-    localStorage.setItem('admin_password', newPassword.value)
-    newPassword.value = ''
-    success('密码已修改')
-  } else error('修改失败')
-  loading.value.pwd = false
+    auth.clearLocal()
+    setTimeout(() => router.push('/login'), 1200)
+  } catch (e) {
+    const msg = e && e.message ? e.message : '修改失败'
+    if (msg.includes('invalid old')) {
+      pwdErrors.value.old = '当前密码不正确'
+    } else {
+      error(msg)
+    }
+  } finally {
+    loading.value.pwd = false
+  }
 }
 
 async function resetStats() {
@@ -283,11 +347,70 @@ async function clearFlag(keyId) {
       <WorldCard padding="lg">
         <header class="section-head">
           <h3><Lock :size="16" /><span>修改管理密码</span></h3>
+          <p class="section-hint">改密成功后会强制所有设备重新登录</p>
         </header>
-        <div class="row-block">
-          <WorldInput v-model="newPassword" type="password" label="新密码" placeholder="输入新访问密码" />
-          <div class="row-actions">
-            <WorldButton variant="primary" :loading="loading.pwd" @click="changePassword">
+
+        <div class="pwd-form">
+          <WorldPasswordInput
+            v-model="pwdForm.oldPassword"
+            label="当前密码"
+            placeholder="请输入当前密码"
+            :error="pwdErrors.old"
+          />
+
+          <WorldPasswordInput
+            v-model="pwdForm.newPassword"
+            label="新密码"
+            placeholder="至少 12 位，建议混合大小写 / 数字 / 特殊符号"
+          />
+
+          <div class="pwd-strength" aria-live="polite">
+            <div class="strength-bars">
+              <div
+                v-for="i in 5"
+                :key="i"
+                class="seg"
+                :class="{ active: strength >= i }"
+                :style="strength >= i ? { background: strengthColor } : {}"
+              />
+            </div>
+            <span class="strength-label" :style="{ color: strengthColor }">{{ strengthText }}</span>
+          </div>
+
+          <ul class="pwd-rules">
+            <li v-for="rule in rules" :key="rule.label" :class="{ ok: rule.met }">
+              <Check v-if="rule.met" :size="12" /><X v-else :size="12" />
+              <span>{{ rule.label }}</span>
+            </li>
+          </ul>
+
+          <WorldPasswordInput
+            v-model="pwdForm.confirmPassword"
+            label="确认新密码"
+            placeholder="再次输入新密码"
+            :error="pwdErrors.confirm"
+          />
+
+          <div class="pwd-actions">
+            <WorldButton variant="secondary" size="sm" @click="generateStrongPassword">
+              <Shield :size="14" /><span>生成 20 位强密码</span>
+            </WorldButton>
+            <WorldButton
+              variant="secondary"
+              size="sm"
+              :disabled="!pwdForm.newPassword"
+              @click="copyNewPassword"
+            >
+              <Check v-if="pwdCopied" :size="14" />
+              <Copy v-else :size="14" />
+              <span>{{ pwdCopied ? '已复制' : '复制新密码' }}</span>
+            </WorldButton>
+            <WorldButton
+              variant="primary"
+              :loading="loading.pwd"
+              :disabled="!canSubmitPwd"
+              @click="changePassword"
+            >
               <Save :size="14" /><span>确认重置密码</span>
             </WorldButton>
           </div>
@@ -707,4 +830,70 @@ async function clearFlag(keyId) {
   line-height: 1.6;
 }
 .modal-warn strong { color: var(--world-error); }
+
+/* === 修改密码块 === */
+.section-hint {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  color: var(--world-text-mute, #94a3b8);
+}
+.pwd-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pwd-strength {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: -6px;
+}
+.strength-bars {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.strength-bars .seg {
+  height: 4px;
+  flex: 1;
+  background: var(--world-divider, rgba(148, 163, 184, 0.2));
+  border-radius: 2px;
+  transition: background 220ms;
+}
+.strength-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  min-width: 36px;
+  text-align: right;
+}
+.pwd-rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+}
+.pwd-rules li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--world-text-mute, #94a3b8);
+}
+.pwd-rules li.ok {
+  color: var(--world-success, #10b981);
+  font-weight: 600;
+}
+.pwd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+@media (max-width: 520px) {
+  .pwd-rules { grid-template-columns: 1fr; }
+  .pwd-actions { justify-content: stretch; }
+  .pwd-actions > * { flex: 1 1 100%; }
+}
 </style>

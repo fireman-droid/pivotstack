@@ -29,7 +29,9 @@ const wrapClasses = computed(() => [
   <div class="world-field" :class="wrapClasses">
     <label v-if="label" class="field-label">{{ label }}</label>
     <div class="field-wrap">
-      <span v-if="prefix" class="affix prefix">{{ prefix }}</span>
+      <span v-if="prefix || $slots.prefix" class="affix prefix">
+        <slot name="prefix">{{ prefix }}</slot>
+      </span>
       <input
         :value="modelValue"
         :placeholder="placeholder"
@@ -42,7 +44,9 @@ const wrapClasses = computed(() => [
         @focus="$emit('focus', $event)"
         @keydown="onKeydown"
       />
-      <span v-if="suffix" class="affix suffix">{{ suffix }}</span>
+      <span v-if="suffix || $slots.append" class="affix suffix">
+        <slot name="append">{{ suffix }}</slot>
+      </span>
     </div>
     <div v-if="error" class="field-msg error">{{ error }}</div>
     <div v-else-if="hint" class="field-msg hint">{{ hint }}</div>

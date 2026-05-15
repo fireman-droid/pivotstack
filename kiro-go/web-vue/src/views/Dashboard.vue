@@ -150,11 +150,28 @@ function processStats(newStats) {
 
 let sseSource = null
 let pollTimer = null
+let sseRetryDelay = 3000  // 指数退避起始，遇错翻倍，最大 30s
 
-function connectStatsSSE() {
-  const password = localStorage.getItem('admin_password') || ''
-  const url = `${location.origin}/admin/api/sse/stats?password=${encodeURIComponent(password)}`
+async function connectStatsSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null }
+  // 一次性 SSE token（5min TTL，用过即焚）。URL 不再泄露任何长期凭证。
+  let token
+  try {
+    const res = await api('/sse/token', { method: 'POST', body: JSON.stringify({ stream: 'stats' }) })
+    const data = await res.json()
+    token = data.token
+  } catch {
+    // session 失效或网络问题：降级到轮询 + 指数退避重连
+    loadStats()
+    if (!pollTimer) pollTimer = setInterval(loadStats, 5000)
+    const delay = sseRetryDelay
+    sseRetryDelay = Math.min(sseRetryDelay * 2, 30000)
+    setTimeout(() => { if (!destroyed) connectStatsSSE() }, delay)
+    return
+  }
+  const url = `${location.origin}/admin/api/sse/stats?sse_token=${encodeURIComponent(token)}`
   sseSource = new EventSource(url)
+  sseSource.addEventListener('open', () => { sseRetryDelay = 3000 }) // 成功重置退避
   sseSource.addEventListener('stats', (e) => {
     try { processStats(JSON.parse(e.data)) } catch {}
   })
@@ -162,13 +179,15 @@ function connectStatsSSE() {
     sseSource.close(); sseSource = null
     loadStats()
     if (!pollTimer) pollTimer = setInterval(loadStats, 5000)
+    const delay = sseRetryDelay
+    sseRetryDelay = Math.min(sseRetryDelay * 2, 30000)
     setTimeout(() => {
       if (destroyed) return
       if (!sseSource) {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
         connectStatsSSE()
       }
-    }, 5000)
+    }, delay)
   }
 }
 

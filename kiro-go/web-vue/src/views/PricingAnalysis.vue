@@ -1,10 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useAuthStore } from '../stores/auth'
+import { api } from '../api/admin'
 import { DollarSign, TrendingUp, BarChart3, Activity, Zap, Clock, Users, Save, AlertTriangle, Plus, Trash2 } from 'lucide-vue-next'
-
-const auth = useAuthStore()
-const headers = () => ({ 'X-Admin-Password': auth.password, 'Content-Type': 'application/json' })
 
 // ====== Data ======
 const profit = ref(null)
@@ -26,15 +23,15 @@ const freeForm = ref({ count: 100, costCNY: 9 })
 async function fetchAll() {
   try {
     const [profitRes, analysisRes, keysRes, pricingRes] = await Promise.all([
-      fetch('/admin/api/profit', { headers: headers() }),
-      fetch('/admin/api/pricing-analysis', { headers: headers() }),
-      fetch('/admin/api/apikeys', { headers: headers() }),
-      fetch('/admin/api/pricing', { headers: headers() }),
+      api('/profit'),
+      api('/pricing-analysis'),
+      api('/apikeys'),
+      api('/pricing'),
     ])
-    if (profitRes.ok) profit.value = await profitRes.json()
-    if (analysisRes.ok) analysis.value = await analysisRes.json()
-    if (keysRes.ok) keys.value = await keysRes.json()
-    if (pricingRes.ok) pricing.value = await pricingRes.json()
+    profit.value = await profitRes.json()
+    analysis.value = await analysisRes.json()
+    keys.value = await keysRes.json()
+    pricing.value = await pricingRes.json()
   } catch (e) { console.error('fetch error:', e) }
   finally { loading.value = false }
 }
@@ -47,12 +44,9 @@ async function savePricing() {
   if (!pricing.value) return
   saving.value = true; saveMsg.value = ''
   try {
-    const res = await fetch('/admin/api/pricing', {
-      method: 'PUT', headers: headers(),
-      body: JSON.stringify(pricing.value)
-    })
-    saveMsg.value = res.ok ? '✅ 已保存' : '❌ 保存失败'
-    if (res.ok) fetchAll()
+    await api('/pricing', { method: 'PUT', body: JSON.stringify(pricing.value) })
+    saveMsg.value = '✅ 已保存'
+    fetchAll()
   } catch { saveMsg.value = '❌ 网络错误' }
   saving.value = false
   setTimeout(() => saveMsg.value = '', 3000)
@@ -64,23 +58,19 @@ async function addCostEntry(pool) {
   const entry = pool === 'pro'
     ? { count: form.count, costCNY: form.costCNY, credits: form.credits }
     : { count: form.count, costCNY: form.costCNY }
-  const res = await fetch('/admin/api/cost-entry', {
-    method: 'POST', headers: headers(),
-    body: JSON.stringify({ pool, entry })
-  })
-  if (res.ok) {
+  try {
+    await api('/cost-entry', { method: 'POST', body: JSON.stringify({ pool, entry }) })
     fetchAll()
     if (pool === 'pro') showProForm.value = false
     else showFreeForm.value = false
-  }
+  } catch (e) { console.error(e) }
 }
 
 async function removeCostEntry(pool, id) {
-  const res = await fetch('/admin/api/cost-entry', {
-    method: 'DELETE', headers: headers(),
-    body: JSON.stringify({ pool, id })
-  })
-  if (res.ok) fetchAll()
+  try {
+    await api('/cost-entry', { method: 'DELETE', body: JSON.stringify({ pool, id }) })
+    fetchAll()
+  } catch (e) { console.error(e) }
 }
 
 // ====== Computed: cost summaries ======

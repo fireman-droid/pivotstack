@@ -157,12 +157,19 @@ async function submitImport() {
   }, 200)
 
   try {
+    // batch-import 需要流式响应，无法用 api() wrapper 包（wrapper 在 !res.ok 时直接 throw 吃掉 body）
+    // 所以这里手写 fetch，但鉴权改成 cookie + CSRF（跟 api wrapper 同一套口径）
     const auth = (await import('../stores/auth')).useAuthStore()
     const res = await fetch('/admin/api/auth/credentials/batch', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': auth.password },
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': auth.csrfToken,
+      },
       body: JSON.stringify({ accounts, concurrency: 20 }),
     })
+    if (res.status === 401) auth.clearLocal()
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
     const reader = res.body.getReader()
