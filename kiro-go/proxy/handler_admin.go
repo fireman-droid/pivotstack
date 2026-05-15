@@ -314,9 +314,9 @@ func (h *Handler) apiAdminSession(w http.ResponseWriter, _ *http.Request, sess *
 }
 
 // POST /admin/api/logout
-func (h *Handler) apiAdminLogout(w http.ResponseWriter, _ *http.Request, sess *adminSession) {
+func (h *Handler) apiAdminLogout(w http.ResponseWriter, r *http.Request, sess *adminSession) {
 	h.adminSessions.Invalidate(sess.TokenHash)
-	h.adminSessions.ClearCookie(w)
+	h.adminSessions.ClearCookie(w, r)
 	writeJSONStatus(w, http.StatusOK, map[string]bool{"success": true})
 }
 
@@ -358,7 +358,7 @@ func (h *Handler) apiChangeAdminPassword(w http.ResponseWriter, r *http.Request,
 	}
 
 	h.adminSessions.InvalidateAll()
-	h.adminSessions.ClearCookie(w)
+	h.adminSessions.ClearCookie(w, r)
 	writeJSONStatus(w, http.StatusOK, map[string]bool{"success": true})
 }
 

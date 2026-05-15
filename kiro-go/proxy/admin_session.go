@@ -91,11 +91,24 @@ func (s *adminSessionStore) Create(w http.ResponseWriter, r *http.Request) (*adm
 		Path:     "/",
 		MaxAge:   int(adminSessionTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 
 	return sess, nil
+}
+
+// isSecureRequest 判断请求是否走 HTTPS。直连 TLS → r.TLS != nil；
+// 经 nginx 反代 → X-Forwarded-Proto: https。用于动态决定 cookie 的 Secure 标志，
+// 避免 HTTP 部署下浏览器丢弃带 Secure 的 cookie。
+func isSecureRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 func (s *adminSessionStore) Get(r *http.Request) (*adminSession, bool) {
@@ -163,14 +176,14 @@ func (s *adminSessionStore) InvalidateAll() {
 	s.sseTokens = make(map[string]*sseToken)
 }
 
-func (s *adminSessionStore) ClearCookie(w http.ResponseWriter) {
+func (s *adminSessionStore) ClearCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminSessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -291,7 +304,7 @@ func clientIP(r *http.Request) string {
 func (h *Handler) requireAdminSession(w http.ResponseWriter, r *http.Request) (*adminSession, bool) {
 	sess, ok := h.adminSessions.Get(r)
 	if !ok {
-		h.adminSessions.ClearCookie(w)
+		h.adminSessions.ClearCookie(w, r)
 		writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return nil, false
 	}
