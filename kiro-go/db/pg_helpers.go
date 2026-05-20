@@ -14,7 +14,11 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var ErrNotFound = errors.New("db: not found")
+var (
+	ErrNotFound      = errors.New("db: not found")
+	ErrDuplicate     = errors.New("db: duplicate")
+	ErrAliasConflict = errors.New("db: alias conflict")
+)
 
 func requirePool() (*pgxpool.Pool, error) {
 	p := Pool()
@@ -132,6 +136,48 @@ func scanJSONInt64Map(raw []byte) (map[string]int64, error) {
 	}
 	if out == nil {
 		out = map[string]int64{}
+	}
+	return out, nil
+}
+
+func jsonArrayParam(v any) (string, error) {
+	if v == nil {
+		return "[]", nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal jsonb array: %w", err)
+	}
+	if string(data) == "null" {
+		return "[]", nil
+	}
+	return string(data), nil
+}
+
+func scanJSONStringSlice(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal string slice jsonb: %w", err)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+func scanJSONStringMap(raw []byte) (map[string]string, error) {
+	if len(raw) == 0 {
+		return map[string]string{}, nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal string map jsonb: %w", err)
+	}
+	if out == nil {
+		out = map[string]string{}
 	}
 	return out, nil
 }
