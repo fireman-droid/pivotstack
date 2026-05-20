@@ -1,12 +1,62 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kiro-pg-1
+    environment:
+      - POSTGRES_USER=pivotstack
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me}
+      - POSTGRES_DB=pivotstack
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pivotstack -d pivotstack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "effective_cache_size=512MB"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "max_connections=50"
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    # exit 2 = "already at latest" (informational CLI semantic);
+    # docker compose treats any non-zero as failure, so we collapse 2→0 here.
+    command: ["sh", "-c", "kiro-migrate up; code=$$?; if [ \"$$code\" -eq 2 ]; then exit 0; fi; exit \"$$code\""]
+    environment:
+      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:-change-me}@postgres:5432/pivotstack?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   kiro-go:
     build: .
     ports:
       - "8990:8080"
     volumes:
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - CONFIG_PATH=/app/data/config.json
+      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:-change-me}@postgres:5432/pivotstack?sslmode=disable
+      # 生产部署务必设置（避免 admin password hash 派生加密密钥的 P0 风险）：
+      #   - PIVOTSTACK_ENV=production
+      #   - PIVOTSTACK_ENCRYPTION_KEY=<32+ 字节随机字符串>
+      # 跨域 admin/user portal 域名（逗号分隔）：
+      #   - PIVOTSTACK_ALLOWED_ORIGINS=https://admin.example.com,https://app.example.com
       # 走宿主机的 clash 代理（http://host.docker.internal:7897）
       # Windows / Mac Docker Desktop 自带 host.docker.internal；Linux 需要 extra_hosts 声明
       - VPN_PROXY_URL=http://host.docker.internal:7897
