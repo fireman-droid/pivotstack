@@ -4,7 +4,7 @@ services:
     container_name: kiro-pg-1
     environment:
       - POSTGRES_USER=pivotstack
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env required - set in .env or shell}
       - POSTGRES_DB=pivotstack
     volumes:
       - ./data/pg:/var/lib/postgresql/data
@@ -35,7 +35,7 @@ services:
     # docker compose treats any non-zero as failure, so we collapse 2→0 here.
     command: ["sh", "-c", "kiro-migrate up; code=$$?; if [ \"$$code\" -eq 2 ]; then exit 0; fi; exit \"$$code\""]
     environment:
-      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:-change-me}@postgres:5432/pivotstack?sslmode=disable
+      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env required - set in .env or shell}@postgres:5432/pivotstack?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,7 +52,7 @@ services:
         condition: service_healthy
     environment:
       - CONFIG_PATH=/app/data/config.json
-      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:-change-me}@postgres:5432/pivotstack?sslmode=disable
+      - DATABASE_URL=postgres://pivotstack:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env required - set in .env or shell}@postgres:5432/pivotstack?sslmode=disable
       # 生产部署务必设置（避免 admin password hash 派生加密密钥的 P0 风险）：
       #   - PIVOTSTACK_ENV=production
       #   - PIVOTSTACK_ENCRYPTION_KEY=<32+ 字节随机字符串>
@@ -77,7 +77,7 @@ services:
       - ./data/pg-backup:/backups
       - ./scripts:/scripts:ro
     environment:
-      - PGPASSWORD=${POSTGRES_PASSWORD:-change-me}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env required - set in .env or shell}
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
     entrypoint: ["sh", "/scripts/pg_backup.sh"]
     restart: "no"

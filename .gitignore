@@ -6,9 +6,24 @@
 .env
 .env.local
 
-# kiro-go 运行时数据（含 Token、日志）
+# kiro-go 运行时数据（含 Token、日志、用户 hash、钱包流水、Kiro 账号 refresh token）
 kiro-go/data/config.json
+kiro-go/data/config.json.*
+kiro-go/data/users.json
+kiro-go/data/users.json.*
 kiro-go/data/call_logs.jsonl
+kiro-go/data/call_logs.jsonl.*
+kiro-go/data/recharge_records.jsonl
+kiro-go/data/audit.log
+kiro-go/data/migration_log.jsonl
+kiro-go/data/notifications.json
+kiro-go/data/pg/
+kiro-go/data/pg-backup/
+kiro-go/data_local/
+kiro-go/users/
+kiro-go/notif/
+kiro-go/backups/
+kiro-go/.env
 
 # clash 节点配置（含密码不能进 git；服务器侧已备份到 /root/kiro-clash-backup/）
 clash/config.yaml
@@ -35,12 +50,46 @@ build/
 kiro-go/kiro-go
 kiro-go/kiro-go.exe
 kiro-go/kiro-cli.exe
+kiro-go/kiro-go-local.exe
+kiro-go/kiro-go-test.exe
+kiro-go/kiro-local.exe
+kiro-go/repaste-keys.exe
+kiro-go/kiro-migrate
+kiro-go/kiro-migrate.exe
+kiro-go/kiro-migrate-to-pg
+kiro-go/kiro-migrate-to-pg.exe
 
 # ==============================
 # 杂项 / 临时文件
 # ==============================
 *.png
 clash-config.yaml
+*.tar.gz
+*.tar
+dist.zip
+dist.zip.b64
+test_chunk.b64
+web-vue/dist.zip
+web-vue/dist.zip.b64
+kiro-go/dist.zip.b64
+
+# 顶级根目录调试脚本 / 测试结果（v6 时期遗留，不归 v10 仓库）
+chat.py
+chat_disguised.py
+credit_*.py
+credit_*.json
+credit_output.txt
+full_test_results.json
+
+# 前端 build artifact
+web-vue/dist/
+web-vue/__verify_logs_detail.jpeg
+web-vue/.design/
+web-vue/.scratch-*.txt
+
+# Docker tar 镜像
+*.image.tar
+kiro-go-v*.tar.gz
 
 # ==============================
 # IDE / 编辑器
