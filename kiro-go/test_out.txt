@@ -1,5 +1,0 @@
-Initial State -> Balance: 2.0000, GiftBalance: 2.0000
-Testing with claude-3-5-sonnet-20241022...
-API Error: {"debug":{"account_id":"66525592-849e-4165-9a13-1eba04fad6f3","upstream_status_code":429,"upstream_endpoint":"CodeWhisperer","upstream_body_snippet":"quota exhausted"},"error":{"message":"Upstream rate limit exceeded. Please retry later.","retryable":true,"type":"rate_limit"}}
-
-Final DB State -> Balance: 2.0000, GiftBalance: 2.0000

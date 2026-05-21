@@ -4,43 +4,43 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Convert Kiro accounts to OpenAI / Anthropic compatible API service.
+将 Kiro 账号转换为 OpenAI / Anthropic 兼容的 API 服务。
 
-[English](README.md) | [中文](README_CN.md)
+[English](README.md) | 中文
 
-## Features
+## 功能特性
 
-- 🔄 **Anthropic Claude API** - Full support for `/v1/messages` endpoint
-- 🤖 **OpenAI Chat API** - Compatible with `/v1/chat/completions`
-- ⚖️ **Multi-Account Pool** - Round-robin load balancing
-- 🔐 **Auto Token Refresh** - Seamless token management
-- 📡 **Streaming** - Real-time SSE responses
-- 🎛️ **Web Admin Panel** - Easy account management
-- 🔑 **Multiple Auth Methods** - AWS Builder ID, IAM Identity Center (Enterprise SSO), SSO Token, Local Cache, Credentials
-- 📊 **Usage Tracking** - Monitor requests, tokens, and credits
-- 📦 **Account Export/Import** - Compatible with Kiro Account Manager format
-- 🔄 **Dynamic Model List** - Auto-synced from Kiro API with caching
-- 🔔 **Version Update Check** - Automatic new version notification
-- 🌐 **i18n** - Chinese / English admin panel
+- 🔄 **Anthropic Claude API** - 完整支持 `/v1/messages` 端点
+- 🤖 **OpenAI Chat API** - 兼容 `/v1/chat/completions`
+- ⚖️ **多账号池** - 轮询负载均衡
+- 🔐 **自动刷新 Token** - 无缝 Token 管理
+- 📡 **流式响应** - 实时 SSE 输出
+- 🎛️ **Web 管理面板** - 便捷的账号管理
+- 🔑 **多种认证方式** - AWS Builder ID、IAM Identity Center (企业 SSO)、SSO Token、本地缓存、凭证 JSON
+- 📊 **用量追踪** - 监控请求数、Token、Credits
+- 📦 **账号导入导出** - 兼容 Kiro Account Manager 格式
+- 🔄 **动态模型列表** - 自动从 Kiro API 同步并缓存
+- 🔔 **版本更新检测** - 自动提醒新版本
+- 🌐 **中英双语** - 管理面板支持中文 / 英文
 
-## Quick Start
+## 快速开始
 
-### Docker Compose (Recommended)
+### Docker Compose（推荐）
 
 ```bash
 git clone https://github.com/Quorinex/Kiro-Go.git
 cd Kiro-Go
 
-# Create data directory for persistence
+# 创建数据目录用于持久化
 mkdir -p data
 
 docker-compose up -d
 ```
 
-### Docker Run
+### Docker 运行
 
 ```bash
-# Create data directory
+# 创建数据目录
 mkdir -p /path/to/data
 
 docker run -d \
@@ -52,9 +52,9 @@ docker run -d \
   ghcr.io/quorinex/kiro-go:latest
 ```
 
-> 📁 The `/app/data` volume stores `config.json` with accounts and settings. Mount it for data persistence.
+> 📁 `/app/data` 卷存储 `config.json`（包含账号和设置），挂载此目录以实现数据持久化。
 
-### Build from Source
+### 源码编译
 
 ```bash
 git clone https://github.com/Quorinex/Kiro-Go.git
@@ -63,9 +63,9 @@ go build -o kiro-go .
 ./kiro-go
 ```
 
-## Configuration
+## 配置
 
-Config file is auto-created at `data/config.json` on first run:
+首次运行会自动创建 `data/config.json`：
 
 ```json
 {
@@ -78,34 +78,34 @@ Config file is auto-created at `data/config.json` on first run:
 }
 ```
 
-> ⚠️ **Change the default password before production use!**
+> ⚠️ **生产环境请务必修改默认密码！**
 
-## Environment Variables
+## 环境变量
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CONFIG_PATH` | Config file path | `data/config.json` |
-| `ADMIN_PASSWORD` | Admin panel password (overrides config) | - |
+| 变量 | 说明 | 默认值 |
+|-----|------|-------|
+| `CONFIG_PATH` | 配置文件路径 | `data/config.json` |
+| `ADMIN_PASSWORD` | 管理面板密码（覆盖配置文件） | - |
 
-## Usage
+## 使用方法
 
-### 1. Access Admin Panel
+### 1. 访问管理面板
 
-Open `http://localhost:8080/admin` and login with your password.
+打开 `http://localhost:8080/admin`，输入密码登录。
 
-### 2. Add Accounts
+### 2. 添加账号
 
-Multiple methods available:
+支持多种方式：
 
-| Method | Description |
-|--------|-------------|
-| **AWS Builder ID** | Login with AWS Builder ID (personal accounts) |
-| **IAM Identity Center (Enterprise SSO)** | Login with IAM Identity Center (enterprise accounts) |
-| **SSO Token** | Import `x-amz-sso_authn` token from browser |
-| **Kiro Local Cache** | Import from local Kiro IDE cache files |
-| **Credentials JSON** | Import JSON from Kiro Account Manager |
+| 方式 | 说明 |
+|------|------|
+| **AWS Builder ID** | 通过 AWS Builder ID 授权登录（个人账号） |
+| **IAM Identity Center (企业 SSO) 登录** | 通过 IAM Identity Center (企业 SSO) 授权登录（企业账号） |
+| **SSO Token** | 通过浏览器 `x-amz-sso_authn` Token 添加账号 |
+| **Kiro 本地缓存** | 通过 Kiro IDE 本地缓存文件添加账号 |
+| **凭证 JSON** | 通过 Kiro Account Manager 导出的凭证添加账号 |
 
-#### Credentials Format
+#### 凭证格式
 
 ```json
 {
@@ -116,7 +116,7 @@ Multiple methods available:
 }
 ```
 
-### 3. Call API
+### 3. 调用 API
 
 #### Claude API
 
@@ -127,7 +127,7 @@ curl http://localhost:8080/v1/messages \
   -d '{
     "model": "claude-sonnet-4-20250514",
     "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "你好！"}]
   }'
 ```
 
@@ -139,14 +139,14 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer any" \
   -d '{
     "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "你好！"}]
   }'
 ```
 
-## Model Mapping
+## 模型映射
 
-| Request Model | Actual Model |
-|---------------|--------------|
+| 请求模型 | 实际模型 |
+|---------|---------|
 | `claude-sonnet-4-20250514` | claude-sonnet-4-20250514 |
 | `claude-sonnet-4.5` | claude-sonnet-4.5 |
 | `claude-haiku-4.5` | claude-haiku-4.5 |
@@ -155,101 +155,101 @@ curl http://localhost:8080/v1/chat/completions \
 | `gpt-4o`, `gpt-4` | claude-sonnet-4-20250514 |
 | `gpt-3.5-turbo` | claude-sonnet-4-20250514 |
 
-## Thinking Mode
+## 思考模式
 
-Enable extended thinking by adding a suffix to the model name (default: `-thinking`).
+在模型名称后添加后缀（默认：`-thinking`）即可启用扩展思考模式。
 
-### Usage
+### 使用方法
 
 ```bash
-# OpenAI API with thinking
+# OpenAI API 启用思考
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-sonnet-4.5-thinking",
-    "messages": [{"role": "user", "content": "Solve this step by step: 15 * 23"}],
+    "messages": [{"role": "user", "content": "一步步解决：15 * 23"}],
     "stream": true
   }'
 
-# Claude API with thinking
+# Claude API 启用思考
 curl http://localhost:8080/v1/messages \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
     "model": "claude-sonnet-4.5-thinking",
     "max_tokens": 4096,
-    "messages": [{"role": "user", "content": "Analyze this problem"}]
+    "messages": [{"role": "user", "content": "分析这个问题"}]
   }'
 ```
 
-### Configuration
+### 配置
 
-Configure thinking mode in the Admin Panel under **Settings > Thinking Mode Settings**:
+在管理面板的 **设置 > Thinking 模式设置** 中配置：
 
-| Setting | Description | Options |
-|---------|-------------|---------|
-| **Trigger Suffix** | Model name suffix to enable thinking | Default: `-thinking` (customizable, e.g., `-think`, `-reason`) |
-| **OpenAI Output Format** | How thinking content is returned in OpenAI API | `reasoning_content` (DeepSeek compatible), `<thinking>` tag, `<think>` tag |
-| **Claude Output Format** | How thinking content is returned in Claude API | `<thinking>` tag (default), `<think>` tag, plain text |
+| 设置 | 说明 | 选项 |
+|-----|------|------|
+| **触发后缀** | 启用思考的模型名称后缀 | 默认：`-thinking`（可自定义，如 `-think`、`-sikao`） |
+| **OpenAI 输出格式** | OpenAI API 中思考内容的返回方式 | `reasoning_content`（DeepSeek 兼容）、`<thinking>` 标签、`<think>` 标签 |
+| **Claude 输出格式** | Claude API 中思考内容的返回方式 | `<thinking>` 标签（默认）、`<think>` 标签、纯文本 |
 
-### Output Formats
+### 输出格式说明
 
-**OpenAI API (`/v1/chat/completions`)**:
-- `reasoning_content` - Thinking in separate `reasoning_content` field (DeepSeek compatible)
-- `thinking` - Thinking wrapped in `<thinking>...</thinking>` tags in content
-- `think` - Thinking wrapped in `<think>...</think>` tags in content
+**OpenAI API (`/v1/chat/completions`)**：
+- `reasoning_content` - 思考内容放在单独的 `reasoning_content` 字段（DeepSeek 兼容）
+- `thinking` - 思考内容用 `<thinking>...</thinking>` 标签包裹在 content 中
+- `think` - 思考内容用 `<think>...</think>` 标签包裹在 content 中
 
-**Claude API (`/v1/messages`)**:
-- `thinking` - Thinking wrapped in `<thinking>...</thinking>` tags (default)
-- `think` - Thinking wrapped in `<think>...</think>` tags
-- `reasoning_content` - Plain text output
+**Claude API (`/v1/messages`)**：
+- `thinking` - 思考内容用 `<thinking>...</thinking>` 标签包裹（默认）
+- `think` - 思考内容用 `<think>...</think>` 标签包裹
+- `reasoning_content` - 纯文本输出
 
-## API Endpoints
+## API 端点
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check |
-| `GET /v1/models` | List models |
-| `GET /v1/stats` | Statistics |
+| 端点 | 说明 |
+|-----|------|
+| `GET /health` | 健康检查 |
+| `GET /v1/models` | 模型列表 |
+| `GET /v1/stats` | 统计数据 |
 | `POST /v1/messages` | Claude Messages API |
-| `POST /v1/messages/count_tokens` | Token counting |
+| `POST /v1/messages/count_tokens` | Token 计数 |
 | `POST /v1/chat/completions` | OpenAI Chat API |
-| `GET /admin` | Admin panel |
+| `GET /admin` | 管理面板 |
 
-## Project Structure
+## 项目结构
 
 ```
 Kiro-Go/
-├── main.go              # Entry point
-├── version.json         # Version info for update check
-├── config/              # Configuration management
-├── pool/                # Account pool & load balancing
-├── proxy/               # API handlers & Kiro client
-│   ├── handler.go       # HTTP routing & admin API
-│   ├── kiro.go          # Kiro API client
-│   ├── kiro_api.go      # Kiro REST API (usage, models)
-│   └── translator.go    # Request/response conversion
-├── auth/                # Authentication
-│   ├── builderid.go     # AWS Builder ID login
-│   ├── iam_sso.go       # IAM SSO login
-│   ├── oidc.go          # OIDC token refresh
-│   └── sso_token.go     # SSO token import
-├── web/                 # Admin panel frontend
+├── main.go              # 入口
+├── version.json         # 版本信息（用于更新检测）
+├── config/              # 配置管理
+├── pool/                # 账号池 & 负载均衡
+├── proxy/               # API 处理 & Kiro 客户端
+│   ├── handler.go       # HTTP 路由 & 管理 API
+│   ├── kiro.go          # Kiro API 客户端
+│   ├── kiro_api.go      # Kiro REST API（用量、模型）
+│   └── translator.go    # 请求/响应转换
+├── auth/                # 认证
+│   ├── builderid.go     # AWS Builder ID 登录
+│   ├── iam_sso.go       # IAM SSO 登录
+│   ├── oidc.go          # OIDC Token 刷新
+│   └── sso_token.go     # SSO Token 导入
+├── web/                 # 管理面板前端
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
-## Disclaimer
+## 免责声明
 
-This project is provided for **educational and research purposes only**.
+本项目仅供**学习和研究目的**使用。
 
-- This software is not affiliated with, endorsed by, or associated with Amazon, AWS, or Kiro in any way
-- Users are solely responsible for ensuring their use complies with all applicable terms of service and laws
-- The authors assume no liability for any misuse or violations arising from the use of this software
-- Use at your own risk
+- 本软件与 Amazon、AWS 或 Kiro 没有任何关联、认可或合作关系
+- 用户需自行确保其使用行为符合所有适用的服务条款和法律法规
+- 作者不对因使用本软件而产生的任何滥用或违规行为承担责任
+- 使用风险自负
 
-By using this software, you acknowledge that you have read and understood this disclaimer.
+使用本软件即表示您已阅读并理解本免责声明。
 
-## License
+## 许可证
 
 [MIT](LICENSE)
