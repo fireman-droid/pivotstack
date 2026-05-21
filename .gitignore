@@ -80,7 +80,11 @@ kiro-go/kiro-migrate-to-pg.exe
 # ==============================
 # 杂项 / 临时文件
 # ==============================
-*.png
+# 顶级根目录截图 / 临时 PNG（不影响 web-vue/src/assets 等真实资产）
+/*.png
+.claude/plan/screenshots/
+kiro-go/.workflow/*.png
+web-vue/__verify_logs_detail.jpeg
 clash-config.yaml
 *.tar.gz
 *.tar
