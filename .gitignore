@@ -20,8 +20,6 @@ kiro-go/data/notifications.json
 kiro-go/data/pg/
 kiro-go/data/pg-backup/
 kiro-go/data_local/
-kiro-go/users/
-kiro-go/notif/
 kiro-go/backups/
 kiro-go/.env
 
