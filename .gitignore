@@ -25,6 +25,26 @@ kiro-go/notif/
 kiro-go/backups/
 kiro-go/.env
 
+# 历史遗留数据备份目录（v4-v6 期累积；含明文 gitee 凭证 + 36 个 Kiro refresh token + 用户 API key）
+# 永久排除：即使本地保留也不再 commit
+kiro-go/data_backup_*/
+kiro-go/data_backup
+backups/
+
+# v4-v5 期含明文 gitee 凭证的部署脚本 / 文档（已从 git 移除，但保留本地）
+DEPLOY.md
+DEPLOY-CHECKLIST.md
+SERVER-DEPLOY.md
+deploy-kiro.sh
+deploy-server.sh
+deploy-update.sh
+import_accounts.py
+kiro-go/proxy/db_import.go
+
+# 本地编译产物（v6 时期遗留）
+kiro-go/kiro-api-proxy.exe
+kiro-go/kiro-app.exe
+
 # clash 节点配置（含密码不能进 git；服务器侧已备份到 /root/kiro-clash-backup/）
 clash/config.yaml
 
