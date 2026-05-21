@@ -153,6 +153,25 @@ function formatDuration(ms) {
   return (ms / 1000).toFixed(1) + 's'
 }
 
+// computeCostFormula 给 cost_usd 悬停时显示计算公式（建立用户对扣费的信任）
+function computeCostFormula(log) {
+  if (!log || !log.cost_usd) return ''
+  if (log.billing_mode === 'token' && (log.input_tokens || log.output_tokens)) {
+    const inT = log.input_tokens || 0
+    const outT = log.output_tokens || 0
+    if (log.channel_type === 'kiro' && log.upstream_credits) {
+      return `Kiro 上游 ${log.upstream_credits.toFixed(4)} cr → 折算 $${log.cost_usd.toFixed(6)} 售价（按 token）`
+    }
+    return `按 token 计费：input ${inT.toLocaleString()} + output ${outT.toLocaleString()} = $${log.cost_usd.toFixed(6)} 虚拟$`
+  }
+  if (log.credits) {
+    const upCr = log.upstream_credits || log.credits
+    const rate = (log.cost_usd / log.credits).toFixed(4)
+    return `按 credit 计费：credits=${log.credits.toFixed(4)} × $${rate}/cr = $${log.cost_usd.toFixed(4)} (上游消耗 ${upCr.toFixed(4)} cr)`
+  }
+  return `$${log.cost_usd.toFixed(6)}`
+}
+
 function formatLogTime(t) {
   if (!t) return '-'
   // log.time 可能是 ISO 字符串或 unix 秒
@@ -276,6 +295,17 @@ const items = computed(() => logs.value.map((log, i) => ({
       <WorldTimeline :items="items" empty-text="暂无日志">
         <template #title="{ item }">
           <span class="model-row">
+            <WorldChip
+              v-if="item.raw.channel_id"
+              :variant="item.raw.channel_type === 'kiro' ? 'info' : 'success'"
+              size="sm"
+              :title="`渠道：${item.raw.channel_id} (${item.raw.channel_type})`"
+            >
+              {{ item.raw.channel_type === 'kiro' ? '🔵' : '🟢' }} {{ item.raw.channel_id }}
+            </WorldChip>
+            <WorldChip v-if="item.raw.channel_type === 'kiro' && (!item.raw.billing_mode || item.raw.billing_mode === 'legacy_credits')" variant="neutral" size="sm" title="迁移前的旧 credit 计费日志">Legacy</WorldChip>
+            <WorldChip v-if="item.raw.billing_mode === 'token'" variant="accent" size="sm" title="按 token 计费">Token</WorldChip>
+            <WorldChip v-if="item.raw.billing_status === 'free'" variant="warning" size="sm" title="天卡覆盖，未扣费">FREE</WorldChip>
             <code class="orig-model">{{ item.raw.original_model || '—' }}</code>
             <span v-if="item.raw.actual_model && item.raw.actual_model !== item.raw.original_model" class="arrow">→</span>
             <code v-if="item.raw.actual_model && item.raw.actual_model !== item.raw.original_model" class="actual-model">
@@ -289,24 +319,36 @@ const items = computed(() => logs.value.map((log, i) => ({
             <span v-if="item.raw.account" class="meta-cell"><Cpu :size="11" />{{ item.raw.account }}</span>
             <span class="meta-cell"><Clock :size="11" />{{ formatDuration(item.raw.duration_ms) }}</span>
             <span class="meta-cell">{{ ((item.raw.input_tokens || 0) + (item.raw.output_tokens || 0)).toLocaleString() }} tok</span>
-            <!-- 掺水前/后 + 金额 -->
+            <!-- 掺水前/后 + 金额（仅 legacy credit 模式显示）-->
             <span
-              v-if="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits"
+              v-if="item.raw.billing_mode !== 'token' && item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits"
               class="meta-cell credits-pre"
               title="上游真实消耗（掺水前）"
             >
               <span class="cr-label">掺水前</span>{{ item.raw.upstream_credits.toFixed(4) }} cr
             </span>
             <span
-              v-if="item.raw.credits"
+              v-if="item.raw.credits > 0 && item.raw.billing_mode !== 'token'"
               class="meta-cell credits-post"
               :title="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits ? '计费 credits（掺水后放大到 originalModel 口径）' : '计费 credits'"
             >
               <span v-if="item.raw.upstream_credits && item.raw.upstream_credits !== item.raw.credits" class="cr-label">掺水后</span>
               {{ item.raw.credits.toFixed(4) }} cr
             </span>
-            <span v-if="item.raw.cost_usd" class="meta-cell credits-cost" title="实际扣费金额">
-              ${{ item.raw.cost_usd.toFixed(4) }}
+            <!-- token 模式下 Kiro 渠道的上游 credits（成本追踪用，淡色）-->
+            <span
+              v-if="item.raw.billing_mode === 'token' && item.raw.channel_type === 'kiro' && item.raw.upstream_credits > 0"
+              class="meta-cell credits-upstream-dim"
+              title="上游真实消耗（成本追踪，不参与扣费）"
+            >
+              <span class="cr-label">上游</span>{{ item.raw.upstream_credits.toFixed(4) }} cr
+            </span>
+            <span
+              v-if="item.raw.cost_usd"
+              class="meta-cell credits-cost"
+              :title="computeCostFormula(item.raw)"
+            >
+              ${{ item.raw.cost_usd.toFixed(item.raw.cost_usd < 0.01 ? 6 : 4) }}
             </span>
             <WorldChip
               :variant="item.raw.error || item.raw.status === 'error' ? 'danger' : 'success'"
@@ -471,6 +513,19 @@ const items = computed(() => logs.value.map((log, i) => ({
 .credits-cost {
   color: var(--world-success);
   font-weight: 700;
+}
+.credits-upstream-dim {
+  color: var(--world-text-mute);
+  opacity: 0.85;
+  font-size: 0.7rem;
+}
+.credits-upstream-dim .cr-label {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--world-text-mute);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 3px;
+  font-size: 0.6rem;
 }
 [data-world="daogui"] .credits-post { color: #f3c66e; }
 [data-world="daogui"] .credits-cost { color: #95b5a8; }

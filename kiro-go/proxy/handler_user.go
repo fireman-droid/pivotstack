@@ -145,7 +145,13 @@ func (h *Handler) handleUserUsage(w http.ResponseWriter, info *config.ApiKeyInfo
 		count++
 		totalInput += log.InputTokens
 		totalOutput += log.OutputTokens
-		totalCredits += log.Credits
+		// v3 token 模式 Credits=0 但 UpstreamCredits>0；用 UpstreamCredits 兜底，
+		// 否则 user dashboard 显示 0 credits 但实际已扣费
+		if log.Credits > 0 {
+			totalCredits += log.Credits
+		} else if log.UpstreamCredits > 0 {
+			totalCredits += log.UpstreamCredits
+		}
 
 		model := log.OriginalModel
 		if _, ok := modelStats[model]; !ok {
@@ -160,7 +166,12 @@ func (h *Handler) handleUserUsage(w http.ResponseWriter, info *config.ApiKeyInfo
 		ms["requests"] = ms["requests"].(int) + 1
 		ms["inputTokens"] = ms["inputTokens"].(int) + log.InputTokens
 		ms["outputTokens"] = ms["outputTokens"].(int) + log.OutputTokens
-		ms["credits"] = ms["credits"].(float64) + log.Credits
+		// 同上 token 模式兜底
+		credPerCall := log.Credits
+		if credPerCall == 0 && log.UpstreamCredits > 0 {
+			credPerCall = log.UpstreamCredits
+		}
+		ms["credits"] = ms["credits"].(float64) + credPerCall
 	}
 
 	writeJSON(w, 200, map[string]interface{}{

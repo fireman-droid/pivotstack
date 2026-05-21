@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"kiro-api-proxy/config"
@@ -81,10 +82,6 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 请求内故障转移：最多尝试 3 个账号
-	maxRetries := 3
-	var lastErr error
-
 	// 用户层 tier 决策（必须在 GetNextByTier 之前）
 	uc := getUserContext(r.Context())
 	var keyID string
@@ -128,10 +125,32 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// 提前固定 originalModel，确保 PreAuth/Reconcile/addCallLog 全链路用同一个模型查倍率（Bug #7）
+	// v3 渠道分发：channels 非空时所有渠道（含 Kiro）统一走 token 计费。
+	if router := h.currentChannelRouter(); router != nil && router.HasChannels() {
+		ch, found := router.Resolve(req.Model)
+		if !found {
+			h.sendClaudeError(w, 404, "model_not_found",
+				fmt.Sprintf("model %q is not available in any configured channel", req.Model))
+			return
+		}
+		maxOutput := 4096
+		if req.MaxTokens > 0 {
+			maxOutput = req.MaxTokens
+		}
+		h.handleChannelRequest(w, r, ch, &channelDispatch{
+			Protocol:       ProtocolClaude,
+			OriginalModel:  req.Model,
+			Stream:         req.Stream,
+			EstimatedInput: estimateClaudeRequestInputTokens(&req),
+			MaxOutput:      maxOutput,
+			RawBody:        body,
+		}, uc)
+		return
+	}
+
+	// === Legacy 路径（channels=[] 兜底，按 credit 计费）===
 	originalModel := req.Model
 
-	// Billing: PreAuthorize – lock estimated cost before calling upstream
 	var preChargedPaid, preChargedGift float64
 	if keyID != "" {
 		estimatedInput := estimateClaudeRequestInputTokens(&req)
@@ -147,104 +166,63 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// === 路由决策：先做 stealth 再用 upstream 模型决定 tier ===
-	// 让 sonnet-4.6 stealth 到 sonnet-4.5 时自然落 FREE 池（FREE 账号本来就只能调 4.5），
-	// opus stealth 到 sonnet-4.6 时仍落 PRO 池（保留 opus 掺水利润）。
-	// 决策只算一次，避免重试时 stealthRoll 重抽导致 billing/upstream 漂移。
-	thinkingCfg := config.GetThinkingConfig()
-	billingModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
-	upstreamModel, stealthSwapped := ApplyStealth(billingModel, originalModel)
-	if stealthSwapped {
-		upstreamModel, thinking = ParseModelAndThinking(upstreamModel, thinkingCfg.Suffix)
+	legacyStart := time.Now()
+	requestID := genRequestID()
+	result, execErr := h.executeKiroClaude(r.Context(), w, &req, body, uc, requestID)
+	if execErr != nil {
+		responseStarted := false
+		payloadKB := 0
+		var ke *KiroExecError
+		if errors.As(execErr, &ke) {
+			responseStarted = ke.ResponseStarted
+			payloadKB = ke.PayloadKB
+		}
+		if !responseStarted {
+			RefundPreAuth(keyID, preChargedPaid, preChargedGift)
+		}
+		h.recordFailure()
+		h.addCallLogErrorWithKey("Claude", originalModel, "", "", req.Stream, execErr.Error(), payloadKB, uc)
+		return
 	}
-	tier := ResolveModelPool(upstreamModel)
-	req.Model = upstreamModel
-	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
-
-	var lastAccount string
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		// 从对应号池获取账号
-		account := h.pool.GetNextByTier(tier)
-
-		if account == nil {
-			RefundPreAuth(keyID, preChargedPaid, preChargedGift) // refund on no account
-			h.addCallLogErrorWithKey("Claude", originalModel, upstreamModel, lastAccount, req.Stream, fmt.Sprintf("No available accounts in %s pool", tier), 0, uc)
-			h.sendClaudeError(w, 503, "api_error", fmt.Sprintf("No available accounts in %s pool", tier))
-			return
-		}
-		lastAccount = account.Email
-
-		// 检查并刷新 token
-		if err := h.ensureValidToken(account); err != nil {
-			h.pool.RecordError(account.ID, false)
-			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("token refresh failed: %v", err)
-			continue
-		}
-
-		// 防御性校验：upstream 模型必须与账号订阅类型兼容。
-		// tier 已由 upstream model 决定，GetNextByTier 保证账号匹配；这里兜底防配置错乱。
-		if _, validateErr := ValidateAndMapModel(upstreamModel, account.SubscriptionType); validateErr != nil {
-			h.pool.ReleaseAccount(account.ID)
-			lastErr = fmt.Errorf("model/account mismatch: %v", validateErr)
-			continue
-		}
-
-		if originalModel != upstreamModel {
-			fmt.Printf("[Request] Claude API | %s → %s | account: %s | stream: %v | attempt: %d (stealth=%v)\n", originalModel, upstreamModel, account.Email, req.Stream, attempt+1, stealthSwapped)
-		} else {
-			fmt.Printf("[Request] Claude API | model: %s | account: %s | stream: %v | attempt: %d\n", upstreamModel, account.Email, req.Stream, attempt+1)
-		}
-
-		// 转换请求
-		kiroPayload := ClaudeToKiro(&req, thinking)
-
-		// 调试：记录转换后的 Kiro payload
-		if debugMode {
-			debugFile, _ := os.OpenFile("data/debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-			if debugFile != nil {
-				payloadJSON, _ := json.MarshalIndent(kiroPayload, "", "  ")
-				fmt.Fprintf(debugFile, "[Kiro Payload] thinking=%v model=%s→%s account=%s stealth=%v\n%s\n", thinking, originalModel, upstreamModel, account.Email, stealthSwapped, string(payloadJSON))
-				debugFile.Close()
-			}
-		}
-
-		// 流式或非流式 (pass preChargedUSD for billing reconciliation)
-		var shouldRetry bool
-		if req.Stream {
-			shouldRetry = h.handleClaudeStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
-		} else {
-			shouldRetry = h.handleClaudeNonStream(w, account, kiroPayload, req.Model, originalModel, billingModel, stealthSwapped, thinking, estimatedInputTokens, uc, preChargedPaid, preChargedGift)
-		}
-		if shouldRetry {
-			h.pool.ReleaseAccount(account.ID)
-			// shouldRetry 触发于：429 / quota / INVALID_MODEL_ID / token 过早失效。
-			// 不再写死 "got 429"，避免误导排查 — 真实 reason 由 handleClaudeNonStream 内层日志已打印。
-			lastErr = fmt.Errorf("retryable upstream error, switching account")
-			fmt.Printf("[Retry] Account %s retryable upstream error, switching account (attempt %d/%d)\n", account.Email, attempt+1, maxRetries)
-			continue
-		}
-		return // 成功或已处理非可重试错误，退出循环
+	if result == nil {
+		RefundPreAuth(keyID, preChargedPaid, preChargedGift)
+		h.recordFailure()
+		h.addCallLogErrorWithKey("Claude", originalModel, "", "", req.Stream, "executeKiroClaude returned nil result", 0, uc)
+		return
 	}
 
-	// 所有重试都失败 – refund pre-auth
-	RefundPreAuth(keyID, preChargedPaid, preChargedGift)
-	h.recordFailure()
-	errMsg := "All accounts failed"
-	if lastErr != nil {
-		errMsg = lastErr.Error()
+	billingCredits := result.UpstreamCredits
+	if billingCredits <= 0 {
+		billingCredits = EstimateCredits(result.OutputTokens, result.InputTokens)
 	}
-	// retry-exhausted 路径必须写一条 error log，否则 jsonl/前端日志看不到这个失败请求。
-	// 之前 INVALID_MODEL_ID 风暴时所有 attempt 都被 inner-handler 视为 shouldRetry=true 直接 return true，
-	// 不会进入 line 642 的 addCallLogErrorWithKey 分支，导致漏写。
-	h.addCallLogErrorWithKey("Claude", originalModel, upstreamModel, lastAccount, req.Stream, "retry exhausted: "+errMsg, 0, uc)
-	h.sendClaudeError(w, 503, "api_error", errMsg)
+	// Claude 专属 15 秒低输出保护
+	if time.Since(legacyStart).Milliseconds() < 15000 {
+		billingCredits = ApplyLowOutputProtection(result.OutputTokens, billingCredits, result.InputTokens)
+	}
+	if result.BillingModel != "" && result.ActualModel != "" && result.BillingModel != result.ActualModel {
+		billingCredits *= StealthCreditMultiplier(result.BillingModel, result.ActualModel)
+	}
+	paid, gift := ReconcileWithBillingModel(keyID, originalModel, result.BillingModel, billingCredits, preChargedPaid, preChargedGift)
+	if uc != nil {
+		uc.ActualPaidUSD = paid
+		uc.ActualGiftUSD = gift
+	}
+	h.recordSuccess(result.InputTokens, result.OutputTokens, billingCredits)
+	h.addCallLogWithKey("Claude", originalModel, result.ActualModel, result.Account, result.Subscription, result.InputTokens, result.OutputTokens, req.Stream, billingCredits, result.UpstreamCredits, "", "", result.StopReason, result.RequestID, result.DurationMs, uc)
 }
 
-// handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+// handleClaudeStream Claude 流式响应。返回 ChannelResult（成功）或 KiroExecError（错误）。
+// 不做计费、不写日志、不更新 stats — 由 caller 负责。
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, upstreamModel, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, requestID string) (*ChannelResult, *KiroExecError) {
 	requestStart := time.Now()
-	requestID := genRequestID()
+	if requestID == "" {
+		requestID = genRequestID()
+	}
+	model := upstreamModel
+	payloadKB := 0
+	if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
+		payloadKB = len(payloadBytes) / 1024
+	}
 	fmt.Printf("[req-%s] → Claude Stream | %s → %s | account: %s | input≈%dK | thinking=%v\n",
 		requestID, originalModel, model, account.Email, estimatedInputTokens/1000, thinking)
 
@@ -254,8 +232,9 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		err := fmt.Errorf("streaming not supported")
 		h.sendClaudeError(w, 500, "api_error", "Streaming not supported")
-		return
+		return nil, &KiroExecError{Err: err, Retryable: false, ResponseStarted: false, PayloadKB: payloadKB}
 	}
 
 	// 获取 thinking 输出格式配置
@@ -620,25 +599,18 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		debugLog("[SSE Error] CallKiroAPI failed: %v", err)
 		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
 		h.pool.RecordError(account.ID, isQuotaErr)
-		payloadKB := 0
-		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
-			payloadKB = len(payloadBytes) / 1024
-		}
-		// 429 且还没发送任何SSE数据，可以换号重试
 		if isQuotaErr && !headersSent {
 			fmt.Printf("[429-Retry] Claude Stream | %s → %s | account: %s | payload: %dKB | will retry\n",
 				originalModel, model, account.Email, payloadKB)
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
-		// INVALID_MODEL_ID + 还未发流：token 提前失效，强制刷新后让外层重试
 		if upstreamErr != nil && upstreamErr.StatusCode == 400 && !headersSent && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
 			fmt.Printf("[InvalidModel-Refresh] Stream account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
 			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
 				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
 			}
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
-		h.recordFailure()
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] Claude Stream | %s → %s | account: %s | payload: %dKB | error: %s\n",
 				originalModel, model, account.Email, payloadKB, err.Error())
@@ -646,16 +618,38 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			fmt.Printf("[ERROR] Claude Stream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogErrorWithKey("Claude", originalModel, model, account.Email, true, err.Error(), payloadKB, uc)
+		var appErr *AppError
 		if upstreamErr != nil {
-			WriteClaudeStreamError(w, upstreamErr.ToAppError(""))
-		} else {
+			appErr = upstreamErr.ToAppError(requestID)
+			if headersSent {
+				WriteClaudeStreamError(w, appErr)
+			} else {
+				WriteClaudeError(w, appErr, upstreamErr.StatusCode)
+			}
+		} else if headersSent {
 			h.sendSSE(w, flusher, "error", map[string]interface{}{
 				"type":  "error",
 				"error": map[string]string{"type": "api_error", "message": err.Error()},
 			})
+		} else {
+			h.sendClaudeError(w, 500, "api_error", err.Error())
 		}
-		return false
+		var partial *ChannelResult
+		if headersSent {
+			partial = &ChannelResult{
+				ActualModel:     model,
+				Account:         account.Email,
+				Subscription:    account.SubscriptionType,
+				InputTokens:     inputTokens,
+				OutputTokens:    outputTokens,
+				UpstreamCredits: credits,
+				BillingModel:    billingModel,
+				RequestID:       requestID,
+				DurationMs:      time.Since(requestStart).Milliseconds(),
+				PayloadKB:       payloadKB,
+			}
+		}
+		return partial, &KiroExecError{Err: err, Retryable: false, ResponseStarted: headersSent, PayloadKB: payloadKB, UpstreamAppError: appErr}
 	}
 	processClaudeText("", false, true)
 	if eventThinkingOpen {
@@ -675,37 +669,15 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	}
 	outputTokens = estimateClaudeOutputTokens(outputContent, thinkingOutput, toolUses)
 
-	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
-	billingCredits := credits
-	if stealthSwapped && billingCredits > 0 {
-		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
-	}
-	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
 
-	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
-	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := billingCredits
-		if actualCredits <= 0 {
-			actualCredits = EstimateCredits(outputTokens, inputTokens)
-		}
-		if time.Since(requestStart).Milliseconds() < 15000 {
-			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		}
-		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
-		uc.ActualPaidUSD = actualPaid
-		uc.ActualGiftUSD = actualGift
-	}
-
-	// 发送 message_delta
 	stopReason := "end_turn"
 	if len(toolUses) > 0 {
 		stopReason = "tool_use"
 	}
 
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, true, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
@@ -723,13 +695,33 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	h.sendSSE(w, flusher, "message_stop", map[string]interface{}{
 		"type": "message_stop",
 	})
-	return false
+	return &ChannelResult{
+		ActualModel:     model,
+		Account:         account.Email,
+		Subscription:    account.SubscriptionType,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		UpstreamCredits: credits,
+		BillingModel:    billingModel,
+		StopReason:      stopReason,
+		RequestID:       requestID,
+		DurationMs:      durationMs,
+		PayloadKB:       payloadKB,
+	}, nil
 }
 
-// handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, uc *UserContext, preChargedPaid float64, preChargedGift float64) (shouldRetry bool) {
+// handleClaudeNonStream Claude 非流式响应。返回 ChannelResult（成功）或 KiroExecError（错误）。
+// 不做计费、不写日志、不更新 stats — 由 caller 负责。
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, upstreamModel, originalModel, billingModel string, stealthSwapped bool, thinking bool, estimatedInputTokens int, requestID string) (*ChannelResult, *KiroExecError) {
 	requestStart := time.Now()
-	requestID := genRequestID()
+	if requestID == "" {
+		requestID = genRequestID()
+	}
+	model := upstreamModel
+	payloadKB := 0
+	if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
+		payloadKB = len(payloadBytes) / 1024
+	}
 	fmt.Printf("[req-%s] → Claude NonStream | %s → %s | account: %s | input≈%dK\n",
 		requestID, originalModel, model, account.Email, estimatedInputTokens/1000)
 
@@ -767,29 +759,17 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	if err != nil {
 		isQuotaErr := strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota")
 		h.pool.RecordError(account.ID, isQuotaErr)
-		payloadKB := 0
-		if payloadBytes, jsonErr := json.Marshal(payload); jsonErr == nil {
-			payloadKB = len(payloadBytes) / 1024
-		}
-		// 429 可以换号重试
 		if isQuotaErr {
 			fmt.Printf("[429-Retry] Claude NonStream | %s → %s | account: %s | payload: %dKB | will retry\n",
 				originalModel, model, account.Email, payloadKB)
-			return true
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
-		// INVALID_MODEL_ID 通常是 token 已被 AWS 提前作废（expiresAt 还没到但上游不认）
-		// 强制刷新本号 token 后让外层换号重试，给系统一次自愈机会
 		if upstreamErr != nil && upstreamErr.StatusCode == 400 && strings.Contains(upstreamErr.Body, "INVALID_MODEL_ID") {
 			fmt.Printf("[InvalidModel-Refresh] Account %s got INVALID_MODEL_ID, force refreshing token\n", account.Email)
 			if refreshErr := h.forceRefreshToken(account); refreshErr != nil {
 				fmt.Printf("[InvalidModel-Refresh] Force refresh failed: %v\n", refreshErr)
 			}
-			return true
-		}
-		h.recordFailure()
-		// Billing: refund pre-auth on API failure
-		if uc != nil {
-			RefundPreAuth(uc.KeyID, preChargedPaid, preChargedGift)
+			return nil, &KiroExecError{Err: err, Retryable: true, ResponseStarted: false, PayloadKB: payloadKB}
 		}
 		if payloadKB > 0 {
 			fmt.Printf("[ERROR] Claude NonStream | %s → %s | account: %s | payload: %dKB | error: %s\n",
@@ -798,14 +778,14 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 			fmt.Printf("[ERROR] Claude NonStream | %s → %s | account: %s | error: %s\n",
 				originalModel, model, account.Email, err.Error())
 		}
-		h.addCallLogErrorWithKey("Claude", originalModel, model, account.Email, false, err.Error(), payloadKB, uc)
+		var appErr *AppError
 		if upstreamErr != nil {
-			appErr := upstreamErr.ToAppError("")
+			appErr = upstreamErr.ToAppError(requestID)
 			WriteClaudeError(w, appErr, upstreamErr.StatusCode)
 		} else {
 			h.sendClaudeError(w, 500, "api_error", err.Error())
 		}
-		return false
+		return nil, &KiroExecError{Err: err, Retryable: false, ResponseStarted: false, PayloadKB: payloadKB, UpstreamAppError: appErr}
 	}
 
 	// 合并 thinking 内容（如果有 reasoningContentEvent 的内容）
@@ -821,35 +801,14 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	inputTokens = estimatedInputTokens
 	outputTokens = estimateClaudeOutputTokens(finalContent, thinkingContent, toolUses)
 
-	// Stealth: rescale upstream credits to billing-model rate before bookkeeping
-	billingCredits := credits
-	if stealthSwapped && billingCredits > 0 {
-		billingCredits = billingCredits * StealthCreditMultiplier(billingModel, model)
-	}
-	h.recordSuccess(inputTokens, outputTokens, billingCredits)
 	h.pool.RecordSuccess(account.ID)
 	h.pool.UpdateStats(account.ID, inputTokens+outputTokens, credits)
-
-	// Billing: Reconcile pre-authorized amount with actual credits (using billing model rate)
-	if uc != nil && uc.KeyID != "" && (preChargedPaid > 0 || preChargedGift > 0) {
-		actualCredits := billingCredits
-		if actualCredits <= 0 {
-			actualCredits = EstimateCredits(outputTokens, inputTokens)
-		}
-		if time.Since(requestStart).Milliseconds() < 15000 {
-			actualCredits = ApplyLowOutputProtection(outputTokens, actualCredits, inputTokens)
-		}
-		actualPaid, actualGift := ReconcileWithBillingModel(uc.KeyID, originalModel, billingModel, actualCredits, preChargedPaid, preChargedGift)
-		uc.ActualPaidUSD = actualPaid
-		uc.ActualGiftUSD = actualGift
-	}
 
 	stopReason := "end_turn"
 	if len(toolUses) > 0 {
 		stopReason = "tool_use"
 	}
 	durationMs := time.Since(requestStart).Milliseconds()
-	h.addCallLogWithKey("Claude", originalModel, model, account.Email, account.SubscriptionType, inputTokens, outputTokens, false, billingCredits, credits, "", "", stopReason, requestID, durationMs, uc)
 	fmt.Printf("[req-%s] ← Complete | out=%d | stop=%s | credits=%.2f | %dms\n",
 		requestID, outputTokens, stopReason, credits, durationMs)
 
@@ -868,7 +827,19 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	resp := KiroToClaudeResponse(finalContent, thinkingContent, toolUses, inputTokens, outputTokens, originalModel)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
-	return false
+	return &ChannelResult{
+		ActualModel:     model,
+		Account:         account.Email,
+		Subscription:    account.SubscriptionType,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		UpstreamCredits: credits,
+		BillingModel:    billingModel,
+		StopReason:      stopReason,
+		RequestID:       requestID,
+		DurationMs:      durationMs,
+		PayloadKB:       payloadKB,
+	}, nil
 }
 
 func (h *Handler) sendClaudeError(w http.ResponseWriter, status int, errType, message string) {

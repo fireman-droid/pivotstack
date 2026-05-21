@@ -3,8 +3,9 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api } from '../api/admin'
 import { useToast } from '../composables/useToast'
 import {
-  Save, Plus, Trash2
+  Save, Plus, Trash2, AlertTriangle
 } from 'lucide-vue-next'
+import { listChannels, getSellPrices, updateSellPrices, updateChannel } from '../api/admin'
 import WorldCard from '../components/world/WorldCard.vue'
 import WorldButton from '../components/world/WorldButton.vue'
 import WorldChip from '../components/world/WorldChip.vue'
@@ -21,6 +22,215 @@ const tabOptions = [
   { value: 'config',    label: '售价配置' },
   { value: 'promotion', label: '活动门槛' },
 ]
+
+// === v3 渠道定价 (售价 + 成本) ===
+const channels = ref([])
+const channelLocalChanges = ref({}) // { "channelId|model": { inputPerM?, outputPerM?, costInputPerM?, costOutputPerM? } }
+const savingChannelId = ref(null)
+// 「+ 添加定价」inline 表单状态
+const addingForChannel = ref(null) // 当前展开的 channel id
+const addingModel = ref('')
+const addingInputPerM = ref(0)
+const addingOutputPerM = ref(0)
+const addingCostInput = ref(0)
+const addingCostOutput = ref(0)
+
+// 拉渠道列表
+async function fetchSellAndChannels() {
+  try {
+    channels.value = (await listChannels()) || []
+  } catch (e) {
+    console.error('fetch channels:', e)
+  }
+}
+
+// 工具：(channelId, model) → 唯一 key
+function lcKey(channelId, model) {
+  return `${channelId}|${String(model).toLowerCase()}`
+}
+
+// 渠道下已定价模型（按 channel.modelPrices key 排序）
+function channelPricedRows(ch) {
+  const prices = ch.modelPrices || {}
+  return Object.keys(prices).map(model => ({ model, price: prices[model] }))
+}
+
+// 渠道下还没定价的模型（用于「+ 添加定价」下拉候选）
+function channelUnpricedModels(ch) {
+  const prices = ch.modelPrices || {}
+  const pricedKeys = new Set(Object.keys(prices).map(k => k.toLowerCase()))
+  return (ch.models || []).filter(m => !pricedKeys.has(String(m).toLowerCase()))
+}
+
+// 取某 (channel, model) 某字段的当前值（local change 优先）
+function getPriceField(channelId, model, field) {
+  const key = lcKey(channelId, model)
+  const lc = channelLocalChanges.value[key]
+  if (lc && lc[field] != null) return lc[field]
+  const ch = channels.value.find(c => c.id === channelId)
+  const original = ch?.modelPrices?.[model] || ch?.modelPrices?.[String(model).toLowerCase()]
+  return original ? (original[field] || 0) : 0
+}
+
+// 写某 (channel, model) 某字段
+function setPriceField(channelId, model, field, val) {
+  const v = Number(val)
+  if (!isFinite(v) || v < 0) return
+  const key = lcKey(channelId, model)
+  const existing = channelLocalChanges.value[key] || {}
+  channelLocalChanges.value = {
+    ...channelLocalChanges.value,
+    [key]: { ...existing, [field]: v },
+  }
+}
+
+// 该 channel 下有多少 local changes
+function channelChangeCount(channelId) {
+  const prefix = `${channelId}|`
+  return Object.keys(channelLocalChanges.value).filter(k => k.startsWith(prefix)).length
+}
+function hasChannelChanges(channelId) {
+  return channelChangeCount(channelId) > 0
+}
+
+// 利润率展示
+function profitRate(channelId, model) {
+  const inP = Number(getPriceField(channelId, model, 'inputPerM')) || 0
+  const outP = Number(getPriceField(channelId, model, 'outputPerM')) || 0
+  const inC = Number(getPriceField(channelId, model, 'costInputPerM')) || 0
+  const outC = Number(getPriceField(channelId, model, 'costOutputPerM')) || 0
+  if (inC + outC === 0) return '—'  // 没填成本
+  if (inP + outP === 0) return '—'
+  // 简化：假设 1:1 input/output 比例（admin 看大概；精确利润看日志）
+  const totalP = inP + outP
+  const totalC = inC + outC
+  if (totalP <= 0) return '—'
+  const rate = ((totalP - totalC) / totalP) * 100
+  return rate.toFixed(1) + '%'
+}
+function profitClass(channelId, model) {
+  const txt = profitRate(channelId, model)
+  if (txt === '—') return 'profit-na'
+  const rate = parseFloat(txt)
+  if (rate >= 50) return 'profit-good'
+  if (rate >= 0) return 'profit-ok'
+  return 'profit-bad'
+}
+
+// 保存该渠道的所有 local changes
+async function saveChannelPrices(ch) {
+  const prefix = `${ch.id}|`
+  const changes = {}
+  for (const [k, v] of Object.entries(channelLocalChanges.value)) {
+    if (!k.startsWith(prefix)) continue
+    const model = k.slice(prefix.length)
+    changes[model] = v
+  }
+  if (Object.keys(changes).length === 0) return
+  savingChannelId.value = ch.id
+  try {
+    const newPrices = { ...(ch.modelPrices || {}) }
+    for (const [model, fields] of Object.entries(changes)) {
+      const cur = newPrices[model] || newPrices[model.toLowerCase()] || {}
+      newPrices[model.toLowerCase()] = {
+        inputPerM: Number(fields.inputPerM ?? cur.inputPerM) || 0,
+        outputPerM: Number(fields.outputPerM ?? cur.outputPerM) || 0,
+        costInputPerM: Number(fields.costInputPerM ?? cur.costInputPerM) || 0,
+        costOutputPerM: Number(fields.costOutputPerM ?? cur.costOutputPerM) || 0,
+      }
+    }
+    await updateChannel(ch.id, {
+      id: ch.id,
+      type: ch.type,
+      baseUrl: ch.baseUrl,
+      apiKey: '',
+      models: ch.models,
+      modelPrices: newPrices,
+      enabled: ch.enabled,
+    })
+    success(`${ch.id} 已保存 ${Object.keys(changes).length} 处改动`)
+    // 清掉该 channel 的 local changes
+    const next = { ...channelLocalChanges.value }
+    for (const k of Object.keys(next)) if (k.startsWith(prefix)) delete next[k]
+    channelLocalChanges.value = next
+    await fetchSellAndChannels()
+  } catch (e) {
+    toastErr(e.message || '保存失败')
+  } finally {
+    savingChannelId.value = null
+  }
+}
+
+// 「+ 添加定价」点击 → 展开 inline 表单
+function openAddPrice(ch) {
+  addingForChannel.value = ch.id
+  addingModel.value = ''
+  addingInputPerM.value = 0
+  addingOutputPerM.value = 0
+  addingCostInput.value = 0
+  addingCostOutput.value = 0
+}
+function cancelAddPrice() {
+  addingForChannel.value = null
+}
+async function confirmAddPrice(ch) {
+  const m = (addingModel.value || '').trim()
+  if (!m) { toastErr('请选择模型'); return }
+  const inP = Number(addingInputPerM.value) || 0
+  const outP = Number(addingOutputPerM.value) || 0
+  if (inP === 0 && outP === 0) { toastErr('输入/输出售价至少一个 > 0'); return }
+  savingChannelId.value = ch.id
+  try {
+    const newPrices = { ...(ch.modelPrices || {}) }
+    newPrices[m.toLowerCase()] = {
+      inputPerM: inP,
+      outputPerM: outP,
+      costInputPerM: Number(addingCostInput.value) || 0,
+      costOutputPerM: Number(addingCostOutput.value) || 0,
+    }
+    await updateChannel(ch.id, {
+      id: ch.id,
+      type: ch.type,
+      baseUrl: ch.baseUrl,
+      apiKey: '',
+      models: ch.models,
+      modelPrices: newPrices,
+      enabled: ch.enabled,
+    })
+    success(`已添加 ${m} 定价`)
+    addingForChannel.value = null
+    await fetchSellAndChannels()
+  } catch (e) {
+    toastErr(e.message || '添加失败')
+  } finally {
+    savingChannelId.value = null
+  }
+}
+
+async function deleteChannelPrice(ch, model) {
+  if (!confirm(`删除渠道 "${ch.id}" 的 "${model}" 定价？\n删除后该模型调用会返回 sell_price_missing 错误（fail closed）`)) return
+  savingChannelId.value = ch.id
+  try {
+    const newPrices = { ...(ch.modelPrices || {}) }
+    delete newPrices[model]
+    delete newPrices[model.toLowerCase()]
+    await updateChannel(ch.id, {
+      id: ch.id,
+      type: ch.type,
+      baseUrl: ch.baseUrl,
+      apiKey: '',
+      models: ch.models,
+      modelPrices: newPrices,
+      enabled: ch.enabled,
+    })
+    success(`已删除 ${model} 定价`)
+    await fetchSellAndChannels()
+  } catch (e) {
+    toastErr(e.message || '删除失败')
+  } finally {
+    savingChannelId.value = null
+  }
+}
 
 // Promotion state (v2: per-model 活动价 + 兜底)
 const promotion = ref({
@@ -226,7 +436,14 @@ async function savePricing() {
   saving.value = false
 }
 
-onMounted(() => { fetchAll(); timer = setInterval(fetchAll, 30000) })
+onMounted(() => {
+  fetchAll()
+  fetchSellAndChannels()
+  timer = setInterval(() => {
+    fetchAll()
+    fetchSellAndChannels()
+  }, 30000)
+})
 onUnmounted(() => clearInterval(timer))
 </script>
 
@@ -244,62 +461,101 @@ onUnmounted(() => clearInterval(timer))
     <div v-if="loading" class="loading-row">载入中…</div>
 
     <template v-else-if="tab === 'config'">
+      <p class="config-hint">
+        💡 每个渠道独立定价：售价是用户扣费、成本是 admin 追踪进货。利润率 = (售价 - 成本) / 售价。
+        单位 <code>虚拟$/1M token</code>，1 USD = 20 虚拟$ = 1 ¥。
+      </p>
 
-      <!-- 模型售价表 -->
-      <WorldCard padding="md">
+      <div v-if="!channels.length" class="empty-state">
+        <p>还没配置任何渠道。请先到「渠道」页新建。</p>
+      </div>
+
+      <WorldCard v-for="ch in channels" :key="ch.id" padding="md" class="channel-pricing-card">
         <header class="section-head">
-          <h3>模型售价表（按模型单独定价）</h3>
-          <WorldButton variant="primary" size="sm" :loading="saving" @click="savePricing">
-            <Save :size="14" /><span>保存</span>
-          </WorldButton>
-        </header>
-        <p class="section-hint">
-          每个模型在此显式定 USD/credit 单价。未列出的模型走上方默认兜底价。
-          <br>
-          ⚠️ 匹配按模型小写名 + 自动兼容 <code>-/.</code> 互换（<code>opus-4.7 ↔ opus-4-7</code>）。
-          stealth 替换跨模型时按 originalModel 计费 — 想让 stealth 目标 model 也享同样价，需在此表加同价的一条。
-        </p>
-
-        <div class="model-price-table">
-          <div class="mpt-head">
-            <span style="flex: 2.2; min-width: 180px;">模型</span>
-            <span style="flex: 0.6; min-width: 50px;">池</span>
-            <span style="flex: 1.2; min-width: 110px;">单价 ($/cr)</span>
-            <span style="flex: 1.0; min-width: 80px;">折合 ¥</span>
-            <span style="flex: 0; width: 32px;"></span>
+          <div class="channel-title">
+            <WorldChip :variant="ch.type === 'kiro' ? 'info' : 'success'" size="sm">
+              {{ ch.type === 'kiro' ? '🔵' : '🟢' }} {{ ch.type }}
+            </WorldChip>
+            <h3>{{ ch.id }}</h3>
+            <span v-if="!ch.enabled" class="dim">（已禁用）</span>
           </div>
-          <div v-for="r in modelPriceRows" :key="r.model" class="mpt-row" :class="{ 'is-default': r.isDefault }">
-            <span class="model-cell">
-              <code>{{ r.model }}</code>
-              <span v-if="r.isDefault" class="badge-tip">兜底</span>
+          <div class="channel-actions">
+            <WorldButton
+              v-if="channelUnpricedModels(ch).length > 0"
+              variant="ghost" size="sm" @click="openAddPrice(ch)"
+            >
+              <Plus :size="13" /><span>添加定价</span>
+            </WorldButton>
+            <WorldButton
+              variant="primary" size="sm"
+              :loading="savingChannelId === ch.id"
+              :disabled="!hasChannelChanges(ch.id)"
+              @click="saveChannelPrices(ch)"
+            >
+              <Save :size="14" />
+              <span>{{ channelChangeCount(ch.id) ? `保存 (${channelChangeCount(ch.id)})` : '无改动' }}</span>
+            </WorldButton>
+          </div>
+        </header>
+
+        <div class="cp-rows">
+          <div class="cp-head">
+            <span class="model-col">模型</span>
+            <span class="num-col">售价 in $/M</span>
+            <span class="num-col">售价 out $/M</span>
+            <span class="num-col">成本 in $/M</span>
+            <span class="num-col">成本 out $/M</span>
+            <span class="profit-col">利润率</span>
+            <span class="action-col"></span>
+          </div>
+          <div v-for="row in channelPricedRows(ch)" :key="row.model" class="cp-row">
+            <code class="model-col">{{ row.model }}</code>
+            <input type="number" step="0.1" min="0" class="cp-input"
+              :value="getPriceField(ch.id, row.model, 'inputPerM')"
+              @input="e => setPriceField(ch.id, row.model, 'inputPerM', e.target.value)" />
+            <input type="number" step="0.1" min="0" class="cp-input"
+              :value="getPriceField(ch.id, row.model, 'outputPerM')"
+              @input="e => setPriceField(ch.id, row.model, 'outputPerM', e.target.value)" />
+            <input type="number" step="0.1" min="0" class="cp-input cost-input"
+              :value="getPriceField(ch.id, row.model, 'costInputPerM')"
+              @input="e => setPriceField(ch.id, row.model, 'costInputPerM', e.target.value)" />
+            <input type="number" step="0.1" min="0" class="cp-input cost-input"
+              :value="getPriceField(ch.id, row.model, 'costOutputPerM')"
+              @input="e => setPriceField(ch.id, row.model, 'costOutputPerM', e.target.value)" />
+            <span class="profit-col" :class="profitClass(ch.id, row.model)">
+              {{ profitRate(ch.id, row.model) }}
             </span>
-            <span class="dim" style="flex: 0.6; min-width: 50px; text-transform: uppercase;">{{ r.pool }}</span>
-            <span style="flex: 1.2; min-width: 110px;">
-              <input
-                type="number" step="0.001" min="0"
-                class="mpt-input"
-                :value="r.priceUSD"
-                @change="e => updateModelPrice(r.model, e.target.value)"
-              />
-            </span>
-            <span class="dim" style="flex: 1.0; min-width: 80px;">¥{{ r.priceCNYPerCredit.toFixed(4) }}</span>
-            <button v-if="!r.isDefault" class="del-btn" style="flex: 0; width: 32px;" @click="removeModelPrice(r.model)" aria-label="删除">
+            <button class="del-btn action-col"
+              @click="deleteChannelPrice(ch, row.model)" aria-label="删除定价">
               <Trash2 :size="12" />
             </button>
-            <span v-else style="flex: 0; width: 32px;"></span>
           </div>
-          <div v-if="!modelPriceRows.length" class="entry-empty">无模型数据（请检查 supportedModels 是否注入）</div>
+          <div v-if="!channelPricedRows(ch).length" class="entry-empty">
+            该渠道下还没有任何模型定价。点击右上「+ 添加定价」配置。
+          </div>
         </div>
 
-        <div class="mult-form" style="margin-top: 14px;">
-          <WorldInput v-model="newModelName" placeholder="如：claude-opus-4.7-thinking（自定义/外部）" label="自定义模型名" size="sm" style="flex: 2;" />
-          <WorldInput v-model.number="newModelPrice" type="number" step="0.001" label="单价 ($/credit)" size="sm" style="flex: 1;" />
-          <WorldButton variant="primary" size="sm" @click="addCustomModel">
-            <Plus :size="13" /><span>添加</span>
-          </WorldButton>
+        <!-- Inline "添加定价" 下拉，点添加按钮后展开 -->
+        <div v-if="addingForChannel === ch.id" class="add-price-row">
+          <WorldSelect
+            v-model="addingModel"
+            :options="channelUnpricedModels(ch).map(m => ({ value: m, label: m }))"
+            placeholder="选择要定价的模型"
+            searchable
+            size="sm"
+          />
+          <input type="number" step="0.1" min="0" class="cp-input"
+            v-model.number="addingInputPerM" placeholder="售价 in" />
+          <input type="number" step="0.1" min="0" class="cp-input"
+            v-model.number="addingOutputPerM" placeholder="售价 out" />
+          <input type="number" step="0.1" min="0" class="cp-input cost-input"
+            v-model.number="addingCostInput" placeholder="成本 in（选填）" />
+          <input type="number" step="0.1" min="0" class="cp-input cost-input"
+            v-model.number="addingCostOutput" placeholder="成本 out（选填）" />
+          <WorldButton variant="primary" size="sm" @click="confirmAddPrice(ch)">确认</WorldButton>
+          <WorldButton variant="ghost" size="sm" @click="cancelAddPrice">取消</WorldButton>
         </div>
       </WorldCard>
-
     </template>
 
     <template v-else-if="tab === 'promotion'">
@@ -469,6 +725,195 @@ onUnmounted(() => clearInterval(timer))
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* ==================== v3 按渠道分组的定价卡片 ==================== */
+.config-hint {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid #3b82f6;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--world-text-mute);
+  margin: 0;
+}
+.config-hint code { font-family: var(--world-font-mono, monospace); }
+.empty-state {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--world-text-mute);
+}
+.channel-pricing-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.channel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.channel-title h3 {
+  margin: 0;
+  font-family: var(--world-font-mono, monospace);
+  font-size: 1rem;
+}
+.channel-title .dim { color: var(--world-text-mute); font-size: 0.85rem; }
+.channel-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cp-rows {
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--world-divider, rgba(255,255,255,0.06));
+}
+.cp-head, .cp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+.cp-head {
+  background: var(--world-bg-tertiary, rgba(255,255,255,0.03));
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--world-text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--world-divider, rgba(255,255,255,0.06));
+}
+.cp-row {
+  border-bottom: 1px solid var(--world-divider, rgba(255,255,255,0.04));
+}
+.cp-row:last-child { border-bottom: none; }
+.cp-row:hover { background: var(--world-bg-tertiary, rgba(255,255,255,0.03)); }
+
+.cp-row .model-col,
+.cp-head .model-col {
+  flex: 1.6;
+  min-width: 140px;
+  font-family: var(--world-font-mono, monospace);
+}
+.num-col { flex: 1; min-width: 84px; text-align: center; }
+.profit-col { flex: 0.8; min-width: 70px; text-align: center; font-weight: 700; }
+.action-col { flex: 0; width: 32px; }
+
+.cp-input {
+  flex: 1;
+  min-width: 70px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--world-divider, rgba(0,0,0,0.1));
+  background: var(--world-bg-secondary, transparent);
+  color: inherit;
+  font-family: var(--world-font-mono, monospace);
+  font-size: 0.85rem;
+  text-align: right;
+}
+.cp-input:focus { outline: 2px solid var(--world-accent, #06f); outline-offset: -1px; }
+.cp-input.cost-input {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.profit-good { color: #22c55e; }
+.profit-ok { color: #f59e0b; }
+.profit-bad { color: #ef4444; }
+.profit-na { color: var(--world-text-mute); font-weight: normal; }
+
+.add-price-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  margin-top: 8px;
+  background: var(--world-bg-tertiary, rgba(59, 130, 246, 0.04));
+  border: 1px dashed var(--world-accent, #3b82f6);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+.add-price-row > :first-child { min-width: 200px; flex: 1.5; }
+
+.del-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--world-text-mute);
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.del-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+
+.entry-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--world-text-mute);
+  font-size: 0.85rem;
+}
+
+/* ==================== v3 Token 售价表（已删除，保留 anchor 给 CSS 顺序） ==================== */
+.sell-price-table {
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--world-divider, rgba(255,255,255,0.06));
+}
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--world-bg-tertiary, rgba(255,255,255,0.03));
+  font-size: 0.75rem;
+  color: var(--world-text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  border-bottom: 1px solid var(--world-divider, rgba(255,255,255,0.06));
+}
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--world-divider, rgba(255,255,255,0.04));
+  font-size: 0.85rem;
+}
+.sp-row:last-child { border-bottom: none; }
+.sp-row:hover { background: var(--world-bg-tertiary, rgba(255,255,255,0.03)); }
+.sp-row.is-missing { background: rgba(245, 158, 11, 0.06); }
+.sp-row .model-cell { flex: 2; min-width: 160px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sp-row .channel-cell { flex: 1; min-width: 100px; }
+.sp-row .dim { color: var(--world-text-mute); font-family: var(--world-font-mono, monospace); }
+
+.legacy-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  margin: 4px 0;
+}
+.legacy-divider .line {
+  flex: 1;
+  height: 1px;
+  background: var(--world-divider, rgba(255,255,255,0.08));
+}
+.legacy-divider .text {
+  font-size: 0.75rem;
+  color: var(--world-text-mute);
+  letter-spacing: 0.04em;
 }
 
 /* ==================== v2 模型售价表 ==================== */

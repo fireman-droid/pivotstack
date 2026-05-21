@@ -4,9 +4,9 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import WorldSwitcher from './WorldSwitcher.vue'
 import {
-  LayoutDashboard, KeyRound, FileText, Users, Settings,
+  LayoutDashboard, KeyRound, FileText, Settings,
   LogOut, Menu, X, ChevronRight, Shield, Gift,
-  Key, DollarSign, Beaker, Trophy, BarChart3
+  Key, DollarSign, Beaker, Trophy, BarChart3, Globe
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -24,8 +24,9 @@ const navMain = [
   { name: '使用日志',     path: '/logs',     icon: FileText },
   { name: '定价中心',     path: '/pricing',  icon: DollarSign },
   { name: '运营洞察',     path: '/insights', icon: BarChart3 },
+  { name: '渠道',         path: '/channels', icon: Globe },
   { name: '激活码',       path: '/codes',    icon: Gift },
-  { name: '账号管理',     path: '/accounts', icon: Users },
+  // Kiro 账号已并入「渠道」页（点 Kiro 卡的「管理账号」进入）
   { name: '排行榜',       path: '/leaderboard', icon: Trophy },
   { name: '系统设置',     path: '/settings', icon: Settings },
 ]

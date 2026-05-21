@@ -171,6 +171,23 @@ func (h *Handler) routeAdminAPI(path string, w http.ResponseWriter, r *http.Requ
 	case path == "/pricing-analysis" && r.Method == "GET":
 		h.apiPricingAnalysis(w, r)
 
+	// ==================== Channels & Sell Prices (v3) ====================
+	case path == "/channels" && r.Method == "GET":
+		h.apiListChannels(w, r)
+	case path == "/channels" && r.Method == "POST":
+		h.apiCreateChannel(w, r)
+	case strings.HasPrefix(path, "/channels/") && strings.HasSuffix(path, "/test") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/channels/"), "/test")
+		h.apiTestChannel(w, r, id)
+	case strings.HasPrefix(path, "/channels/") && r.Method == "PUT":
+		h.apiUpdateChannel(w, r, strings.TrimPrefix(path, "/channels/"))
+	case strings.HasPrefix(path, "/channels/") && r.Method == "DELETE":
+		h.apiDeleteChannel(w, r, strings.TrimPrefix(path, "/channels/"))
+	case path == "/sell-prices" && r.Method == "GET":
+		h.apiGetSellPrices(w, r)
+	case path == "/sell-prices" && r.Method == "PUT":
+		h.apiUpdateSellPrices(w, r)
+
 	// ==================== Billing Management ====================
 	case path == "/pricing" && r.Method == "GET":
 		h.apiGetPricing(w, r)
@@ -1043,9 +1060,14 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, _ *http.Request) {
 			totalErrors++
 			continue
 		}
-		ms.TotalCredits += log.Credits
+		// v3 token 模式下 Credits=0 但 UpstreamCredits 保留了上游真实计费 — 用它做成本统计
+		costCredits := log.Credits
+		if log.BillingMode == "token" && log.UpstreamCredits > 0 {
+			costCredits = log.UpstreamCredits
+		}
+		ms.TotalCredits += costCredits
 		ms.TotalTokens += log.TotalTokens
-		totalCreditsAll += log.Credits
+		totalCreditsAll += costCredits
 		totalTokensAll += log.TotalTokens
 	}
 
@@ -1087,11 +1109,16 @@ func (h *Handler) apiPricingAnalysis(w http.ResponseWriter, _ *http.Request) {
 		if log.Status == "error" {
 			continue
 		}
+		// 同上：token 模式用 UpstreamCredits 做成本统计
+		costCredits := log.Credits
+		if log.BillingMode == "token" && log.UpstreamCredits > 0 {
+			costCredits = log.UpstreamCredits
+		}
 		pool := ResolveModelPool(log.ActualModel)
 		if pool == "pro" {
-			proCreditsAll += log.Credits
+			proCreditsAll += costCredits
 		} else {
-			freeCreditsAll += log.Credits
+			freeCreditsAll += costCredits
 		}
 	}
 	totalCostCNY := proCreditsAll*pricing.ProCostPerCredit() + freeCreditsAll*pricing.FreeCostPerCredit()

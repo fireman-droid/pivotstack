@@ -28,6 +28,21 @@ type AppError struct {
 	Debug     *DebugInfo `json:"debug,omitempty"`
 }
 
+// KiroExecError 携带 Kiro 执行错误上下文，供渠道层 / legacy 层决定重试、退款、日志。
+//   - Retryable=true && !ResponseStarted → 调用方可换账号重试
+//   - !ResponseStarted && !Retryable → caller 需写错误响应 + 退款 + 失败日志
+//   - ResponseStarted → 已经流式发送给客户端，**不能**再写新错误且**不应**退款（上游成本已发生）
+type KiroExecError struct {
+	Err              error
+	Retryable        bool
+	ResponseStarted  bool
+	PayloadKB        int
+	UpstreamAppError *AppError
+}
+
+func (e *KiroExecError) Error() string { return e.Err.Error() }
+func (e *KiroExecError) Unwrap() error { return e.Err }
+
 // DebugInfo 调试信息
 type DebugInfo struct {
 	AccountID           string `json:"account_id,omitempty"`
