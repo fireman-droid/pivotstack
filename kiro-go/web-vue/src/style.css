@@ -1,220 +1,137 @@
-@import "./assets/styles/abyss-theme.css";
+/* ===== PivotStack v6 单一暗色主题（Vercel 校准） =====
+ * 替代之前的 reality(light) / daogui(dark) 双主题——v6 删了切换器。
+ * 变量名沿用 --world-* 让 26 个旧 view 不用同步改，值替换为 Vercel 暗色。
+ * design/tokens.ts 是新写 view 的依据；这里是旧 view 的兼容层。
+ */
 
-/* ===== 双主题系统：CSS 变量定义 ===== */
-
-/* === 1.1 现实世界主题 === */
-:root[data-world="reality"] {
-  /* 基础配色 - 临床/办公室风格 */
-  --world-bg-main: #f8fafc;
-  --world-bg-card: #ffffff;
-  --world-text-primary: #0f172a;
-  --world-text-secondary: #475569;
-  --world-accent: #0284c7; /* 医疗蓝（修复对比度 4.6:1 ✅） */
-  --world-border: #e2e8f0;
-  --world-status-ok: #10b981;
-
-  /* 交互属性 */
-  --world-btn-scale: 0.98;
-  --world-btn-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --world-card-hover: translateY(-2px);
-
-  /* 动画参数 */
-  --world-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --world-nav-indicator: 2px solid var(--world-accent);
-
-  /* 字体族 - 现实世界：Inter / Space Grotesk + 系统字体 fallback */
-  --world-font-sans: "Inter", "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --world-font-mono: "JetBrains Mono", "SF Mono", Monaco, "Cascadia Code", "Courier New", monospace;
-  --world-font-display: "Space Grotesk", "Inter", -apple-system, sans-serif;
-
-  /* 字体大小层级 */
-  --world-text-xs: 0.75rem;    /* 12px */
-  --world-text-sm: 0.875rem;   /* 14px */
-  --world-text-base: 1rem;     /* 16px */
-  --world-text-lg: 1.125rem;   /* 18px */
-  --world-text-xl: 1.25rem;    /* 20px */
-  --world-text-2xl: 1.5rem;    /* 24px */
-  --world-text-3xl: 1.875rem;  /* 30px */
-
-  /* 行高 */
-  --world-leading-tight: 1.25;
-  --world-leading-normal: 1.5;
-  --world-leading-relaxed: 1.75;
-
-  /* 字重 */
-  --world-font-normal: 400;
-  --world-font-medium: 500;
-  --world-font-semibold: 600;
-  --world-font-bold: 700;
-
-  /* 语义化颜色 */
-  --world-success: #10b981;
-  --world-warning: #f59e0b;
-  --world-error: #ef4444;
-  --world-info: #3b82f6;
-
-  /* 透明度层级 */
-  --world-overlay-light: rgba(0, 0, 0, 0.05);
-  --world-overlay-medium: rgba(0, 0, 0, 0.1);
-  --world-overlay-heavy: rgba(0, 0, 0, 0.2);
-
-  /* 渐变 */
-  --world-gradient-primary: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-  --world-gradient-card: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-
-  /* 焦点指示器 */
-  --world-focus-ring: 0 0 0 3px rgba(2, 132, 199, 0.3);
-  --world-focus-ring-offset: 2px;
-
-  /* 阴影层级 - 清晰、锐利 */
-  --world-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --world-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --world-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  --world-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-  --world-shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-
-  /* 圆角层级 - 锐利 */
-  --world-radius-none: 0;
-  --world-radius-sm: 2px;
-  --world-radius-md: 4px;
-  --world-radius-lg: 8px;
-  --world-radius-xl: 12px;
-  --world-radius-2xl: 16px;
-  --world-radius-full: 9999px;
-
-  /* === 玻璃面板令牌（reality） === */
-  --world-glass-bg: rgba(255, 255, 255, 0.85);
-  --world-glass-bg-strong: rgba(255, 255, 255, 0.95);
-  --world-glass-border: rgba(15, 23, 42, 0.08);
-  --world-glass-blur: 14px;
-  --world-elevated-bg: #ffffff;
-  --world-divider: rgba(15, 23, 42, 0.06);
-  --world-text-mute: var(--world-text-secondary);
-  --world-text-dim: #94a3b8;
-}
-
-/* === 1.2 道诡世界主题 === */
-:root[data-world="daogui"] {
-  /* 基础配色 - 深渊/修真风格 */
-  --world-bg-main: #0a0a0a;
-  --world-bg-card: #141414;
-  --world-text-primary: #e5e5e5;
-  --world-text-secondary: #9ca3af;
-  --world-accent: #c41e3a; /* 朱红 */
-  --world-accent-alt: #b8860b; /* 金铜 */
-  --world-border: #311111;
-  --world-status-ok: #7f1d1d;
-
-  /* 交互属性 */
-  --world-btn-scale: 0.95;
-  --world-btn-shadow: 0 0 15px rgba(196, 30, 58, 0.4);
-  --world-card-hover: scale(1.02) rotate(0.5deg);
-
-  /* 动画参数 */
-  --world-transition-fast: 300ms cubic-bezier(0.68, -0.55, 0.26, 1.55);
-  --world-nav-indicator: 4px solid var(--world-accent);
-  --world-glitch-filter: url(#glitch);
-
-  /* 字体族 - 道诡世界：霞鹜文楷优先 + 衬线 fallback */
-  --world-font-sans: "LXGW WenKai", "Noto Serif SC", Georgia, "Times New Roman", serif;
-  --world-font-mono: "JetBrains Mono", "Courier New", monospace;
-  --world-font-display: "Cinzel", "LXGW WenKai", "Noto Serif SC", serif;
-
-  /* 字体大小层级 */
-  --world-text-xs: 0.75rem;
-  --world-text-sm: 0.875rem;
-  --world-text-base: 1rem;
-  --world-text-lg: 1.125rem;
-  --world-text-xl: 1.25rem;
-  --world-text-2xl: 1.5rem;
-  --world-text-3xl: 1.875rem;
-
-  /* 行高（道诡世界稍微紧凑，营造压迫感） */
-  --world-leading-tight: 1.2;
-  --world-leading-normal: 1.4;
-  --world-leading-relaxed: 1.6;
-
-  /* 字重（道诡世界更粗，增强视觉冲击） */
-  --world-font-normal: 500;
-  --world-font-medium: 600;
-  --world-font-semibold: 700;
-  --world-font-bold: 800;
-
-  /* 语义化颜色（道诡世界用暗红色系） */
-  --world-success: #7f1d1d;
-  --world-warning: #b8860b;
-  --world-error: #c41e3a;
-  --world-info: #4a1a4a;
-
-  /* 透明度层级（血雾效果） */
-  --world-overlay-light: rgba(196, 30, 58, 0.05);
-  --world-overlay-medium: rgba(196, 30, 58, 0.1);
-  --world-overlay-heavy: rgba(196, 30, 58, 0.2);
-
-  /* 渐变（血雾渐变） */
-  --world-gradient-primary: linear-gradient(135deg, #c41e3a 0%, #7f1d1d 100%);
-  --world-gradient-card: linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%);
-
-  /* 焦点指示器 */
-  --world-focus-ring: 0 0 0 3px rgba(196, 30, 58, 0.4);
-  --world-focus-ring-offset: 2px;
-
-  /* 阴影层级 - 血雾外溢 */
-  --world-shadow-sm: 0 0 5px rgba(196, 30, 58, 0.2);
-  --world-shadow-md: 0 0 10px rgba(196, 30, 58, 0.3);
-  --world-shadow-lg: 0 0 20px rgba(196, 30, 58, 0.4);
-  --world-shadow-xl: 0 0 30px rgba(196, 30, 58, 0.5);
-  --world-shadow-2xl: 0 0 40px rgba(196, 30, 58, 0.6);
-
-  /* 圆角层级 - 更不规则 */
-  --world-radius-none: 0;
-  --world-radius-sm: 0px;
-  --world-radius-md: 2px;
-  --world-radius-lg: 4px;
-  --world-radius-xl: 6px;
-  --world-radius-2xl: 8px;
-  --world-radius-full: 9999px;
-
-  /* === 玻璃面板令牌（daogui） === */
-  --world-glass-bg: rgba(26, 22, 20, 0.78);
-  --world-glass-bg-strong: rgba(20, 16, 14, 0.92);
-  --world-glass-border: rgba(184, 134, 11, 0.18);
-  --world-glass-blur: 14px;
-  --world-elevated-bg: #1a1614;
-  --world-divider: rgba(184, 134, 11, 0.10);
-  /* WCAG AA: lifted from #8b7355 → #a08766 (was 3.78:1, now 4.55:1 on glass) */
-  --world-text-mute: #a08766;
-  --world-text-dim: #6b5345;
-
-  /* 道诡专属辅助色 */
-  --world-paper: #d4a574;
-  --world-paper-aged: #b8860b;
-  --world-tentacle: #4a1a4a;
-  --world-tentacle-glow: #7c3aed;
-  --world-vermilion-glow: rgba(196, 30, 58, 0.45);
-}
-
-/* === 间距系统（8px 基准，两个主题共用） === */
 :root {
-  --world-space-0: 0;
-  --world-space-1: 0.25rem;  /* 4px */
-  --world-space-2: 0.5rem;   /* 8px */
-  --world-space-3: 0.75rem;  /* 12px */
-  --world-space-4: 1rem;     /* 16px */
-  --world-space-5: 1.25rem;  /* 20px */
-  --world-space-6: 1.5rem;   /* 24px */
-  --world-space-8: 2rem;     /* 32px */
-  --world-space-10: 2.5rem;  /* 40px */
-  --world-space-12: 3rem;    /* 48px */
-  --world-space-16: 4rem;    /* 64px */
+  /* === 基础配色 — Vercel 黑底白字 === */
+  --world-bg-main:        #000000;
+  --world-bg-card:        #0a0a0a;
+  --world-text-primary:   #ededed;
+  --world-text-secondary: #a1a1a1;
+  --world-accent:         #ededed;        /* primary 是接近白 */
+  --world-accent-alt:     #52a8ff;        /* 偶尔需要"另一个 accent" */
+  --world-border:         rgba(255,255,255,0.16);
+  --world-status-ok:      #0bd470;
+
+  /* === 交互参数 === */
+  --world-btn-scale:    0.98;
+  --world-btn-shadow:   0 1px 2px 0 rgba(0,0,0,0.4);
+  --world-card-hover:   translateY(-1px);
+
+  /* === 动画 === */
+  --world-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --world-nav-indicator:   2px solid var(--world-accent);
+
+  /* === 字体 — Geist (Vercel) === */
+  --world-font-sans:    "Geist Sans", Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --world-font-mono:    "Geist Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+  --world-font-display: "Geist Sans", Inter, sans-serif;
+
+  /* === 字号 === */
+  --world-text-xs:   0.75rem;
+  --world-text-sm:   0.875rem;
+  --world-text-base: 1rem;
+  --world-text-lg:   1.125rem;
+  --world-text-xl:   1.25rem;
+  --world-text-2xl:  1.5rem;
+  --world-text-3xl:  1.875rem;
+
+  /* === 行高 / 字重 === */
+  --world-leading-tight:   1.25;
+  --world-leading-normal:  1.5;
+  --world-leading-relaxed: 1.75;
+  --world-font-normal:    400;
+  --world-font-medium:    500;
+  --world-font-semibold:  600;
+  --world-font-bold:      700;
+
+  /* === 语义色 === */
+  --world-success: #0bd470;
+  --world-warning: #f5a623;
+  --world-error:   #ff4d4d;
+  --world-info:    #52a8ff;
+
+  /* === 透明度层级 === */
+  --world-overlay-light:  rgba(255,255,255,0.04);
+  --world-overlay-medium: rgba(255,255,255,0.08);
+  --world-overlay-heavy:  rgba(255,255,255,0.12);
+
+  /* === 渐变 === */
+  --world-gradient-primary: linear-gradient(90deg, #FF0080 0%, #7928CA 50%, #0070F3 100%);
+  --world-gradient-card:    linear-gradient(180deg, #0a0a0a 0%, #050505 100%);
+
+  /* === 焦点 === */
+  --world-focus-ring:        0 0 0 2px rgba(255,255,255,0.20);
+  --world-focus-ring-offset: 2px;
+
+  /* === 阴影（暗色下大多数 box-shadow 在黑底上"消失"，改用 1px border 替代） === */
+  --world-shadow-sm:  0 1px 2px 0 rgba(0,0,0,0.5);
+  --world-shadow-md:  0 4px 6px -1px rgba(0,0,0,0.5);
+  --world-shadow-lg:  0 10px 15px -3px rgba(0,0,0,0.5);
+  --world-shadow-xl:  0 20px 25px -5px rgba(0,0,0,0.5);
+  --world-shadow-2xl: 0 25px 50px -12px rgba(0,0,0,0.6);
+
+  /* === 圆角 === */
+  --world-radius-none: 0;
+  --world-radius-sm:   2px;
+  --world-radius-md:   4px;
+  --world-radius-lg:   6px;
+  --world-radius-xl:   8px;
+  --world-radius-2xl:  12px;
+  --world-radius-full: 9999px;
+
+  /* === 玻璃面板 === */
+  --world-glass-bg:        rgba(20,20,20,0.6);
+  --world-glass-bg-strong: rgba(10,10,10,0.85);
+  --world-glass-border:    rgba(255,255,255,0.08);
+  --world-glass-blur:      14px;
+  --world-elevated-bg:     #141414;
+  --world-divider:         rgba(255,255,255,0.10);
+  --world-text-mute:       #a1a1a1;
+  --world-text-dim:        #707070;
+
+  /* === 兼容旧字段（daogui 专属辅助色，部分 view 还在引用） === */
+  --world-paper:           #d4a574;
+  --world-paper-aged:      #b8860b;
+  --world-tentacle:        #4a1a4a;
+  --world-tentacle-glow:   #7c3aed;
+  --world-vermilion-glow:  rgba(255,255,255,0.20);
+
+  /* === 间距系统（8px 基准） === */
+  --world-space-0:  0;
+  --world-space-1:  0.25rem;
+  --world-space-2:  0.5rem;
+  --world-space-3:  0.75rem;
+  --world-space-4:  1rem;
+  --world-space-5:  1.25rem;
+  --world-space-6:  1.5rem;
+  --world-space-8:  2rem;
+  --world-space-10: 2.5rem;
+  --world-space-12: 3rem;
+  --world-space-16: 4rem;
+
+  /* === Element Plus 暗色覆盖（替代旧 [data-world="daogui"] block） === */
+  --el-bg-color:           #000000;
+  --el-bg-color-page:      #000000;
+  --el-bg-color-overlay:   #141414;
+  --el-text-color-primary: #ededed;
+  --el-text-color-regular: #a1a1a1;
+  --el-border-color:        rgba(255,255,255,0.16);
+  --el-border-color-light:  rgba(255,255,255,0.08);
+  --el-border-color-lighter:rgba(255,255,255,0.06);
+  --el-fill-color-blank:    #0a0a0a;
+  --el-fill-color:          #0a0a0a;
+  --el-fill-color-light:    #141414;
+  --el-color-primary:       #ededed;
 }
 
-/* ===== 全局样式应用 ===== */
-
+/* ===== 全局样式 ===== */
 * { box-sizing: border-box; }
 
 html, body {
-  height: 100vh;
+  min-height: 100vh;
   margin: 0;
   padding: 0;
 }
@@ -227,32 +144,17 @@ body {
   line-height: var(--world-leading-normal);
   font-weight: var(--world-font-normal);
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-  /* 主题色不做 body 级 transition — 转场动画 portal 已经在视觉上盖住切换，
-     底下的 body 应该「瞬间」从一个色 swap 到另一个色（被 portal 遮挡看不到）。
-     之前的 0.7s transition 比 portal 还慢，导致「转场结束后还在慢慢变」拖尾。 */
-}
-
-/* 切换主题期间（portal 显示），禁用所有交互 transition，
-   防止主题色 token 切换 + 各组件 transition 叠加产生「拖尾色变」。
-   只屏蔽 transition；animation 保留，portal 自身动画不受影响。
-   portal 关闭后此属性立刻移除，hover/state transition 恢复正常。 */
-html[data-switching] *,
-html[data-switching] *::before,
-html[data-switching] *::after {
-  transition: none !important;
 }
 
 #app {
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
 }
 
 code, pre {
   font-family: var(--world-font-mono);
 }
 
-/* ===== 全局焦点样式（可访问性） ===== */
+/* ===== 焦点 ===== */
 *:focus-visible {
   outline: none;
   box-shadow: var(--world-focus-ring);
@@ -264,13 +166,13 @@ a:focus-visible {
   box-shadow: var(--world-focus-ring);
 }
 
-/* ===== 跳过导航链接 ===== */
+/* ===== 跳过导航链接（a11y） ===== */
 .skip-to-content {
   position: absolute;
   top: -40px;
   left: 0;
   background: var(--world-accent);
-  color: white;
+  color: var(--world-bg-main);
   padding: 8px 16px;
   text-decoration: none;
   z-index: 10000;
@@ -281,159 +183,89 @@ a:focus-visible {
   top: 0;
 }
 
-/* ===== 兼容变量映射 ===== */
+/* ===== Tailwind theme 映射（@theme directive 给 v3 用） ===== */
 @theme {
-  --color-primary: var(--world-accent);
-  --color-bg: var(--world-bg-main);
-  --color-card: var(--world-bg-card);
-  --color-text: var(--world-text-primary);
-  --color-text-secondary: var(--world-text-secondary);
-  --color-border: var(--world-border);
-  --color-success: var(--world-success);
-  --color-warning: var(--world-warning);
-  --color-error: var(--world-error);
-  --color-info: var(--world-info);
+  --color-primary:          var(--world-accent);
+  --color-bg:               var(--world-bg-main);
+  --color-card:             var(--world-bg-card);
+  --color-text:             var(--world-text-primary);
+  --color-text-secondary:   var(--world-text-secondary);
+  --color-border:           var(--world-border);
+  --color-success:          var(--world-success);
+  --color-warning:          var(--world-warning);
+  --color-error:            var(--world-error);
+  --color-info:             var(--world-info);
   --color-world-accent-alt: var(--world-accent-alt);
 }
 
+/* 兼容简短别名 */
 :root {
-  --primary: var(--world-accent);
-  --bg: var(--world-bg-main);
-  --card: var(--world-bg-card);
-  --text: var(--world-text-primary);
+  --primary:        var(--world-accent);
+  --bg:             var(--world-bg-main);
+  --card:           var(--world-bg-card);
+  --text:           var(--world-text-primary);
   --text-secondary: var(--world-text-secondary);
-  --border: var(--world-border);
+  --border:         var(--world-border);
 }
 
-/* ===== modern-card 双主题样式 ===== */
+/* ===== modern-card（旧 view 在用） ===== */
 .modern-card {
   background: var(--world-bg-card);
   border: 1px solid var(--world-border);
   border-radius: var(--world-radius-xl);
-  backdrop-filter: blur(8px);
   transition: all var(--world-transition-fast);
   position: relative;
   overflow: hidden;
-  box-shadow: var(--world-shadow-sm);
 }
 
 .modern-card:hover {
-  transform: var(--world-card-hover);
-  box-shadow: var(--world-shadow-md);
+  border-color: rgba(255,255,255,0.24);
 }
 
-/* Madness 模式卡片额外效果 */
-[data-world="daogui"] .modern-card::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, rgba(184, 134, 11, 0.3) 50%, transparent 100%);
-  opacity: 0;
-  transition: opacity 0.4s;
-}
-
-[data-world="daogui"] .modern-card:hover::before { opacity: 1; }
-
-[data-world="daogui"] .modern-card:hover {
-  border-color: #4a1a4a;
-  box-shadow:
-    0 0 20px rgba(196, 30, 58, 0.08),
-    inset 0 0 30px rgba(74, 26, 74, 0.05);
-}
-
-/* Reality 模式卡片效果 */
-[data-world="reality"] .modern-card:hover {
-  box-shadow: var(--world-shadow-lg);
-}
-
-/* ===== 交互差异化 CSS ===== */
-
-/* 差异化按钮 */
-.reality-button {
-  transition: all var(--world-transition-fast);
-  box-shadow: var(--world-btn-shadow);
-  border-radius: 4px;
-}
-.reality-button:active { transform: scale(var(--world-btn-scale)); }
-
+/* ===== 通用按钮 transition ===== */
+.reality-button,
 .daogui-button {
   transition: all var(--world-transition-fast);
-  filter: drop-shadow(0 0 2px var(--world-accent));
 }
+.reality-button:active,
 .daogui-button:active {
   transform: scale(var(--world-btn-scale));
-  filter: drop-shadow(0 0 10px var(--world-accent));
 }
 
-/* 导航指示条动画 */
+/* ===== 导航指示条 ===== */
 .nav-indicator {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-[data-world="daogui"] .nav-indicator {
-  transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.26, 1.55);
-  filter: blur(1px);
-}
 
-/* ===== 性能优化 ===== */
-
-/* GPU 加速 */
-.world-transition-layer, .nav-indicator, .switcher-icon {
-  transform: translateZ(0);
-}
-
-/* 动画降级 */
+/* ===== 动画降级 ===== */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-  #ink-mask circle { display: none; }
-  .world-transition-layer { background: transparent !important; }
 }
 
 /* ===== 滚动条 ===== */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--world-border); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: var(--world-accent); }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.24);
+}
 
+/* ===== Lucide icon ===== */
 .lucide { stroke-width: 2px; }
 
-/* ===== Element Plus 覆盖（道诡模式） ===== */
-[data-world="daogui"] {
-  --el-bg-color: #0a0a0a;
-  --el-bg-color-page: #0a0a0a;
-  --el-bg-color-overlay: #141418;
-  --el-text-color-primary: #e5e5e5;
-  --el-text-color-regular: #9ca3af;
-  --el-border-color: #311111;
-  --el-border-color-light: #311111;
-  --el-border-color-lighter: #1a0a1a;
-  --el-fill-color-blank: #141418;
-  --el-fill-color: #0a0a0a;
-  --el-fill-color-light: #1a1a22;
-  --el-color-primary: #c41e3a;
-}
-
-/* blood-glow-hover 仅道诡模式 */
-[data-world="daogui"] .blood-glow-hover:hover {
-  box-shadow: 0 0 20px rgba(196, 30, 58, 0.4);
-  transition: box-shadow 0.4s ease-in-out;
-}
-
-/* ===== 移动端适配工具 ===== */
+/* ===== 移动端 ===== */
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
 
-/* 移动端表格/长文本不换行 */
 @media (max-width: 640px) {
-  .modern-card {
-    border-radius: var(--world-radius-lg);
-  }
+  .modern-card { border-radius: var(--world-radius-lg); }
 }

@@ -13,10 +13,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/admin':    { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
-      '/user/api': { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
-      '/v1':       { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
-      '/health':   { target: 'http://115.191.35.73:8990', changeOrigin: true, secure: false },
+      '/admin':    { target: 'http://localhost:8990', changeOrigin: true, secure: false },
+      '/user/api/': { target: 'http://localhost:8990', changeOrigin: true, secure: false },
+      '/v1':       { target: 'http://localhost:8990', changeOrigin: true, secure: false },
+      '/health':   { target: 'http://localhost:8990', changeOrigin: true, secure: false },
     },
   },
   build: {

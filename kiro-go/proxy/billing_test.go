@@ -104,38 +104,8 @@ func TestPoolPriceAndCost(t *testing.T) {
 	t.Logf("✅ FREE $%.2f/cr, PRO $%.2f/cr, ratio=%.1fx", freePrice, proPrice, proPrice/freePrice)
 }
 
-func TestCalcAdminProfit(t *testing.T) {
-	tests := []struct {
-		name       string
-		totalUSD   float64
-		proCredit  float64
-		freeCredit float64
-	}{
-		{"no usage", 0, 0, 0},
-		{"free only", 1.0, 0, 25.0},
-		{"pro only", 5.0, 25.0, 0},
-		{"mixed", 10.0, 30.0, 10.0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := CalcAdminProfit(tt.totalUSD, tt.proCredit, tt.freeCredit)
-			for _, f := range []string{"revenue_usd", "revenue_cny", "pro_cost_cny", "free_cost_cny", "total_cost_cny", "profit_cny", "margin_percent"} {
-				if _, ok := r[f]; !ok {
-					t.Errorf("missing field %q", f)
-				}
-			}
-			if r["revenue_usd"] != tt.totalUSD {
-				t.Errorf("revenue_usd = %.4f, want %.4f", r["revenue_usd"], tt.totalUSD)
-			}
-			expectedProCost := tt.proCredit * 0.04 // 60/1500
-			if math.Abs(r["pro_cost_cny"]-expectedProCost) > 0.001 {
-				t.Errorf("pro_cost_cny = %.4f, want %.4f", r["pro_cost_cny"], expectedProCost)
-			}
-			t.Logf("USD=$%.2f CNY=¥%.2f 成本=¥%.2f 利润=¥%.2f 利润率=%.1f%%",
-				r["revenue_usd"], r["revenue_cny"], r["total_cost_cny"], r["profit_cny"], r["margin_percent"])
-		})
-	}
-}
+// v9: TestCalcAdminProfit 已移除 — credit-era 全局成本/利润算法
+// 由 OPS /business-board 渠道聚合方案替代，相关测试见 business_board_test.go。
 
 // ==================== Billing Flow Simulation (no real API calls) ====================
 
@@ -208,16 +178,4 @@ func TestPriceTable(t *testing.T) {
 	fmt.Printf("\nFREE=$%.2f/cr  PRO=$%.2f/cr  倍率=%.1fx\n", fp, pp, pp/fp)
 }
 
-func TestProfitSim(t *testing.T) {
-	fmt.Println("\n══════ 利润模拟 ══════")
-	for _, s := range []struct {
-		n    string
-		u, p float64
-	}{
-		{"轻度(1天)", 2, 5}, {"中度(1天)", 10, 30}, {"重度(1天)", 50, 150}, {"月度(30天)", 300, 900},
-	} {
-		r := CalcAdminProfit(s.u, s.p, 0)
-		fmt.Printf("[%s] 收入$%.0f/¥%.0f 成本¥%.1f 利润¥%.1f 率%.0f%%\n",
-			s.n, r["revenue_usd"], r["revenue_cny"], r["total_cost_cny"], r["profit_cny"], r["margin_percent"])
-	}
-}
+// v9: TestProfitSim 已移除（credit-era 利润模拟）— 经营看板用渠道聚合算真实利润。

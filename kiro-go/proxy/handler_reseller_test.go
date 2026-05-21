@@ -303,7 +303,7 @@ func TestRedeemActivationCode_ResellerNoLeverage(t *testing.T) {
 
 	rAfter := config.FindApiKeyByID(reseller.ID)
 	// v3：reseller 无杠杆，跟普通用户一样 10¥ → $200 face value
-	expected := 10.0 / config.CNYPerUSDFace
+	expected := config.VirtualUSDFromCNY(10.0)
 	if math.Abs(rAfter.Balance-expected) > 1e-4 {
 		t.Errorf("reseller.Balance: got %.4f, want %.4f (v3 无杠杆，杠杆字段被忽略)", rAfter.Balance, expected)
 	}
@@ -325,7 +325,7 @@ func TestRedeemActivationCode_NormalUserNoDiscount(t *testing.T) {
 
 	uAfter := config.FindApiKeyByID(user.ID)
 	// 普通用户无折扣：10/0.05 = 200
-	expected := 10.0 / config.CNYPerUSDFace
+	expected := config.VirtualUSDFromCNY(10.0)
 	if math.Abs(uAfter.Balance-expected) > 1e-4 {
 		t.Errorf("user.Balance: got %.4f, want %.4f (no discount)", uAfter.Balance, expected)
 	}
@@ -347,7 +347,7 @@ func TestRedeemActivationCode_ResellerWithDiscountZero(t *testing.T) {
 	}
 
 	rAfter := config.FindApiKeyByID(reseller.ID)
-	expected := 10.0 / config.CNYPerUSDFace
+	expected := config.VirtualUSDFromCNY(10.0)
 	if math.Abs(rAfter.Balance-expected) > 1e-4 {
 		t.Errorf("reseller.Balance with discount=0: got %.4f, want %.4f (no discount)", rAfter.Balance, expected)
 	}

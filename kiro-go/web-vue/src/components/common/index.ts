@@ -1,0 +1,13 @@
+// PivotStack v6 共享组件 barrel — 统一 import 入口
+// 用：import { PageHeader, KPIBlock } from '@/components/common'
+export { default as PageHeader } from './PageHeader.vue'
+export { default as KPIBlock } from './KPIBlock.vue'
+export { default as StatusBadge } from './StatusBadge.vue'
+export { default as CopyableText } from './CopyableText.vue'
+export { default as GradientBorder } from './GradientBorder.vue'
+export { default as SectionDivider } from './SectionDivider.vue'
+export { default as EmptyState } from './EmptyState.vue'
+export { default as Toolbar } from './Toolbar.vue'
+export { default as PageContainer } from './PageContainer.vue'
+export { default as DataPanel } from './DataPanel.vue'
+export { default as MonoValue } from './MonoValue.vue'

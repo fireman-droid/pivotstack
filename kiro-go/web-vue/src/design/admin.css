@@ -1,0 +1,345 @@
+/* ============================================================
+   PivotStack Admin Console · Workbench Edition
+   严格对齐 .design/pivotstack/project/admin-shared.css + pivotstack-admin.css
+   引入位置：main.js（在 stellar.css 之后）
+   ============================================================ */
+
+:root {
+  /* admin-specific surfaces */
+  --ax-rail-bg:        #050505;
+  --ax-rail-active-bg: rgba(11, 212, 112, 0.10);
+  --ax-rail-active-fg: #0bd470;
+  --ax-tree-bg:        #080808;
+  --ax-tree-divider:   rgba(255, 255, 255, 0.04);
+  --ax-row-hover:      rgba(255, 255, 255, 0.04);
+  --ax-row-selected:   rgba(11, 212, 112, 0.06);
+
+  /* notification levels (admin shared) */
+  --ax-notif-info-bg:  rgba(82, 168, 255, 0.10);
+  --ax-notif-info-fg:  #52a8ff;
+  --ax-notif-warn-bg:  rgba(245, 166, 35, 0.10);
+  --ax-notif-warn-fg:  #f5a623;
+  --ax-notif-crit-bg:  rgba(255, 77, 77, 0.10);
+  --ax-notif-crit-fg:  #ff4d4d;
+  --ax-notif-crit-glow: 0 0 12px rgba(255, 77, 77, 0.25);
+}
+
+/* ============== ADMIN TYPOGRAPHY ============== */
+.t-display-admin {
+  font-family: var(--st-font-sans);
+  font-size: 18px; font-weight: 600;
+  letter-spacing: -0.01em; line-height: 1.2;
+  color: var(--st-text-pri); white-space: nowrap;
+}
+.t-h-admin {
+  font-size: 14px; font-weight: 600;
+  letter-spacing: -0.005em; line-height: 1.3;
+  color: var(--st-text-pri); white-space: nowrap;
+}
+.t-table-head {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--st-text-ter); line-height: 1.2;
+}
+.t-meta {
+  font-family: var(--st-font-mono);
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--st-text-ter); line-height: 1.3;
+}
+
+/* ============== PAGE LAYOUT ============== */
+.admin-page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 24px 32px 48px;
+}
+
+/* page header */
+.page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--st-border);
+  margin-bottom: 24px;
+}
+.page-head__crumb {
+  font-size: 11px; color: var(--st-text-ter);
+  letter-spacing: 0.06em; text-transform: uppercase;
+  margin-bottom: 8px; white-space: nowrap;
+}
+.page-head__crumb b { color: var(--st-text-sec); font-weight: 500; }
+.page-head__title { display: flex; flex-direction: column; gap: 4px; }
+.page-head__sub {
+  font-size: 12px; color: var(--st-text-ter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.page-head__right {
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
+.page-head__live {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--st-text-ter); white-space: nowrap;
+}
+
+/* ============== TILES ============== */
+.tile {
+  background: var(--st-bg-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  padding: 16px 20px;
+}
+.tile--admin { padding: 16px 20px; }
+.tile--wide { padding: 16px 20px; }
+.tile__head {
+  margin-bottom: 12px;
+  display: flex; align-items: center;
+}
+.tile__head--split { justify-content: space-between; gap: 16px; }
+
+/* ============== METRIC STRIP ============== */
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.metric-tile {
+  background: var(--st-bg-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 6px;
+  padding: 20px 24px;
+  min-height: 96px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.metric-tile__label {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--st-text-ter); white-space: nowrap;
+}
+.metric-tile__num {
+  font-family: var(--st-font-mono);
+  font-size: 24px; font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--st-text-pri);
+  font-variant-numeric: tabular-nums;
+  line-height: 1; white-space: nowrap;
+}
+.metric-tile__num .sub {
+  font-size: 14px; color: var(--st-text-ter); font-weight: 400;
+}
+.metric-tile__delta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; white-space: nowrap;
+}
+
+/* ============== ADMIN 3-COL GRID ============== */
+.admin-grid-3 {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.4fr) minmax(260px, 1fr);
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.admin-grid-3 .col {
+  display: flex; flex-direction: column; gap: 24px;
+  min-width: 0;
+}
+@media (max-width: 1280px) {
+  .admin-grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ============== STATUS DOT ============== */
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+}
+.dot--green { background: var(--st-success); }
+.dot--warn { background: var(--st-warning); }
+.dot--err { background: var(--st-error); }
+.dot--blue { background: var(--st-info); }
+.dot--pulse { animation: ax-dot-pulse 2s ease-in-out infinite; }
+@keyframes ax-dot-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50% { opacity: 0.6; box-shadow: 0 0 0 4px transparent; }
+}
+
+/* ============== CHIPS (admin variants) ============== */
+.ax-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 8px;
+  border-radius: 4px;
+  font-size: 11px; font-weight: 500; line-height: 1;
+  color: var(--st-text-sec);
+  background: rgba(255, 255, 255, 0.06);
+  white-space: nowrap; border: none;
+}
+.ax-chip i, .ax-chip svg { width: 11px; height: 11px; }
+.ax-chip--mono {
+  font-family: var(--st-font-mono);
+  color: var(--st-text-pri);
+  background: rgba(255, 255, 255, 0.04);
+}
+.ax-chip--up {
+  color: var(--st-success);
+  background: rgba(11, 212, 112, 0.10);
+}
+.ax-chip--down {
+  color: var(--st-error);
+  background: rgba(255, 77, 77, 0.10);
+}
+
+/* ============== DONUT-ROW (chart + legend) ============== */
+.donut-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+.donut-legend { display: flex; flex-direction: column; gap: 8px; }
+.donut-legend__item { display: flex; align-items: center; gap: 8px; }
+.donut-legend__item .dot { width: 8px; height: 8px; }
+.donut-legend__label {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+
+/* ============== HEALTH LIST ============== */
+.health-list {
+  display: flex; flex-direction: column;
+}
+.health-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) 56px 56px 56px;
+  gap: 8px;
+  align-items: center;
+  height: 40px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--ax-tree-divider);
+}
+.health-row:last-child { border-bottom: none; }
+.health-row__name {
+  font-size: 12px; color: var(--st-text-pri);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.health-row__val {
+  font-family: var(--st-font-mono);
+  font-size: 11px; color: var(--st-text-sec);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============== TOP USERS ============== */
+.topuser-list { display: flex; flex-direction: column; }
+.topuser {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--ax-tree-divider);
+}
+.topuser:last-child { border-bottom: none; }
+.topuser__rank {
+  font-family: var(--st-font-mono);
+  font-size: 12px; color: var(--st-text-ter);
+}
+.topuser__name {
+  font-size: 13px; color: var(--st-text-pri);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.topuser__cost {
+  font-family: var(--st-font-mono);
+  font-size: 13px; font-weight: 500;
+  color: var(--st-success);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.topuser__sub {
+  grid-column: 2 / 4;
+  font-family: var(--st-font-mono);
+  font-size: 11px; color: var(--st-text-ter);
+}
+
+/* ============== HEATMAP LEGEND ============== */
+.heatmap-legend {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--st-text-ter);
+}
+.heatmap-legend__swatches {
+  display: inline-flex; gap: 2px;
+}
+.heatmap-legend__swatches i {
+  width: 10px; height: 10px; border-radius: 2px;
+}
+
+/* ============== ATABLE (admin table, 36px rows) ============== */
+.atable { display: flex; flex-direction: column; }
+.atable__head, .atable__row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 12px;
+}
+.atable__head {
+  height: 32px;
+  border-bottom: 1px solid var(--st-border);
+}
+.atable__head > div {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--st-text-ter);
+}
+.atable__body { display: flex; flex-direction: column; }
+.atable__row {
+  height: 36px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--ax-tree-divider);
+  transition: background 150ms ease;
+  position: relative;
+}
+.atable__row:hover { background: var(--ax-row-hover); }
+.atable__row > div {
+  font-size: 12px; color: var(--st-text-pri);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.atable__row .mono,
+.atable__row.mono {
+  font-family: var(--st-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============== ADMIN STATUS TAG ============== */
+.atag {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 18px; padding: 0 6px;
+  border-radius: 2px;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  line-height: 1;
+}
+.atag__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.atag--ok { color: var(--st-success); background: rgba(11, 212, 112, 0.10); }
+.atag--ok .atag__dot { background: var(--st-success); animation: ax-dot-pulse 2s ease-in-out infinite; }
+.atag--warn { color: var(--st-warning); background: rgba(245, 166, 35, 0.10); }
+.atag--warn .atag__dot { background: var(--st-warning); }
+.atag--err { color: var(--st-error); background: rgba(255, 77, 77, 0.10); box-shadow: 0 0 8px rgba(255, 77, 77, 0.15); }
+.atag--err .atag__dot { background: var(--st-error); }
+.atag--idle { color: var(--st-text-ter); background: rgba(255, 255, 255, 0.04); }
+.atag--idle .atag__dot { background: var(--st-text-ter); }
+
+/* ============== ADMIN STARFIELD VIGNETTE (deeper) ============== */
+/* admin 比 user 版本暗 10%，让数据更可读 */
+.starfield__vignette--admin {
+  background: radial-gradient(
+    ellipse 65% 50% at 50% 45%,
+    rgba(0, 0, 0, 0.80),
+    rgba(0, 0, 0, 0.35) 70%,
+    rgba(0, 0, 0, 0.10) 100%
+  ) !important;
+}
+
+/* ============== ADMIN MAIN AREA SCROLL ============== */
+.admin-main::-webkit-scrollbar { width: 6px; }
+.admin-main::-webkit-scrollbar-track { background: transparent; }
+.admin-main::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 3px;
+}
+.admin-main::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.20); }

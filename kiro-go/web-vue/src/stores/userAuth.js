@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { userApi } from '../api/user'
+import { applySystemUnitFromMe } from '../composables/useSystemUnit'
 
 export const useUserAuth = defineStore('userAuth', () => {
   const apiKey = ref(localStorage.getItem('user_api_key') || sessionStorage.getItem('user_api_key') || '')
@@ -26,6 +27,7 @@ export const useUserAuth = defineStore('userAuth', () => {
       apiKey.value = key
       const data = await userApi('/me')
       userInfo.value = data
+      applySystemUnitFromMe(data)
       return true
     } catch (e) {
       error.value = e.message
@@ -44,6 +46,7 @@ export const useUserAuth = defineStore('userAuth', () => {
     try {
       const data = await userApi('/me')
       userInfo.value = data
+      applySystemUnitFromMe(data)
     } catch {}
   }
 

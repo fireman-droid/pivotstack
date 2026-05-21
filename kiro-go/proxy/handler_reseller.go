@@ -231,7 +231,7 @@ func (h *Handler) apiPatchChildKey(w http.ResponseWriter, r *http.Request, paren
 				KeyNote:   parent.Note,
 				Type:      recType,
 				AmountUSD: absUSD,
-				AmountCNY: absUSD * config.CNYPerUSDFace,
+				AmountCNY: config.CNYFromVirtualUSD(absUSD),
 				Operator:  "reseller:" + parent.ID[:8],
 				Note:      fmt.Sprintf("adjust child %s balance: $%.4f → $%.4f", child.Note, oldBalance, newBalance),
 			})
@@ -290,7 +290,7 @@ func (h *Handler) apiDeleteChildKey(w http.ResponseWriter, _ *http.Request, pare
 			KeyNote:   parent.Note,
 			Type:      "reseller_refund",
 			AmountUSD: refund,
-			AmountCNY: refund * config.CNYPerUSDFace,
+			AmountCNY: config.CNYFromVirtualUSD(refund),
 			Operator:  "reseller:" + parent.ID[:8],
 			Note:      fmt.Sprintf("refund from deleted child %s", child.Note),
 		})
@@ -348,7 +348,7 @@ func (h *Handler) apiResellerTransfer(w http.ResponseWriter, r *http.Request, pa
 		KeyNote:   parent.Note,
 		Type:      recType,
 		AmountUSD: absUSD,
-		AmountCNY: absUSD * config.CNYPerUSDFace,
+		AmountCNY: config.CNYFromVirtualUSD(absUSD),
 		Operator:  "reseller:" + parent.ID[:8],
 		Note:      fmt.Sprintf("%s, child=%s", note, child.Note),
 	})
@@ -439,7 +439,7 @@ func buildResellerRechargeRecord(parent *config.ApiKeyInfo, child *config.ApiKey
 		KeyNote:   child.Note,
 		Type:      "reseller_transfer_in",
 		AmountUSD: amountUSD,
-		AmountCNY: amountUSD * config.CNYPerUSDFace,
+		AmountCNY: config.CNYFromVirtualUSD(amountUSD),
 		Operator:  "reseller:" + parent.ID[:8],
 		Note:      note,
 	}

@@ -1,316 +1,297 @@
-<script setup>
+<script setup lang="ts">
 import { useRouter, useRoute } from 'vue-router'
 import { useUserAuth } from '../../stores/userAuth'
-import { computed, onMounted } from 'vue'
-import { LayoutDashboard, Gift, ScrollText, LogOut, Zap, Users } from 'lucide-vue-next'
-import WorldSwitcher from '../../components/WorldSwitcher.vue'
-import WorldChip from '../../components/world/WorldChip.vue'
+import { useSystemUnit } from '../../composables/useSystemUnit'
+import { useNotificationStore } from '../../stores/notifications'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { LayoutDashboard, Wallet, ScrollText, Code2, Users, LogOut, DollarSign, Key } from 'lucide-vue-next'
+import Starfield from '../../components/user/stellar/Starfield.vue'
+import LiveIndicator from '../../components/user/stellar/LiveIndicator.vue'
+import NotifBell from '../../components/notif/NotifBell.vue'
+import NotifModal from '../../components/notif/NotifModal.vue'
+import NotifCritBanner from '../../components/notif/NotifCritBanner.vue'
+import UpgradeAccountModal from '../../components/user/UpgradeAccountModal.vue'
+import type { UserNotification } from '../../api/notifications'
+
+const UPGRADE_SKIP_KEY = 'pivotstack_upgrade_skip_count'
+import logoUrl from '../../assets/pivotstack-logo.png'
 
 const router = useRouter()
 const route = useRoute()
-const auth = useUserAuth()
+const auth = useUserAuth() as any
+const { toCny } = useSystemUnit()
 
-const dashboardItem = { path: '/user/dashboard', label: '概览', icon: LayoutDashboard }
-const rechargeItem  = { path: '/user/recharge',  label: '充值', icon: Gift }
-const logsItem      = { path: '/user/logs',      label: '日志', icon: ScrollText }
-const resellerNavItem = { path: '/user/reseller', label: '代理', icon: Users }
-
-// 子 key 隐藏「充值」（钱由代理转账，不通过激活码）
-// reseller 加显示「代理」管理菜单
 const navItems = computed(() => {
-  const items = [dashboardItem]
-  if (!auth.userInfo?.isChildKey) items.push(rechargeItem)
-  items.push(logsItem)
-  if (auth.userInfo?.isReseller) items.push(resellerNavItem)
+  const items: { path: string; label: string; icon: any }[] = [
+    { path: '/user/dashboard', label: '概览', icon: LayoutDashboard },
+  ]
+  if (!auth.userInfo?.isChildKey) items.push({ path: '/user/recharge', label: '充值', icon: Wallet })
+  items.push({ path: '/user/logs', label: '调用日志', icon: ScrollText })
+  items.push({ path: '/user/api-docs', label: '接入示例', icon: Code2 })
+  items.push({ path: '/user/keys', label: 'API Key', icon: Key })
+  if (auth.userInfo?.isReseller) items.push({ path: '/user/reseller', label: '代理', icon: Users })
   return items
 })
 
-const isActivated = computed(() => !!auth.plan)
-const balanceValue = computed(() => Number(auth.balance || 0))
-const giftBalanceValue = computed(() => Number(auth.userInfo?.giftBalance || 0))
-const totalBalanceValue = computed(() => balanceValue.value + giftBalanceValue.value)
+const balance = computed(() => Number(auth.balance || 0))
+const giftBalance = computed(() => Number(auth.userInfo?.giftBalance || 0))
+const totalBalance = computed(() => balance.value + giftBalance.value)
 const isCreditPlan = computed(() => auth.plan === 'credit' || auth.plan === 'hybrid')
-const isTimedPlan  = computed(() => auth.plan === 'timed'  || auth.plan === 'hybrid')
+const balanceLow = computed(() => isCreditPlan.value && totalBalance.value < 1)
+const balanceCny = computed(() => toCny(totalBalance.value).toFixed(2))
 
-const balanceDisplay = computed(() => {
-  if (!isCreditPlan.value) return null
-  return `$${totalBalanceValue.value.toFixed(2)}`
-})
-const balanceTooltip = computed(() => {
+const balanceTitle = computed(() => {
   if (!isCreditPlan.value) return ''
-  return `充值 $${balanceValue.value.toFixed(2)} · 赠送 $${giftBalanceValue.value.toFixed(2)}`
+  return `充值 $${balance.value.toFixed(2)} · 赠送 $${giftBalance.value.toFixed(2)} · ≈¥${balanceCny.value}`
 })
-const balanceVariant = computed(() => totalBalanceValue.value < 1 ? 'danger' : 'success')
 
-const timeDisplay = computed(() => {
-  if (!isTimedPlan.value) return null
-  const exp = auth.userInfo?.expiresAt || 0
-  if (!exp) return '永久'
-  const diff = Math.max(0, exp - Date.now() / 1000)
-  if (diff <= 0) return '已过期'
-  const d = Math.floor(diff / 86400)
-  const h = Math.floor((diff % 86400) / 3600)
-  const m = Math.max(1, Math.ceil((diff % 3600) / 60))
-  let t = ''
-  if (d > 0) t += d + '天'
-  if (h > 0) t += h + '时'
-  if (d === 0 && m > 0) t += m + '分'
-  return t || '1分'
-})
-const timeVariant = computed(() => {
-  if (!isTimedPlan.value) return 'info'
-  const exp = auth.userInfo?.expiresAt || 0
-  if (!exp) return 'info'
-  const diff = Math.max(0, exp - Date.now() / 1000)
-  if (diff <= 0) return 'neutral'
-  if (diff < 3 * 86400) return 'danger'
-  if (diff < 7 * 86400) return 'warning'
-  return 'info'
-})
+function isActive(path: string) {
+  return route.path === path || route.path.startsWith(path + '/')
+}
 
 function handleLogout() {
   auth.logout()
   router.replace('/login')
 }
 
-onMounted(() => { auth.refresh() })
+// Notification: 启动 polling，layout 卸载时关掉。
+const notif = useNotificationStore()
+const openNotif = ref<UserNotification | null>(null)
+function onOpenNotif(n: UserNotification) { openNotif.value = n }
+function openCritBannerNotif() { openNotif.value = notif.topCritical }
+function closeNotif() { openNotif.value = null }
+function goNotifCenter() { router.push('/user/notifications') }
+
+// v6: 老 key 升级账号 Modal（软强制）
+const upgradeShow = ref(false)
+const upgradeSkipCount = ref(0)
+function checkUpgradeNeeded() {
+  if (!auth.apiKey) return
+  if (auth.userInfo?.userId) return // 已绑定，不弹
+  upgradeSkipCount.value = parseInt(localStorage.getItem(UPGRADE_SKIP_KEY) || '0', 10) || 0
+  upgradeShow.value = true
+}
+function onUpgradeSkip() {
+  upgradeSkipCount.value += 1
+  localStorage.setItem(UPGRADE_SKIP_KEY, String(upgradeSkipCount.value))
+  upgradeShow.value = false
+}
+async function onUpgradeSuccess() {
+  localStorage.removeItem(UPGRADE_SKIP_KEY)
+  upgradeShow.value = false
+  await auth.refresh()
+}
+
+onMounted(async () => {
+  await auth.refresh()
+  notif.startPolling()
+  checkUpgradeNeeded()
+})
+onUnmounted(() => notif.stopPolling())
 </script>
 
 <template>
-  <div class="user-shell">
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div class="topbar-left">
-          <router-link to="/user/dashboard" class="brand">
-            <div class="brand-mark">
-              <Zap :size="14" stroke-width="2.6" />
-            </div>
-            <span class="brand-name">PivotStack</span>
-          </router-link>
-          <nav class="nav-row" aria-label="用户导航">
-            <router-link
-              v-for="item in navItems"
-              :key="item.path"
-              :to="item.path"
-              :class="['nav-pill', { active: route.path === item.path || route.path.startsWith(item.path + '/') }]"
-            >
-              <component :is="item.icon" :size="14" stroke-width="2.2" />
-              <span>{{ item.label }}</span>
-            </router-link>
-          </nav>
-        </div>
+  <div class="user-shell stellar-scope">
+    <Starfield />
+    <NotifCritBanner @open="openCritBannerNotif" />
+    <NotifModal :notif="openNotif" @close="closeNotif" />
+    <UpgradeAccountModal
+      v-model:show="upgradeShow"
+      :skip-count="upgradeSkipCount"
+      @skip="onUpgradeSkip"
+      @success="onUpgradeSuccess"
+    />
 
-        <div class="topbar-right">
-          <WorldChip v-if="!isActivated" variant="neutral">未激活</WorldChip>
-          <WorldChip v-if="balanceDisplay" :variant="balanceVariant" :dot="true" :title="balanceTooltip">
-            {{ balanceDisplay }}
-          </WorldChip>
-          <WorldChip v-if="timeDisplay" :variant="timeVariant" :pulse="timeVariant === 'danger'">
-            {{ timeDisplay }}
-          </WorldChip>
-          <WorldSwitcher class="hide-on-mobile" />
-          <button class="icon-btn" @click="handleLogout" title="退出登录" aria-label="退出">
-            <LogOut :size="15" />
+    <header class="st-nav">
+      <div class="st-nav__inner">
+        <router-link to="/user/dashboard" class="st-nav__brand">
+          <img :src="logoUrl" class="st-nav__logo" alt="PivotStack" />
+          <span class="st-nav__brand-name">PivotStack</span>
+          <span class="st-nav__brand-role">USER</span>
+        </router-link>
+
+        <nav class="st-nav__center" aria-label="用户导航">
+          <router-link
+            v-for="item in navItems"
+            :key="item.path"
+            :to="item.path"
+            :class="['st-nav__item', { 'is-active': isActive(item.path) }]"
+          >
+            <component :is="item.icon" :size="14" />
+            <span>{{ item.label }}</span>
+          </router-link>
+        </nav>
+
+        <div class="st-nav__right">
+          <LiveIndicator class="st-nav__live" />
+          <NotifBell @open="onOpenNotif" @see-all="goNotifCenter" />
+          <div
+            v-if="isCreditPlan"
+            class="balance-chip"
+            :class="{ 'is-low': balanceLow }"
+            :title="balanceTitle"
+          >
+            <DollarSign :size="12" />
+            <span class="t-num-strong">{{ totalBalance.toFixed(2) }}</span>
+          </div>
+          <button class="btn btn--ghost btn--icon" title="退出" @click="handleLogout">
+            <LogOut :size="14" />
           </button>
         </div>
       </div>
     </header>
 
-    <main class="user-main" id="main-content">
+    <main class="st-main" id="main-content">
       <router-view v-slot="{ Component }">
-        <Transition name="page-fade" mode="out-in">
-          <component :is="Component" />
-        </Transition>
+        <component :is="Component" />
       </router-view>
     </main>
 
-    <nav class="mobile-tabbar" aria-label="移动端导航">
+    <nav class="st-mobile-tabbar" aria-label="移动端导航">
       <router-link
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
-        :class="['tabbar-item', { active: route.path === item.path || route.path.startsWith(item.path + '/') }]"
+        :class="['st-mobile-tabbar__item', { 'is-active': isActive(item.path) }]"
       >
-        <span class="tabbar-icon">
-          <component :is="item.icon" :size="18" stroke-width="2.2" />
-        </span>
-        <span class="tabbar-label">{{ item.label }}</span>
+        <component :is="item.icon" :size="18" />
+        <span>{{ item.label }}</span>
       </router-link>
     </nav>
   </div>
 </template>
 
-<style scoped>
+<style>
 .user-shell {
-  height: 100vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  color: var(--world-text-primary);
-  background: var(--world-bg-main);
-  font-family: var(--world-font-sans);
+  min-height: 100vh;
+  color: var(--st-text-pri);
+  font-family: var(--st-font-sans);
   position: relative;
 }
-.user-shell::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
-  opacity: 0.5;
+.st-nav {
+  position: sticky; top: 0; z-index: 100;
+  height: 56px;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid #1a1a1a;
 }
-[data-world="daogui"] .user-shell::before { opacity: 0.06; }
-
-.topbar {
-  flex-shrink: 0;
-  z-index: 100;
-  padding: 0 16px;
-  margin-top: 16px;
-}
-.topbar-inner {
-  max-width: 1200px;
+.st-nav__inner {
+  height: 100%;
+  max-width: 1440px;
   margin: 0 auto;
+  padding: 0 32px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 56px;
-  padding: 0 16px;
-  border-radius: var(--world-radius-2xl);
-  background: var(--world-glass-bg-strong);
-  backdrop-filter: blur(var(--world-glass-blur));
-  -webkit-backdrop-filter: blur(var(--world-glass-blur));
-  border: 1px solid var(--world-glass-border);
-  box-shadow: var(--world-shadow-md);
+  gap: 24px;
 }
-[data-world="daogui"] .topbar-inner { border-color: rgba(184, 134, 11, 0.22); }
-
-.topbar-left { display: flex; align-items: center; gap: 28px; min-width: 0; }
-.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; text-decoration: none; }
-.brand-mark {
-  width: 28px; height: 28px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: var(--world-radius-md);
-  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
-  color: white;
-}
-[data-world="daogui"] .brand-mark { box-shadow: 0 0 14px rgba(196, 30, 58, 0.4); }
-.brand-name {
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  white-space: nowrap;
-  font-family: var(--world-font-display);
-}
-
-.nav-row { display: flex; gap: 4px; }
-.nav-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: var(--world-radius-lg);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
+.st-nav__brand {
+  display: flex; align-items: center; gap: 12px;
   text-decoration: none;
-  transition: all 200ms var(--world-transition-fast, cubic-bezier(0.4, 0, 0.2, 1));
+  width: 240px;
+  flex-shrink: 0;
 }
-.nav-pill:hover { color: var(--world-text-primary); background: var(--world-overlay-light); }
-.nav-pill.active {
-  color: white;
-  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
+.st-nav__logo {
+  width: 24px; height: 24px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: #fff;
 }
-[data-world="daogui"] .nav-pill.active { box-shadow: 0 4px 14px -4px rgba(196, 30, 58, 0.5); }
-
-.topbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-
-.icon-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px;
-  border-radius: var(--world-radius-md);
-  background: var(--world-overlay-light);
-  border: 1px solid var(--world-glass-border);
-  color: var(--world-text-mute);
-  cursor: pointer;
-  transition: all 200ms ease;
+.st-nav__brand-name {
+  font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--st-text-pri);
 }
-.icon-btn:hover {
-  color: var(--world-error);
-  background: rgba(239, 68, 68, 0.10);
-  border-color: rgba(239, 68, 68, 0.35);
+.st-nav__brand-role {
+  font-size: 10px; font-weight: 500;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--st-text-ter);
+  border: 1px solid var(--st-border);
+  padding: 2px 6px;
+  border-radius: 2px;
 }
 
-.user-main {
-  flex: 1;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 1200px;
+.st-nav__center {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.st-nav__item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; height: 32px;
+  font-size: 13px; font-weight: 400;
+  color: var(--st-text-sec);
+  border-radius: 4px;
+  text-decoration: none;
+  position: relative;
+  transition: color 150ms ease, background 150ms ease;
+}
+.st-nav__item:hover { color: var(--st-text-pri); background: rgba(255,255,255,0.04); }
+.st-nav__item.is-active { color: var(--st-text-pri); }
+.st-nav__item::after {
+  content: ""; position: absolute; left: 50%; bottom: -10px;
+  height: 2px; width: 0; background: var(--st-success);
+  transform: translateX(-50%);
+  transition: width 200ms ease;
+}
+.st-nav__item.is-active::after { width: 24px; }
+
+.st-nav__right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+
+.balance-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 12px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  color: var(--st-text-pri);
+  font-family: var(--st-font-mono); font-size: 13px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.balance-chip svg { opacity: 0.8; }
+.balance-chip.is-low { color: var(--st-warning); }
+
+.st-main {
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 28px 24px 96px;
+  padding: 32px 32px 64px;
+  position: relative;
+  z-index: 1;
 }
 
-.mobile-tabbar {
-  display: none;
-  position: fixed;
-  bottom: 12px; left: 12px; right: 12px;
-  z-index: 100;
-  background: var(--world-glass-bg-strong);
-  backdrop-filter: blur(var(--world-glass-blur));
-  -webkit-backdrop-filter: blur(var(--world-glass-blur));
-  border: 1px solid var(--world-glass-border);
-  border-radius: var(--world-radius-2xl);
-  padding: 8px;
-  justify-content: space-around;
-  box-shadow: var(--world-shadow-md);
-}
-[data-world="daogui"] .mobile-tabbar { border-color: rgba(184, 134, 11, 0.22); }
+.st-mobile-tabbar { display: none; }
 
-.tabbar-item {
-  flex: 1;
-  display: flex; flex-direction: column; align-items: center;
-  gap: 2px; padding: 8px 4px;
-  border-radius: var(--world-radius-lg);
-  color: var(--world-text-mute);
-  text-decoration: none;
-  font-size: 0.7rem;
-  font-weight: 700;
-  transition: all 200ms ease;
+@media (max-width: 1024px) {
+  .st-nav__inner { padding: 0 20px; }
+  .st-nav__brand { width: auto; }
+  .st-nav__brand-role { display: none; }
+  .st-nav__center { gap: 0; }
+  .st-nav__item span { display: none; }
+  .st-nav__item { padding: 6px 10px; }
+  .st-main { padding: 24px 20px 48px; }
 }
-.tabbar-icon {
-  display: flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px;
-  border-radius: var(--world-radius-md);
-  transition: all 220ms ease;
-}
-.tabbar-item.active { color: var(--world-accent); }
-.tabbar-item.active .tabbar-icon {
-  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
-  color: white;
-}
-[data-world="daogui"] .tabbar-item.active .tabbar-icon { box-shadow: 0 0 12px rgba(196, 30, 58, 0.5); }
-
-.page-fade-enter-active { transition: all 260ms cubic-bezier(0.16, 1, 0.3, 1); }
-.page-fade-leave-active { transition: all 180ms ease; }
-.page-fade-enter-from   { opacity: 0; transform: translateY(8px); }
-.page-fade-leave-to     { opacity: 0; }
-
 @media (max-width: 768px) {
-  .topbar { top: 8px; padding: 0 8px; margin-top: 8px; }
-  .topbar-inner { padding: 0 12px; height: 52px; }
-  .nav-row { display: none; }
-  .brand-name { display: none; }
-  .hide-on-mobile { display: none; }
-  .mobile-tabbar { display: flex; }
-  .user-main { padding: 20px 16px 96px; }
-  .topbar-right { gap: 6px; }
-  .icon-btn { width: 28px; height: 28px; }
+  .st-nav__inner { padding: 0 16px; }
+  .st-nav__brand-name { display: none; }
+  .st-nav__live { display: none; }
+  .st-main { padding: 20px 16px 88px; }
+  .st-nav__center { display: none; }
+  .st-mobile-tabbar {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 50;
+    background: rgba(0,0,0,0.92);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--st-border);
+    padding: 6px 0;
+  }
+  .st-mobile-tabbar__item {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 6px 4px;
+    color: var(--st-text-ter);
+    text-decoration: none;
+    font-size: 10px;
+  }
+  .st-mobile-tabbar__item.is-active { color: var(--st-text-pri); }
+  .st-mobile-tabbar__item.is-active svg { color: var(--st-success); }
 }
 </style>

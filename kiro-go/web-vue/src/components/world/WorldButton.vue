@@ -84,12 +84,14 @@ function onClick(e) {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* === Variant: primary === */
+/* v6: accent 是近白色（Vercel 风 primary），文字必须读反色（黑）才有对比度。
+   --world-btn-fg 在 :root 里指向 bg-main 黑，旧主题（亮底）下可被局部覆盖。 */
 .v-primary {
   background: var(--world-accent);
-  color: #fff;
+  color: var(--world-btn-fg, var(--world-bg-main));
   border-color: var(--world-accent);
 }
-.v-primary:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.v-primary:hover:not(:disabled) { background: #ffffff; transform: translateY(-1px); }
 .v-primary:active:not(:disabled) { transform: scale(0.98); }
 
 /* === Variant: secondary === */

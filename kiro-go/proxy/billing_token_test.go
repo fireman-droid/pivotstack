@@ -205,7 +205,10 @@ func TestTokenCostForChannel(t *testing.T) {
 			want: 3.0,
 		},
 		{
-			name:      "channel missing model falls back to global",
+			// v4 严格化：channel 指定后不再 fallback 全局，缺价 fail closed。
+			// 旧 v3 行为是 fallback global (want: 6.0)；v4 改成 ErrSellPriceMissing
+			// 避免同 model 不同渠道被收一样的钱。
+			name:      "v4 channel missing model: fail closed, no global fallback",
 			channelID: "ch-fallback",
 			model:     tokenTestModel,
 			usage:     TokenUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000},
@@ -223,7 +226,7 @@ func TestTokenCostForChannel(t *testing.T) {
 					},
 				},
 			},
-			want: 6.0,
+			wantErr: ErrSellPriceMissing,
 		},
 		{
 			name:  "zero tokens",
@@ -810,7 +813,9 @@ func TestHandleChannelRequest_OpenAIChannelExecErrorRefundsPreBody(t *testing.T)
 		RawBody:        rawBody,
 	}, &UserContext{KeyID: keyID})
 
-	if rr.Code != http.StatusBadGateway {
+	// v4 语义变化：上游 4xx/5xx 通过 UpstreamHTTPError 透传原状态码给客户端，
+	// 不再被一律封装成 502 upstream_error。v3 期望 502，v4 期望上游真实 500。
+	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
 	}
 

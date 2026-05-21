@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<!-- PivotStack · Workbench Edition · Login + Admin + Notification (all-in-one) -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PivotStack · Workbench</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+
+<link rel="stylesheet" href="stellar.css" />
+<link rel="stylesheet" href="admin-shared.css" />
+<link rel="stylesheet" href="pivotstack-admin.css" />
+</head>
+<body class="ps-body">
+
+  <!-- ============== STARFIELD (shared) ============== -->
+  <div class="starfield" aria-hidden="true">
+    <div class="starfield__rot">
+      <div class="starfield__static"></div>
+      <div class="starfield__twinkle" id="twinkleLayer"></div>
+    </div>
+    <div class="starfield__meteors" id="meteorLayer"></div>
+    <div class="starfield__vignette starfield__vignette--admin"></div>
+  </div>
+
+  <!-- ============== MEGA NAV ============== -->
+  <header class="mega-nav">
+    <div class="mega-nav__inner">
+      <div class="mega-nav__brand">
+        <span class="mega-nav__logo">P</span>
+        <span class="mega-nav__name">PivotStack</span>
+        <span class="mega-nav__tag">PROTOTYPE</span>
+      </div>
+      <nav class="mega-nav__tabs" role="tablist">
+        <button class="mega-tab is-active" data-mega="login" role="tab">
+          <i data-lucide="log-in"></i><span>Login</span>
+        </button>
+        <button class="mega-tab" data-mega="admin" role="tab">
+          <i data-lucide="terminal"></i><span>Admin Console</span>
+        </button>
+        <button class="mega-tab" data-mega="notif" role="tab">
+          <i data-lucide="bell"></i><span>Notification 系统</span>
+        </button>
+      </nav>
+      <div class="mega-nav__hint">
+        <span class="t-label tertiary">这是一份原型 · 切换上面看不同部分</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 1 · LOGIN                                              -->
+  <!-- ============================================================== -->
+  <section class="mega-section is-active" data-mega-panel="login">
+
+    <!-- Direction picker (top sub-tabs) -->
+    <div class="dir-picker">
+      <div class="dir-picker__inner">
+        <span class="t-label tertiary">CREATIVE DIRECTION</span>
+        <div class="dir-picker__tabs">
+          <button class="dir-tab is-active" data-dir="singularity">
+            <span class="dir-tab__num">A</span>
+            <div class="dir-tab__copy">
+              <span class="dir-tab__name">The Singularity</span>
+              <span class="dir-tab__desc">中央脉动 Orb · 推荐</span>
+            </div>
+          </button>
+          <button class="dir-tab" data-dir="boot">
+            <span class="dir-tab__num">B</span>
+            <div class="dir-tab__copy">
+              <span class="dir-tab__name">The Boot Sequence</span>
+              <span class="dir-tab__desc">终端启动序列</span>
+            </div>
+          </button>
+          <button class="dir-tab" data-dir="warp">
+            <span class="dir-tab__num">C</span>
+            <div class="dir-tab__copy">
+              <span class="dir-tab__name">The Warp Tunnel</span>
+              <span class="dir-tab__desc">曲速隧道凝聚</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTION A — Singularity -->
+    <div class="login-stage" data-dir-panel="singularity">
+      <div class="orb-scene">
+        <canvas id="orbDust" class="orb-dust"></canvas>
+        <div class="orb" id="orb">
+          <div class="orb__core"></div>
+          <div class="orb__halo"></div>
+          <div class="orb__ring"></div>
+        </div>
+        <div class="orb-brand">
+          <div class="login-brand">PivotStack</div>
+          <div class="login-subtitle">AI gateway · sign in to continue</div>
+          <div class="orb-hint">
+            <span class="t-label tertiary">CLICK ORB TO ENTER</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Login card (slides in when orb is clicked) -->
+      <div class="login-card-wrap" id="loginCardA">
+        <!-- naive-ui: NCard / NTabs + NTabPane -->
+        <div class="login-card">
+          <div class="login-card__brand">
+            <span class="login-card__logo">P</span>
+            <span>PivotStack</span>
+          </div>
+
+          <div class="login-tabs">
+            <button class="login-tab is-active" data-ltab="key">API Key</button>
+            <button class="login-tab" data-ltab="user">用户名密码</button>
+          </div>
+
+          <!-- key form -->
+          <div class="login-form" data-lpanel="key">
+            <label class="login-field">
+              <span class="t-label">ACCESS TOKEN</span>
+              <div class="login-input-row">
+                <input type="password" class="login-input mono" value="sk-XYZ987654321ABCDEFGHe3a2" placeholder="sk-..." />
+                <button class="login-eye" data-eye><i data-lucide="eye"></i></button>
+              </div>
+              <span class="t-meta tertiary">来自老用户?继续用 API key 即可登录</span>
+            </label>
+
+            <button class="btn btn--primary btn--block btn--lg">登录</button>
+            <button class="login-switch" data-switch-to="user">用户名密码登录 →</button>
+          </div>
+
+          <!-- user/pass form -->
+          <div class="login-form" data-lpanel="user" hidden>
+            <label class="login-field">
+              <span class="t-label">USERNAME</span>
+              <input type="text" class="login-input" placeholder="your@email.com 或 用户名" />
+            </label>
+            <label class="login-field">
+              <span class="t-label">PASSWORD</span>
+              <div class="login-input-row">
+                <input type="password" class="login-input" placeholder="••••••••" />
+                <button class="login-eye" data-eye><i data-lucide="eye"></i></button>
+              </div>
+            </label>
+            <div class="login-meta-row">
+              <label class="login-check">
+                <span class="chk"></span>
+                <span class="t-body">记住我 (30 天)</span>
+              </label>
+              <button class="login-link">忘记密码?</button>
+            </div>
+            <button class="btn btn--primary btn--block btn--lg">登录</button>
+            <button class="login-switch" data-switch-to="key">我有 API key →</button>
+          </div>
+
+          <div class="login-card__foot">
+            <span class="t-meta tertiary">v6.0 · 邀请制 · 没账号联系 admin</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTION B — Boot Sequence -->
+    <div class="login-stage" data-dir-panel="boot" hidden>
+      <div class="boot-screen">
+        <div class="boot-frame">
+          <div class="boot-frame__bar">
+            <span class="boot-dot boot-dot--r"></span>
+            <span class="boot-dot boot-dot--y"></span>
+            <span class="boot-dot boot-dot--g"></span>
+            <span class="boot-frame__title mono">pivot@gateway:~ — login</span>
+          </div>
+          <div class="boot-frame__body" id="bootBody">
+            <!-- typed sequence injected by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTION C — Warp Tunnel -->
+    <div class="login-stage" data-dir-panel="warp" hidden>
+      <div class="warp-scene">
+        <canvas id="warpCanvas" class="warp-canvas"></canvas>
+        <div class="warp-card-wrap" id="warpCardWrap">
+          <svg class="warp-frame" viewBox="0 0 420 540" preserveAspectRatio="none" aria-hidden="true">
+            <rect class="warp-frame__rect" x="1" y="1" width="418" height="538" rx="8" />
+          </svg>
+          <div class="login-card warp-card">
+            <div class="login-card__brand">
+              <span class="login-card__logo">P</span>
+              <span>PivotStack</span>
+            </div>
+            <div class="login-tabs">
+              <button class="login-tab is-active" data-ltab-warp="key">API Key</button>
+              <button class="login-tab" data-ltab-warp="user">用户名密码</button>
+            </div>
+            <div class="login-form" data-lpanel-warp="key">
+              <label class="login-field">
+                <span class="t-label">ACCESS TOKEN</span>
+                <input type="password" class="login-input mono" value="sk-XYZ987654321ABCDEFGHe3a2" />
+              </label>
+              <button class="btn btn--primary btn--block btn--lg">登录</button>
+            </div>
+            <div class="login-form" data-lpanel-warp="user" hidden>
+              <label class="login-field">
+                <span class="t-label">USERNAME</span>
+                <input type="text" class="login-input" placeholder="your@email.com" />
+              </label>
+              <label class="login-field">
+                <span class="t-label">PASSWORD</span>
+                <input type="password" class="login-input" placeholder="••••••••" />
+              </label>
+              <button class="btn btn--primary btn--block btn--lg">登录</button>
+            </div>
+          </div>
+        </div>
+        <button class="warp-replay" id="warpReplay" title="重放动画">
+          <i data-lucide="rotate-cw"></i><span>重放 warp</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 2 · ADMIN CONSOLE                                      -->
+  <!-- ============================================================== -->
+  <section class="mega-section" data-mega-panel="admin" hidden>
+    <div class="admin-shell">
+
+      <!-- Rail -->
+      <!-- naive-ui: 自定义 router-link container -->
+      <aside class="rail">
+        <div class="rail__brand" title="PivotStack Admin">P</div>
+        <div class="rail__group">
+          <button class="rail__item is-active" data-rail="dashboard">
+            <i data-lucide="layout-dashboard"></i>
+            <span class="rail-tip">Dashboard</span>
+          </button>
+          <button class="rail__item" data-rail="channels">
+            <i data-lucide="layers"></i>
+            <span class="rail-tip">Channels</span>
+          </button>
+          <button class="rail__item" data-rail="billing">
+            <i data-lucide="wallet"></i>
+            <span class="rail-tip">Billing</span>
+          </button>
+          <button class="rail__item" data-rail="ops">
+            <i data-lucide="activity"></i>
+            <span class="rail-tip">Ops</span>
+          </button>
+          <button class="rail__item" data-rail="system">
+            <i data-lucide="settings-2"></i>
+            <span class="rail-tip">System</span>
+          </button>
+          <button class="rail__item" data-rail="reseller">
+            <i data-lucide="users"></i>
+            <span class="rail-tip">Reseller</span>
+          </button>
+        </div>
+        <div class="rail__bottom">
+          <button class="rail__item" data-rail="notif-rail">
+            <i data-lucide="bell"></i>
+            <span class="badge badge--crit">2</span>
+            <span class="rail-tip">Notifications</span>
+          </button>
+          <button class="rail__item" title="Admin profile">
+            <i data-lucide="user-circle-2"></i>
+            <span class="rail-tip">Admin</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Tree -->
+      <aside class="tree" id="adminTree">
+        <!-- Populated by JS based on rail selection -->
+      </aside>
+
+      <!-- Main canvas -->
+      <main class="admin-main">
+
+        <!-- ================ Critical banner (shown when admin has unread crit) ================ -->
+        <div class="crit-banner" id="critBannerAdmin">
+          <span class="nlvl nlvl--crit"><span class="nlvl__dot"></span>CRITICAL</span>
+          <span class="crit-banner__msg"><strong>系统紧急维护</strong> · 网关将在 15 分钟后重启,预计 30 秒不可用</span>
+          <button class="btn btn--ghost btn--sm" data-view-crit>查看</button>
+        </div>
+
+        <div class="admin-page">
+
+          <!-- ============= VIEW: Overview ============= -->
+          <div class="admin-view is-active" data-view-panel="overview">
+            <div class="page-head">
+              <div>
+                <div class="page-head__crumb"><b>DASHBOARD</b> / 总览</div>
+                <div class="page-head__title">
+                  <div class="t-display-admin">运营总览</div>
+                  <div class="page-head__sub">所有上游渠道 · 所有 API key · 实时数据 (60s 刷新)</div>
+                </div>
+              </div>
+              <div class="page-head__right">
+                <span class="page-head__live"><span class="dot dot--green dot--pulse"></span><span class="t-label">LIVE</span><span class="t-meta">· 14:32 last sync</span></span>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="refresh-cw"></i>刷新</button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="download"></i>导出</button>
+              </div>
+            </div>
+
+            <!-- Metric strip -->
+            <!-- naive-ui: NGrid / NGridItem -->
+            <div class="metric-strip">
+              <div class="metric-tile">
+                <div class="metric-tile__label">总余额</div>
+                <div class="metric-tile__num" data-counter="128492.40" data-prefix="$" data-decimals="2">$0.00</div>
+                <div class="metric-tile__delta">
+                  <span class="t-meta">≈ ¥128,492.40 · 池中</span>
+                </div>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-tile__label">今日总调用</div>
+                <div class="metric-tile__num" data-counter="9855">0</div>
+                <div class="metric-tile__delta">
+                  <span class="chip chip--up"><i data-lucide="trending-up"></i>+12%</span>
+                  <span class="t-meta">vs 昨日</span>
+                </div>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-tile__label">活跃 keys</div>
+                <div class="metric-tile__num"><span data-counter="268">0</span> <span class="t-meta sub" style="font-size:14px">/ 356</span></div>
+                <div class="metric-tile__delta">
+                  <span class="chip chip--up"><i data-lucide="user-plus"></i>+12 本周</span>
+                </div>
+              </div>
+              <div class="metric-tile">
+                <div class="metric-tile__label">错误率</div>
+                <div class="metric-tile__num"><span data-counter="0.42" data-decimals="2" data-suffix="%">0%</span></div>
+                <div class="metric-tile__delta">
+                  <span class="chip chip--up"><i data-lucide="trending-down"></i>-0.1pp</span>
+                  <span class="t-meta">24h 平均</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3-column grid -->
+            <div class="admin-grid-3">
+              <div class="col">
+                <!-- Revenue 7d -->
+                <div class="tile tile--admin">
+                  <div class="tile__head tile__head--split">
+                    <div>
+                      <div class="t-h-admin">收入趋势</div>
+                      <div class="t-label tertiary">LAST 7 DAYS</div>
+                    </div>
+                    <div style="text-align:right">
+                      <div class="mono t-body-strong">¥3,840</div>
+                      <div class="t-label tertiary">/ ¥12,500 目标</div>
+                    </div>
+                  </div>
+                  <div class="chart" id="chartAdminRev" style="height:160px"></div>
+                </div>
+
+                <!-- Model distribution -->
+                <div class="tile tile--admin">
+                  <div class="tile__head"><span class="t-h-admin">模型分布</span></div>
+                  <div class="donut-row">
+                    <div class="chart chart--donut" id="chartAdminModel" style="height:180px"></div>
+                    <div class="donut-legend">
+                      <div class="donut-legend__item">
+                        <span class="dot" style="background:#0bd470"></span>
+                        <div class="donut-legend__label">
+                          <span class="t-body-strong">opus-4-7</span>
+                          <span class="t-label tertiary">6,210 calls · 63%</span>
+                        </div>
+                        </div>
+                      <div class="donut-legend__item">
+                        <span class="dot" style="background:#52a8ff"></span>
+                        <div class="donut-legend__label">
+                          <span class="t-body-strong">sonnet-4-6</span>
+                          <span class="t-label tertiary">2,743 calls · 28%</span>
+                        </div>
+                        </div>
+                      <div class="donut-legend__item">
+                        <span class="dot" style="background:#f5a623"></span>
+                        <div class="donut-legend__label">
+                          <span class="t-body-strong">haiku-4-5</span>
+                          <span class="t-label tertiary">902 calls · 9%</span>
+                        </div>
+                        </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col">
+                <!-- Calls + errors dual chart -->
+                <div class="tile tile--admin">
+                  <div class="tile__head tile__head--split">
+                    <div>
+                      <div class="t-h-admin">调用量 + 错误率</div>
+                      <div class="t-label tertiary">7D · DUAL AXIS</div>
+                    </div>
+                  </div>
+                  <div class="chart" id="chartAdminCalls" style="height:200px"></div>
+                </div>
+
+                <!-- Heatmap -->
+                <div class="tile tile--admin">
+                  <div class="tile__head tile__head--split">
+                    <div>
+                      <div class="t-h-admin">24h × 7d 调用热力</div>
+                      <div class="t-label tertiary">PEAK 02-04 · WEEKDAYS HEAVY</div>
+                    </div>
+                    <div class="heatmap-legend">
+                      <span class="t-label tertiary">少</span>
+                      <span class="heatmap-legend__swatches">
+                        <i style="background:rgba(11,212,112,0.05)"></i>
+                        <i style="background:rgba(11,212,112,0.15)"></i>
+                        <i style="background:rgba(11,212,112,0.3)"></i>
+                        <i style="background:rgba(11,212,112,0.55)"></i>
+                        <i style="background:#0bd470"></i>
+                      </span>
+                      <span class="t-label tertiary">多</span>
+                    </div>
+                  </div>
+                  <div class="chart" id="chartAdminHeat" style="height:180px"></div>
+                </div>
+              </div>
+
+              <div class="col">
+                <!-- Upstream health -->
+                <div class="tile tile--admin">
+                  <div class="tile__head tile__head--split">
+                    <div>
+                      <div class="t-h-admin">上游 Channel 健康</div>
+                      <div class="t-label tertiary">REAL-TIME · 5 ACTIVE</div>
+                    </div>
+                  </div>
+                  <div class="health-list" id="adminHealth"></div>
+                </div>
+
+                <!-- Top users -->
+                <div class="tile tile--admin">
+                  <div class="tile__head tile__head--split">
+                    <div>
+                      <div class="t-h-admin">TOP 5 用户</div>
+                      <div class="t-label tertiary">今日花费</div>
+                    </div>
+                    <button class="btn btn--ghost btn--sm" data-rail-jump="billing">全部 →</button>
+                  </div>
+                  <div class="topuser-list">
+                    <div class="topuser"><span class="topuser__rank">1</span><span class="topuser__name">玉米地大佬</span><span class="topuser__cost mono">$195.40</span><span class="topuser__sub t-meta">2,847 calls</span></div>
+                    <div class="topuser"><span class="topuser__rank">2</span><span class="topuser__name">半岛沉静的芝士</span><span class="topuser__cost mono">$65.71</span><span class="topuser__sub t-meta">1,932 calls</span></div>
+                    <div class="topuser"><span class="topuser__rank">3</span><span class="topuser__name">勺子?</span><span class="topuser__cost mono">$22.56</span><span class="topuser__sub t-meta">1,421 calls</span></div>
+                    <div class="topuser"><span class="topuser__rank">4</span><span class="topuser__name">agent-team-a</span><span class="topuser__cost mono">$2.40</span><span class="topuser__sub t-meta">282 calls</span></div>
+                    <div class="topuser"><span class="topuser__rank">5</span><span class="topuser__name">client-acme</span><span class="topuser__cost mono">$1.80</span><span class="topuser__sub t-meta">142 calls</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Anomalies -->
+            <div class="tile tile--admin tile--wide">
+              <div class="tile__head tile__head--split">
+                <div>
+                  <div class="t-h-admin">异常事件</div>
+                  <div class="t-label tertiary">24H · 3 EVENTS</div>
+                </div>
+                <button class="btn btn--ghost btn--sm" data-rail-jump="ops">全部异常 →</button>
+              </div>
+              <div class="atable">
+                <div class="atable__head">
+                  <div style="width:88px">时间</div>
+                  <div style="width:80px">级别</div>
+                  <div style="flex:1">事件</div>
+                  <div style="width:140px">关联</div>
+                  <div style="width:96px;text-align:right">动作</div>
+                </div>
+                <div class="atable__body">
+                  <div class="atable__row">
+                    <div class="mono" style="width:88px;color:var(--text-ter)">14:32</div>
+                    <div style="width:80px"><span class="atag atag--err"><span class="atag__dot"></span>HIGH</span></div>
+                    <div style="flex:1">key_xxx 在 5 分钟内触发 <b>200+</b> 调用,疑似 rate limit 攻击</div>
+                    <div style="width:140px"><span class="chip chip--mono">key_xxx</span></div>
+                    <div style="width:96px;text-align:right"><button class="btn btn--ghost btn--sm">封禁</button></div>
+                  </div>
+                  <div class="atable__row">
+                    <div class="mono" style="width:88px;color:var(--text-ter)">14:18</div>
+                    <div style="width:80px"><span class="atag atag--warn"><span class="atag__dot"></span>MED</span></div>
+                    <div style="flex:1">key_yyy 同模型 <b>30 次</b> 连续 503,可能上游不稳定</div>
+                    <div style="width:140px"><span class="chip chip--mono">key_yyy</span></div>
+                    <div style="width:96px;text-align:right"><button class="btn btn--ghost btn--sm">查看</button></div>
+                  </div>
+                  <div class="atable__row">
+                    <div class="mono" style="width:88px;color:var(--text-ter)">13:55</div>
+                    <div style="width:80px"><span class="atag atag--idle"><span class="atag__dot"></span>LOW</span></div>
+                    <div style="flex:1">cc 渠道 30 秒错误率 > 10%</div>
+                    <div style="width:140px"><span class="chip chip--mono">channel:cc</span></div>
+                    <div style="width:96px;text-align:right"><button class="btn btn--ghost btn--sm">查看</button></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ============= VIEW: BillingKeys ============= -->
+          <div class="admin-view" data-view-panel="billing-keys" hidden>
+            <div class="page-head">
+              <div>
+                <div class="page-head__crumb"><b>BILLING</b> / API Keys</div>
+                <div class="page-head__title">
+                  <div class="t-display-admin">API Key 管理</div>
+                  <div class="page-head__sub">356 个 keys · 268 活跃 · 总余额 $128k</div>
+                </div>
+              </div>
+              <div class="page-head__right">
+                <button class="btn btn--secondary btn--sm"><i data-lucide="zap"></i>批量充值</button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="upload"></i>批量导入</button>
+                <button class="btn btn--primary btn--sm"><i data-lucide="plus"></i>新建 key</button>
+              </div>
+            </div>
+
+            <div class="metric-strip">
+              <div class="metric-tile"><div class="metric-tile__label">总 keys</div><div class="metric-tile__num">356</div><div class="metric-tile__delta"><span class="t-meta">256 user · 100 reseller</span></div></div>
+              <div class="metric-tile"><div class="metric-tile__label">活跃</div><div class="metric-tile__num">268</div><div class="metric-tile__delta"><span class="chip chip--up">75%</span></div></div>
+              <div class="metric-tile"><div class="metric-tile__label">本月新增</div><div class="metric-tile__num">12</div><div class="metric-tile__delta"><span class="chip chip--up"><i data-lucide="trending-up"></i>+33% vs 上月</span></div></div>
+              <div class="metric-tile"><div class="metric-tile__label">总余额</div><div class="metric-tile__num mono">$128k</div><div class="metric-tile__delta"><span class="t-meta">≈ ¥128,492</span></div></div>
+            </div>
+
+            <!-- naive-ui: AdminFilterBar -->
+            <div class="filter-bar">
+              <div class="filter-bar__left">
+                <div class="input input--search" style="max-width:280px">
+                  <i data-lucide="search"></i>
+                  <input type="text" class="mono" placeholder="搜索 note / id / key" />
+                </div>
+                <div class="select"><span>plan: 全部</span><i data-lucide="chevron-down"></i></div>
+                <div class="select"><span>status</span><i data-lucide="chevron-down"></i></div>
+                <div class="select"><span>resellerId</span><i data-lucide="chevron-down"></i></div>
+                <div class="select"><span>余额范围</span><i data-lucide="chevron-down"></i></div>
+              </div>
+              <div class="filter-bar__right">
+                <button class="btn btn--ghost btn--sm" title="刷新"><i data-lucide="refresh-cw"></i></button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="download"></i>导出 CSV</button>
+              </div>
+            </div>
+
+            <!-- Bulk bar (visible when keys selected) -->
+            <div class="bulk-bar" id="bulkBar" hidden>
+              <span class="bulk-bar__count"><b id="bulkCount">0</b> 已选</span>
+              <div class="bulk-bar__actions">
+                <button class="btn btn--secondary btn--sm"><i data-lucide="check"></i>启用</button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="pause"></i>禁用</button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="zap"></i>充值</button>
+                <button class="btn btn--secondary btn--sm"><i data-lucide="download"></i>导出</button>
+                <button class="btn btn--secondary btn--sm" style="color:var(--error)"><i data-lucide="trash-2"></i>删除</button>
+              </div>
+              <button class="btn btn--ghost btn--sm" id="bulkCancel">取消选择</button>
+            </div>
+
+            <!-- naive-ui: AdminTable -->
+            <div class="atable atable--keys">
+              <div class="atable__head">
+                <div style="width:24px"><span class="chk" id="bulkAll"></span></div>
+                <div style="flex:1;min-width:140px" class="sortable">note</div>
+                <div style="width:140px">key (masked)</div>
+                <div style="width:80px" class="sortable">plan</div>
+                <div style="width:90px;text-align:right" class="sortable">balance</div>
+                <div style="width:72px;text-align:right">gift</div>
+                <div style="width:80px;text-align:right" class="sortable">requests</div>
+                <div style="width:100px">上次活跃</div>
+                <div style="width:80px">status</div>
+                <div style="width:40px;text-align:right"></div>
+              </div>
+              <div class="atable__body" id="keysTable"></div>
+            </div>
+          </div>
+
+          <!-- ============= VIEW: Notifications (admin manage) ============= -->
+          <div class="admin-view" data-view-panel="notifications" hidden>
+            <div class="page-head">
+              <div>
+                <div class="page-head__crumb"><b>SYSTEM</b> / 通知管理</div>
+                <div class="page-head__title">
+                  <div class="t-display-admin">用户通知</div>
+                  <div class="page-head__sub">共 12 条 · 5 已发布 · 2 草稿 · 5 已过期</div>
+                </div>
+              </div>
+              <div class="page-head__right">
+                <button class="btn btn--secondary btn--sm"><i data-lucide="archive"></i>归档列表</button>
+                <button class="btn btn--primary btn--sm" id="openCreateNotif"><i data-lucide="plus"></i>新建通知</button>
+              </div>
+            </div>
+
+            <div class="filter-bar">
+              <div class="filter-bar__left">
+                <div class="input input--search" style="max-width:280px">
+                  <i data-lucide="search"></i>
+                  <input type="text" class="mono" placeholder="搜索标题或正文" />
+                </div>
+                <div class="select"><span>状态: 全部</span><i data-lucide="chevron-down"></i></div>
+                <div class="select"><span>级别</span><i data-lucide="chevron-down"></i></div>
+                <div class="select"><span>时间</span><i data-lucide="chevron-down"></i></div>
+              </div>
+            </div>
+
+            <div class="atable atable--notif">
+              <div class="atable__head">
+                <div style="flex:1;min-width:200px">标题</div>
+                <div style="width:160px">目标</div>
+                <div style="width:80px">级别</div>
+                <div style="width:100px">状态</div>
+                <div style="width:140px">发布时间</div>
+                <div style="width:90px;text-align:right">已读率</div>
+                <div style="width:64px;text-align:right">操作</div>
+              </div>
+              <div class="atable__body" id="notifTable"></div>
+            </div>
+          </div>
+
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- SECTION 3 · NOTIFICATION SYSTEM                                -->
+  <!-- ============================================================== -->
+  <section class="mega-section" data-mega-panel="notif" hidden>
+    <div class="notif-section">
+      <div class="notif-section__head">
+        <div>
+          <div class="t-display-admin">Notification 系统</div>
+          <div class="page-head__sub">PivotStack 第一个 user/admin 端到端联动功能 · v1 polling 60s</div>
+        </div>
+        <div class="notif-section__subtabs">
+          <button class="sub-tab is-active" data-notif-sub="admin">
+            <i data-lucide="megaphone"></i>Admin 管理
+          </button>
+          <button class="sub-tab" data-notif-sub="bell">
+            <i data-lucide="bell"></i>User Bell + Dropdown
+          </button>
+          <button class="sub-tab" data-notif-sub="center">
+            <i data-lucide="inbox"></i>User 通知中心
+          </button>
+          <button class="sub-tab" data-notif-sub="banner">
+            <i data-lucide="alert-octagon"></i>Critical Banner
+          </button>
+        </div>
+      </div>
+
+      <!-- Sub: Admin manage (copy of admin view + create modal trigger) -->
+      <div class="notif-pane is-active" data-notif-panel="admin">
+        <div class="notif-pane__intro">
+          <div class="t-h-admin">Admin 通知管理页</div>
+          <div class="t-body sub">同 Admin Console 内 System → 通知管理 路由。这里独立展示便于评审。</div>
+        </div>
+        <div class="filter-bar">
+          <div class="filter-bar__left">
+            <div class="input input--search" style="max-width:280px">
+              <i data-lucide="search"></i>
+              <input type="text" class="mono" placeholder="搜索标题或正文" />
+            </div>
+            <div class="select"><span>状态</span><i data-lucide="chevron-down"></i></div>
+            <div class="select"><span>级别</span><i data-lucide="chevron-down"></i></div>
+          </div>
+          <div class="filter-bar__right">
+            <button class="btn btn--primary btn--sm" data-open-create-2><i data-lucide="plus"></i>新建通知</button>
+          </div>
+        </div>
+        <div class="atable atable--notif">
+          <div class="atable__head">
+            <div style="flex:1;min-width:200px">标题</div>
+            <div style="width:160px">目标</div>
+            <div style="width:80px">级别</div>
+            <div style="width:100px">状态</div>
+            <div style="width:140px">发布时间</div>
+            <div style="width:90px;text-align:right">已读率</div>
+            <div style="width:64px;text-align:right">操作</div>
+          </div>
+          <div class="atable__body" id="notifTable2"></div>
+        </div>
+      </div>
+
+      <!-- Sub: User Bell -->
+      <div class="notif-pane" data-notif-panel="bell" hidden>
+        <div class="notif-pane__intro">
+          <div class="t-h-admin">User 端 Notification Bell</div>
+          <div class="t-body sub">嵌在 user 端顶部 nav 右侧。下方是脱产展示 · 真实集成时位置在 Live indicator 和余额 chip 之间。</div>
+        </div>
+        <div class="user-nav-mock">
+          <div class="user-nav-mock__brand">
+            <span class="nav__logo">P</span>
+            <span class="t-body-strong">PivotStack</span>
+            <span class="t-label tertiary">USER</span>
+          </div>
+          <div class="user-nav-mock__center">
+            <span class="t-body sub">概览</span>
+            <span class="t-body sub">充值</span>
+            <span class="t-body sub">调用日志</span>
+          </div>
+          <div class="user-nav-mock__right">
+            <div class="live">
+              <span class="dot dot--green dot--pulse"></span>
+              <span class="t-label">Live</span>
+              <span class="t-label live__ago">· 12s ago</span>
+            </div>
+            <!-- naive-ui: NPopover trigger=click -->
+            <div class="bell-wrap">
+              <button class="bell" id="userBell">
+                <i data-lucide="bell"></i>
+                <span class="bell__badge bell__badge--crit" id="bellBadge">2</span>
+              </button>
+              <div class="ndrop" id="bellDrop">
+                <div class="ndrop__head">
+                  <span class="t-body-strong">通知</span>
+                  <button class="btn btn--ghost btn--sm" data-notif-sub-jump="center">查看全部 →</button>
+                </div>
+                <div class="ndrop__items" id="bellItems"></div>
+                <div class="ndrop__foot">
+                  <button class="btn btn--ghost btn--sm" id="markAllRead"><i data-lucide="check-check"></i>全部标已读</button>
+                  <button class="btn btn--ghost btn--sm" data-notif-sub-jump="center">历史 →</button>
+                </div>
+              </div>
+            </div>
+            <div class="balance-chip">
+              <i data-lucide="dollar-sign"></i>
+              <span class="t-num-strong">9.79</span>
+            </div>
+            <button class="btn btn--ghost btn--icon" title="退出"><i data-lucide="log-out"></i></button>
+          </div>
+        </div>
+        <div class="notif-pane__note">
+          <div class="t-label tertiary">点 bell 看 dropdown · 点条目看详情 modal</div>
+        </div>
+      </div>
+
+      <!-- Sub: User 通知中心 -->
+      <div class="notif-pane" data-notif-panel="center" hidden>
+        <div class="notif-pane__intro">
+          <div class="t-h-admin">User 通知中心 (/user/notifications)</div>
+          <div class="t-body sub">点 dropdown "查看全部" 进入。filter + 列表 + 详情 modal。</div>
+        </div>
+        <div class="user-notif-center">
+          <div class="user-notif-center__head">
+            <div>
+              <div class="t-display-admin">通知中心</div>
+              <div class="t-label tertiary">SINCE 2026-03 · 4 ITEMS</div>
+            </div>
+            <button class="btn btn--ghost btn--sm" id="markAllRead2"><i data-lucide="check-check"></i>全部标已读</button>
+          </div>
+          <div class="user-notif-center__filters">
+            <button class="chip chip--amount is-selected" data-cfilter="all">全部</button>
+            <button class="chip chip--amount" data-cfilter="unread">未读 (2)</button>
+            <button class="chip chip--amount" data-cfilter="read">已读</button>
+            <button class="select"><span>级别</span><i data-lucide="chevron-down"></i></button>
+          </div>
+          <div class="user-notif-list" id="userNotifList"></div>
+        </div>
+      </div>
+
+      <!-- Sub: Critical banner -->
+      <div class="notif-pane" data-notif-panel="banner" hidden>
+        <div class="notif-pane__intro">
+          <div class="t-h-admin">Critical Banner (顶部条幅)</div>
+          <div class="t-body sub">仅 level=critical 且未读时显示。User 端在 nav 下方 sticky;Admin 端同理。点 banner 跳详情 modal。</div>
+        </div>
+        <div class="crit-banner crit-banner--demo">
+          <span class="nlvl nlvl--crit"><span class="nlvl__dot"></span>CRITICAL</span>
+          <span class="crit-banner__msg"><strong>🚨 紧急维护:网关重启</strong> · PivotStack 网关将于 <b>15 分钟后</b> 重启,预计 30 秒不可用</span>
+          <button class="btn btn--ghost btn--sm" data-open-notif="ntf_003">查看详情</button>
+          <button class="btn btn--ghost btn--icon btn--sm" title="dismissible=false 时不可关闭"><i data-lucide="x"></i></button>
+        </div>
+        <div class="notif-pane__note">
+          <div class="t-label tertiary">注意 critical 微 glow + level chip pulse · 不可手动关闭 (dismissible=false)</div>
+        </div>
+
+        <!-- Lifecycle diagram -->
+        <div class="lifecycle">
+          <div class="t-h-admin">通知生命周期</div>
+          <div class="t-label tertiary" style="margin-bottom:16px">状态机</div>
+          <div class="lifecycle__row">
+            <div class="lifecycle__col">
+              <div class="t-label">ADMIN 视角</div>
+              <div class="lifecycle__chain">
+                <span class="atag atag--idle"><span class="atag__dot"></span>CREATE</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--draft"><span class="atag__dot"></span>DRAFT</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--ok"><span class="atag__dot"></span>PUBLISHED</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--idle"><span class="atag__dot"></span>EXPIRED</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--err"><span class="atag__dot"></span>DELETED</span>
+              </div>
+            </div>
+            <div class="lifecycle__col">
+              <div class="t-label">USER 视角</div>
+              <div class="lifecycle__chain">
+                <span class="atag atag--idle"><span class="atag__dot"></span>UNREAD</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--ok"><span class="atag__dot"></span>READ</span>
+                <i data-lucide="arrow-right"></i>
+                <span class="atag atag--idle"><span class="atag__dot"></span>HIDDEN</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== MODALS / DRAWERS / TOAST ============== -->
+
+  <!-- Notification Detail Modal (user view) -->
+  <div class="nmodal__backdrop" id="notifModalBd">
+    <div class="nmodal" id="notifModal">
+      <div class="nmodal__head">
+        <div>
+          <div id="notifModalLvl"><span class="nlvl nlvl--warn"><span class="nlvl__dot"></span>WARN</span></div>
+          <div class="nmodal__title" id="notifModalTitle">Claude 维护通告</div>
+          <div class="nmodal__meta" id="notifModalMeta">发布于 2 分钟前 · 来自 admin</div>
+        </div>
+        <button class="btn btn--ghost btn--icon" id="notifModalClose"><i data-lucide="x"></i></button>
+      </div>
+      <div class="nmodal__body" id="notifModalBody">
+        <!-- markdown renders here -->
+      </div>
+      <div class="nmodal__foot">
+        <button class="btn btn--ghost btn--sm" id="notifModalCloseFoot">关闭</button>
+        <button class="btn btn--secondary btn--sm" id="notifModalDismiss" hidden><i data-lucide="bell-off"></i>不再提示</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Notification Modal (admin) -->
+  <div class="nmodal__backdrop" id="createNotifBd">
+    <div class="nmodal nmodal--create" id="createNotifModal">
+      <div class="nmodal__head">
+        <div>
+          <div class="nmodal__title">新建通知</div>
+          <div class="nmodal__meta">通知会按 targeting 立即生效 (status=published) 或保存为草稿稍后发布</div>
+        </div>
+        <button class="btn btn--ghost btn--icon" id="createNotifClose"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="create-form">
+        <!-- naive-ui: NFormItem -->
+        <div class="cf-row">
+          <label class="t-label">TITLE <span class="t-label tertiary" style="text-transform:none">(≤ 80 字)</span></label>
+          <input type="text" class="login-input" value="Claude 维护通告" maxlength="80" />
+        </div>
+        <div class="cf-row">
+          <label class="t-label">BODY <span class="t-label tertiary" style="text-transform:none">支持 markdown · ≤ 2000 字</span></label>
+          <textarea class="textarea mono" rows="5">**Claude** group 将于今晚 02:00 - 03:00 进行上游 key 轮换。
+
+期间可能出现短暂调用失败,请已经在生产的客户提前规避。</textarea>
+          <div class="cf-row__inline">
+            <button class="btn btn--ghost btn--sm" id="cfPreview"><i data-lucide="eye"></i>预览 markdown</button>
+            <span class="t-meta tertiary">~ 120 / 2000</span>
+          </div>
+        </div>
+
+        <div class="cf-row">
+          <label class="t-label">LEVEL</label>
+          <div class="cf-radio-row">
+            <button class="cf-radio" data-cf-level="info"><span class="nlvl nlvl--info"><span class="nlvl__dot"></span>INFO</span></button>
+            <button class="cf-radio is-selected" data-cf-level="warn"><span class="nlvl nlvl--warn"><span class="nlvl__dot"></span>WARN</span></button>
+            <button class="cf-radio" data-cf-level="critical"><span class="nlvl nlvl--crit"><span class="nlvl__dot"></span>CRITICAL</span></button>
+          </div>
+        </div>
+
+        <div class="cf-row">
+          <label class="t-label">TARGETING</label>
+          <div class="cf-radio-row">
+            <button class="cf-radio" data-cf-target="all">ALL</button>
+            <button class="cf-radio" data-cf-target="plan">PLAN</button>
+            <button class="cf-radio is-selected" data-cf-target="group">GROUP</button>
+            <button class="cf-radio" data-cf-target="userIds">USERIDS</button>
+          </div>
+          <div class="cf-target-panel" data-target-panel="all" hidden>
+            <div class="t-meta tertiary">所有活跃 user (估算 ~268 / 356)</div>
+          </div>
+          <div class="cf-target-panel" data-target-panel="plan" hidden>
+            <label class="cf-check"><span class="chk"></span><span class="t-body">free</span></label>
+            <label class="cf-check"><span class="chk is-on"></span><span class="t-body">credit</span></label>
+            <label class="cf-check"><span class="chk"></span><span class="t-body">timed</span></label>
+            <label class="cf-check"><span class="chk is-on"></span><span class="t-body">hybrid</span></label>
+          </div>
+          <div class="cf-target-panel" data-target-panel="group">
+            <label class="cf-check"><span class="chk is-on"></span><span class="t-body">claude</span></label>
+            <label class="cf-check"><span class="chk"></span><span class="t-body">GPT 系列</span></label>
+            <label class="cf-check"><span class="chk"></span><span class="t-body">Gemini 系列</span></label>
+          </div>
+          <div class="cf-target-panel" data-target-panel="userIds" hidden>
+            <div class="input input--search">
+              <i data-lucide="search"></i>
+              <input type="text" class="mono" placeholder="搜索 key id 或 note 多选..." />
+            </div>
+            <div class="cf-chips">
+              <span class="chip chip--mono">key_abc <i data-lucide="x"></i></span>
+              <span class="chip chip--mono">key_def <i data-lucide="x"></i></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="cf-row cf-row--inline">
+          <div>
+            <label class="t-label">PUBLISH AT</label>
+            <div class="input"><i data-lucide="calendar"></i><input type="text" class="mono" value="2026-05-18 02:00" /></div>
+            <button class="btn btn--ghost btn--sm" style="margin-top:4px"><i data-lucide="zap"></i>立即发布</button>
+          </div>
+          <div>
+            <label class="t-label">EXPIRE AT</label>
+            <div class="input"><i data-lucide="calendar"></i><input type="text" class="mono" value="2026-05-18 23:59" /></div>
+            <button class="btn btn--ghost btn--sm" style="margin-top:4px">永久</button>
+          </div>
+        </div>
+
+        <div class="cf-row cf-row--inline cf-row--switch">
+          <div>
+            <label class="t-label">DISMISSIBLE</label>
+            <div class="t-meta tertiary">用户可手动关闭这条通知</div>
+          </div>
+          <span class="switch__track is-on"><span class="switch__thumb"></span></span>
+        </div>
+      </div>
+
+      <div class="nmodal__foot">
+        <button class="btn btn--ghost btn--sm">保存草稿</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn--secondary btn--sm" id="cfCancel">取消</button>
+          <button class="btn btn--primary btn--sm" id="cfPublish"><i data-lucide="send"></i>立即发布</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats drawer (admin row click) -->
+  <div class="admin-drawer__backdrop" id="statsDrawerBd"></div>
+  <aside class="admin-drawer" id="statsDrawer">
+    <div class="admin-drawer__head">
+      <div>
+        <div class="t-label tertiary">NOTIFICATION</div>
+        <div class="t-h-admin" id="statsTitle">Claude 维护通告</div>
+        <div class="t-meta tertiary" id="statsId">ntf_001 · group:claude</div>
+      </div>
+      <button class="btn btn--ghost btn--icon" id="statsDrawerClose"><i data-lucide="x"></i></button>
+    </div>
+    <div class="stats-grid">
+      <div class="stats-tile">
+        <div class="t-label tertiary">TARGETED</div>
+        <div class="metric-tile__num mono" style="font-size:20px">42</div>
+      </div>
+      <div class="stats-tile">
+        <div class="t-label tertiary">READ</div>
+        <div class="metric-tile__num mono" style="font-size:20px;color:#0bd470">18</div>
+        <div class="t-meta">43%</div>
+      </div>
+      <div class="stats-tile">
+        <div class="t-label tertiary">DISMISSED</div>
+        <div class="metric-tile__num mono" style="font-size:20px;color:#a1a1a1">3</div>
+        <div class="t-meta">7%</div>
+      </div>
+      <div class="stats-tile">
+        <div class="t-label tertiary">UNREAD</div>
+        <div class="metric-tile__num mono" style="font-size:20px;color:#f5a623">24</div>
+        <div class="t-meta">57%</div>
+      </div>
+    </div>
+    <div class="t-label" style="margin:20px 0 8px">阅读率 · 过去 24 小时</div>
+    <div class="chart" id="chartNotifStats" style="height:120px"></div>
+    <div class="t-label" style="margin:20px 0 8px">阅读记录</div>
+    <div class="stats-events">
+      <div class="stats-event">
+        <span class="t-label tertiary">EARLIEST</span>
+        <span class="t-body-strong mono">user_abc</span>
+        <span class="t-meta tertiary">02:14 · 14 分钟前</span>
+      </div>
+      <div class="stats-event">
+        <span class="t-label tertiary">LATEST</span>
+        <span class="t-body-strong mono">user_def</span>
+        <span class="t-meta tertiary">02:28 · 刚才</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+<script src="stellar.js"></script>
+<script src="pivotstack-admin.js"></script>
+</body>
+</html>

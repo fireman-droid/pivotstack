@@ -1,63 +1,56 @@
 <script setup>
-import { RouterView, useRoute } from 'vue-router'
-import { onMounted, computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import AppLayout from './components/AppLayout.vue'
-import Toast from './components/ui/Toast.vue'
-import WorldTransition from './components/WorldTransition.vue'
-import { useWorldTheme } from './stores/worldTheme'
-
-const route = useRoute()
-const router = useRouter()
-const theme = useWorldTheme()
-const ready = ref(false)
-
-onMounted(async () => {
-  document.documentElement.setAttribute('data-world', theme.currentWorld)
-  await router.isReady()
-  ready.value = true
-})
-
-const needsAdminLayout = computed(() => {
-  const path = route.path
-  return path !== '/login' && !path.startsWith('/user')
-})
+import { RouterView } from 'vue-router'
+import { NConfigProvider, NMessageProvider, NDialogProvider, NNotificationProvider } from 'naive-ui'
+import zhCN from 'naive-ui/es/locales/common/zhCN.mjs'
+import dateZhCN from 'naive-ui/es/locales/date/zhCN.mjs'
+import { baseTheme, themeOverrides } from './design/theme'
 </script>
 
 <template>
-  <div class="abyss-layout min-h-screen">
-    <a href="#main-content" class="skip-to-content">跳转到主内容</a>
-
-    <svg style="position: absolute; width: 0; height: 0;">
-      <defs>
-        <filter id="gooey-filter">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-          <feColorMatrix in="blur" mode="matrix" values="
-            1 0 0 0 0
-            0 1 0 0 0
-            0 0 1 0 0
-            0 0 0 18 -7
-          " result="gooey" />
-          <feComposite in="SourceGraphic" in2="gooey" operator="atop" />
-        </filter>
-      </defs>
-    </svg>
-
-    <div v-if="theme.currentWorld === 'daogui'" class="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-      <div class="absolute top-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-[#c41e3a] opacity-[0.04] blur-[120px] animate-blood-mist"></div>
-      <div class="absolute bottom-[-15%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#4a1a4a] opacity-[0.06] blur-[100px] animate-blood-mist" style="animation-delay: -5s;"></div>
-    </div>
-
-    <WorldTransition :currentWorld="theme.currentWorld" />
-
-    <!-- 等 Router 就绪后再渲染，防止闪烁 -->
-    <template v-if="ready">
-      <AppLayout v-if="needsAdminLayout">
-        <RouterView />
-      </AppLayout>
-      <RouterView v-else />
-    </template>
-
-    <Toast />
-  </div>
+  <n-config-provider :theme="baseTheme" :theme-overrides="themeOverrides" :locale="zhCN" :date-locale="dateZhCN">
+    <n-message-provider>
+      <n-dialog-provider>
+        <n-notification-provider>
+          <a href="#main-content" class="skip-to-content">跳转到主内容</a>
+          <router-view />
+        </n-notification-provider>
+      </n-dialog-provider>
+    </n-message-provider>
+  </n-config-provider>
 </template>
+
+<style>
+:root {
+  color-scheme: dark;
+  --color-bg-base: #000000;
+  --color-bg-surface: #0a0a0a;
+  --color-bg-elevated: #141414;
+  --color-bg-overlay: #1a1a1a;
+  --color-bg-hover: rgba(255,255,255,0.05);
+  --color-border-default: rgba(255,255,255,0.08);
+  --color-border-strong: rgba(255,255,255,0.16);
+  --color-divider: rgba(255,255,255,0.10);
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a1a1a1;
+  --color-text-tertiary: #707070;
+  --color-text-disabled: #4d4d4d;
+  --color-success: #0bd470;
+  --color-warning: #f5a623;
+  --color-error: #ff4d4d;
+  --color-info: #52a8ff;
+}
+html, body, #app {
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: "Geist Sans", Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.skip-to-content {
+  position: absolute;
+  top: -100px; left: 0;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  padding: 8px 16px; border-radius: 4px;
+  z-index: 9999;
+}
+.skip-to-content:focus { top: 8px; left: 8px; }
+</style>

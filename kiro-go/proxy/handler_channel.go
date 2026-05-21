@@ -33,6 +33,13 @@ func (h *Handler) handleChannelRequest(
 	d *channelDispatch,
 	uc *UserContext,
 ) {
+	if nc, ok := ch.(*NewAPIRuntimeChannel); ok {
+		// v5: newapi 渠道用独立单位链（上游 quota → ¥ → 虚拟$ × markup），
+		// 跟 token 计费的 TokenReservation 单位语义不兼容，必须走自己的 reservation 路径。
+		h.handleNewAPIChannelRequest(w, r, nc, d, uc)
+		return
+	}
+
 	start := time.Now()
 	requestID := genRequestID()
 	billingMode := "token"
@@ -56,6 +63,16 @@ func (h *Handler) handleChannelRequest(
 		InputTokens:  d.EstimatedInput,
 		OutputTokens: d.MaxOutput,
 	})
+	// Panic 守门（billing_audit P0-4）：渠道适配器 panic 后，预扣余额必须退回，
+	// 否则上游崩溃 = 用户被白扣。退完再 re-panic，让上层 panic recovery / log 链照常运作。
+	defer func() {
+		if rec := recover(); rec != nil {
+			if tokenRes != nil {
+				RefundTokenReservation(tokenRes)
+			}
+			panic(rec)
+		}
+	}()
 	if preErr != nil {
 		code := 402
 		kind := "insufficient_balance"
@@ -92,11 +109,26 @@ func (h *Handler) handleChannelRequest(
 		if errors.As(execErr, &ke) {
 			refundAllowed = !ke.ResponseStarted
 		}
+		// v4: 上游 HTTP 错误（4xx/5xx）— UpstreamHTTPError.Chargeable=false 默认不计费
+		var up *UpstreamHTTPError
+		if errors.As(execErr, &up) && !up.Chargeable {
+			refundAllowed = true
+		}
 		if refundAllowed {
 			RefundTokenReservation(tokenRes)
 		}
 		h.writeChannelErrorLog(d.Protocol, d.OriginalModel, ch, d.Stream, execErr.Error(), uc, billingMode, requestID, time.Since(start).Milliseconds())
 		if !responseWritten {
+			// v4: 上游 HTTP 错误 → 透传原状态码 + body（不再被 502 吞掉）
+			if up != nil {
+				copySafeHeaders(w.Header(), up.Header)
+				if w.Header().Get("Content-Type") == "" {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				w.WriteHeader(up.StatusCode)
+				_, _ = w.Write(up.Body)
+				return
+			}
 			h.sendProtocolError(w, d.Protocol, 502, "upstream_error", execErr.Error())
 		}
 		return
@@ -178,6 +210,7 @@ func (h *Handler) writeChannelSuccessLog(
 		PaidCredits:     0,
 		GiftedCredits:   0,
 		CostUSD:         paidUSD,
+		ChargedUSD:      paidUSD + giftUSD,
 		PriceModel:      originalModel,
 		Stream:          stream,
 		Status:          "success",

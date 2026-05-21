@@ -78,6 +78,13 @@ func (h *Handler) apiUpdateChannel(w http.ResponseWriter, r *http.Request, id st
 		incoming.APIKey = channels[found].APIKey
 	}
 	incoming = normalizeChannel(incoming)
+	// codex audit Warning D: 禁用 channel 之前先验证没有 series 把它作为默认渠道
+	if channels[found].Enabled && !incoming.Enabled {
+		if err := validateChannelNotDefaultForSeries(id, config.GetSeries()); err != nil {
+			writeAdminJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	channels[found] = incoming
 	if err := validateChannelsConfig(channels); err != nil {
 		writeAdminJSONError(w, http.StatusBadRequest, err.Error())
@@ -95,6 +102,11 @@ func (h *Handler) apiUpdateChannel(w http.ResponseWriter, r *http.Request, id st
 // DELETE /admin/api/channels/{id}
 func (h *Handler) apiDeleteChannel(w http.ResponseWriter, _ *http.Request, id string) {
 	id = strings.TrimSpace(id)
+	// codex audit Warning D: 删除前先验证没有 series 把它作为默认渠道
+	if err := validateChannelNotDefaultForSeries(id, config.GetSeries()); err != nil {
+		writeAdminJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
 	channels := config.GetChannels()
 	next := make([]config.ChannelConfig, 0, len(channels))
 	deleted := false
@@ -297,10 +309,40 @@ func normalizeChannel(ch config.ChannelConfig) config.ChannelConfig {
 	return ch
 }
 
-// validateChannelsConfig 校验渠道列表整体合法（id 唯一、type 合法、enabled 渠道间 model 不冲突）。
+// validateChannelNotDefaultForSeries 阻止删除/禁用作为某个 series default 的渠道。
+// 用于 channel DELETE 和 PUT(enabled=false) 前置校验，避免悬空 default。
+// 调用方应该在 409 时提示用户先去 Series 页面解绑或换默认。
+func validateChannelNotDefaultForSeries(channelID string, series []config.Series) error {
+	for _, s := range series {
+		if s.DefaultChannelID == channelID {
+			return fmt.Errorf("channel %q is the default for series %q; unbind in Series page first", channelID, s.ID)
+		}
+	}
+	return nil
+}
+
+// validateChannelsConfig 校验渠道列表整体合法。
+//
+// v4 双模式：
+//   - legacy flat 模式（config.Series=[]）：保留 v3 严格语义 — 同 model 在 enabled 渠道间不能重复（单渠道独占）
+//   - v4 series 模式（config.Series!=[]）：允许 duplicate model 跨渠道（不同渠道可服务同 model + 不同价格）；
+//     但 ch.SeriesID 必须引用真实存在的 Series.ID。
+//
+// 调用方应该使用 config.GetSeries() 拿当前 series 列表后传入。
 func validateChannelsConfig(channels []config.ChannelConfig) error {
+	return validateChannelsConfigWithSeries(channels, config.GetSeries())
+}
+
+// validateChannelsConfigWithSeries 显式接受 series 列表（避免测试和调用方的全局状态依赖）。
+func validateChannelsConfigWithSeries(channels []config.ChannelConfig, series []config.Series) error {
+	seriesMode := len(series) > 0
+	seriesIDs := map[string]struct{}{}
+	for _, s := range series {
+		seriesIDs[s.ID] = struct{}{}
+	}
+
 	ids := map[string]struct{}{}
-	modelOwners := map[string]string{}
+	modelOwners := map[string]string{} // 仅 legacy flat 模式用：同 model 不可重复 enabled
 	for _, ch := range channels {
 		if ch.ID == "" {
 			return fmt.Errorf("channel id is required")
@@ -322,15 +364,24 @@ func validateChannelsConfig(channels []config.ChannelConfig) error {
 				return fmt.Errorf("channel %q: %w", ch.ID, err)
 			}
 		}
+		// v4: channel.SeriesID 必须引用真实 series（如果非空）
+		if seriesMode && ch.SeriesID != "" {
+			if _, ok := seriesIDs[ch.SeriesID]; !ok {
+				return fmt.Errorf("channel %q references unknown series %q", ch.ID, ch.SeriesID)
+			}
+		}
 		if !ch.Enabled {
 			continue
 		}
-		for _, model := range ch.Models {
-			key := normalizeChannelModelKey(model)
-			if owner, ok := modelOwners[key]; ok {
-				return fmt.Errorf("model %q is already served by channel %q", model, owner)
+		// 同 model 唯一约束：仅 legacy flat 模式启用
+		if !seriesMode {
+			for _, model := range ch.Models {
+				key := normalizeChannelModelKey(model)
+				if owner, ok := modelOwners[key]; ok {
+					return fmt.Errorf("model %q is already served by channel %q", model, owner)
+				}
+				modelOwners[key] = ch.ID
 			}
-			modelOwners[key] = ch.ID
 		}
 	}
 	return nil
@@ -394,4 +445,11 @@ func writeAdminJSONError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeAdminJSON 写带 status code 的 JSON 响应（v5 新；现有 writeAdminJSONError 只处理错误）。
+func writeAdminJSON(w http.ResponseWriter, code int, data any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(data)
 }

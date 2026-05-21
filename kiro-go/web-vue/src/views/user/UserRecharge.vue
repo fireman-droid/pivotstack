@@ -1,503 +1,361 @@
-<script setup>
-import { ref, onMounted, computed } from 'vue'
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
 import { useUserAuth } from '../../stores/userAuth'
 import { userApi } from '../../api/user'
-import { Gift, Sparkles, ShoppingBag, UserCircle, AlertCircle, Receipt, Calendar } from 'lucide-vue-next'
-import WorldCard from '../../components/world/WorldCard.vue'
-import WorldInput from '../../components/world/WorldInput.vue'
-import WorldButton from '../../components/world/WorldButton.vue'
-import WorldChip from '../../components/world/WorldChip.vue'
+import { useMessage } from 'naive-ui'
+import { MessageCircle, CircleDollarSign, Ticket, Check } from 'lucide-vue-next'
+import Tile from '../../components/user/stellar/Tile.vue'
+import CounterNumber from '../../components/user/stellar/CounterNumber.vue'
+import StatusDot from '../../components/user/stellar/StatusDot.vue'
+import { useSystemUnit } from '../../composables/useSystemUnit'
 
-const auth = useUserAuth()
+interface RechargeRecord {
+  time?: string
+  timestamp?: number
+  type?: string
+  amountUsd?: number
+  amountCny?: number
+  balanceBefore?: number
+  balanceAfter?: number
+  giftBefore?: number
+  giftAfter?: number
+  code?: string
+  note?: string
+}
+
+const auth = useUserAuth() as any
+const message = useMessage()
+const { toCny, dollarsPerYuan } = useSystemUnit()
+
+// 当前余额
+const balance = computed(() => Number(auth.userInfo?.balance || 0))
+const giftBalance = computed(() => Number(auth.userInfo?.giftBalance || 0))
+const totalBalance = computed(() => balance.value + giftBalance.value)
+const cny = computed(() => toCny(totalBalance.value).toFixed(2))
+
+// 金额 chip
+const preset = [10, 50, 100, 500]
+const amount = ref<number>(50)
+const customAmount = ref<string>('50')
+
+function pickAmount(n: number) {
+  amount.value = n
+  customAmount.value = String(n)
+}
+function onAmountInput(v: string) {
+  customAmount.value = v
+  const n = parseFloat(v) || 0
+  if (n > 0) amount.value = n
+}
+
+// 套餐定价（USD 给量；UI 上 1¥ = N 虚拟$ 经 system unit 换算）
+// 业务约定：充 ¥10/50/100/500 → 赠送 0/4%/8%/14%
+function bonusFor(yuan: number) {
+  if (yuan >= 500) return 1.14
+  if (yuan >= 100) return 1.08
+  if (yuan >= 50) return 1.04
+  return 1.0
+}
+const gotUsd = computed(() => (amount.value * dollarsPerYuan.value * bonusFor(amount.value)).toFixed(2))
+
+// 支付方式
+const payMethod = ref<'wechat' | 'alipay' | 'card'>('wechat')
+
+// 兑换码
 const code = ref('')
-const loading = ref(false)
-const result = ref(null)
-const error = ref('')
+const redeeming = ref(false)
+async function doRedeem() {
+  const c = code.value.trim()
+  if (!c) { message.warning('请输入兑换码'); return }
+  redeeming.value = true
+  try {
+    await userApi('/redeem', { method: 'POST', body: { code: c } })
+    message.success('兑换成功')
+    code.value = ''
+    auth.refresh()
+    fetchRecords()
+  } catch (e: any) {
+    message.error(e?.message || '兑换失败')
+  } finally {
+    redeeming.value = false
+  }
+}
 
-// 充值记录
-const records = ref([])
-const recordsTotal = ref(0)
+// 主 CTA
+function doRecharge() {
+  message.info(`线上支付 ¥${amount.value} 即将上线。当前请用兑换码或联系客服充值。`)
+}
+
+// 充值历史
+const records = ref<RechargeRecord[]>([])
 const recordsLoading = ref(false)
-const page = ref(1)
-const limit = 20
-
 async function fetchRecords() {
   recordsLoading.value = true
   try {
-    const data = await userApi(`/recharges?page=${page.value}&limit=${limit}`)
+    const data = await userApi('/recharges?page=1&limit=100')
     records.value = data.records || []
-    recordsTotal.value = data.total || 0
-  } catch (e) { console.error(e) }
-  recordsLoading.value = false
-}
-
-async function handleRedeem() {
-  if (!code.value.trim()) return
-  loading.value = true
-  error.value = ''
-  result.value = null
-  try {
-    const data = await userApi('/redeem', { method: 'POST', body: { code: code.value.trim() } })
-    result.value = data
-    code.value = ''
-    auth.refresh()
-    fetchRecords()  // 兑换成功后刷新历史
-  } catch (e) {
-    error.value = e.message
+  } catch {
+    /* 静默 */
+  } finally {
+    recordsLoading.value = false
   }
-  loading.value = false
 }
 
-function fmtTime(ts) {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return d.toLocaleString('zh-CN', { hour12: false })
+function deltaUsd(r: RechargeRecord): number {
+  if (r.amountUsd != null) return r.amountUsd
+  return ((r.balanceAfter ?? 0) - (r.balanceBefore ?? 0)) + ((r.giftAfter ?? 0) - (r.giftBefore ?? 0))
 }
-
-function typeLabel(t) {
-  const map = {
-    code_redeem:      { text: '激活码',     variant: 'success' },
-    code_redeem_days: { text: '天卡兑换',   variant: 'info'    },
-    admin_balance:    { text: '管理员充值', variant: 'success' },
-    admin_gift:       { text: '管理员赠送', variant: 'warning' },
-    admin_adjust:     { text: '调整',       variant: 'default' },
+function fmtDate(r: RechargeRecord) {
+  const t = r.timestamp ? new Date(r.timestamp * 1000) : (r.time ? new Date(r.time) : null)
+  if (!t) return '-'
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+}
+function typeLabel(t?: string) {
+  const map: Record<string, string> = {
+    code_redeem: '兑换码',
+    code_redeem_days: '时长卡',
+    admin_balance: '管理员',
+    admin_gift: '赠送',
+    admin_adjust: '调整',
   }
-  return map[t] || { text: t, variant: 'default' }
+  return map[t || ''] || t || '-'
 }
 
-const totalPages = computed(() => Math.max(1, Math.ceil(recordsTotal.value / limit)))
-
-function gotoPage(p) {
-  if (p < 1 || p > totalPages.value) return
-  page.value = p
+onMounted(() => {
   fetchRecords()
-}
-
-onMounted(fetchRecords)
+  auth.refresh()
+})
 </script>
 
 <template>
-  <div class="recharge-page">
-    <div class="page-head">
-      <div class="eyebrow">充值中心</div>
-      <h1 class="page-title">激活码兑换</h1>
-    </div>
-
-    <WorldCard padding="lg" :elevated="true" variant="talisman" class="recharge-card">
-      <div class="card-icon-wrap">
-        <div class="card-icon">
-          <Gift :size="32" stroke-width="2" />
-        </div>
-      </div>
-
-      <div class="card-body">
-        <h2 class="card-title">输入您的激活码</h2>
-        <p class="card-helper">兑换成功后余额或使用时间将自动注入您的账户</p>
-
-        <form @submit.prevent="handleRedeem" class="redeem-form">
-          <WorldInput
-            v-model="code"
-            placeholder="XXXX-XXXX-XXXX-XXXX"
-            :monospace="true"
-            align="center"
-            size="lg"
-          />
-          <WorldButton
-            type="submit"
-            variant="primary"
-            size="md"
-            :loading="loading"
-            :disabled="code.trim().length < 4"
-            :block="true"
-          >
-            <Sparkles v-if="!loading" :size="16" />
-            <span>{{ loading ? '兑换中' : '立即兑换' }}</span>
-          </WorldButton>
-        </form>
-
-        <Transition name="slide-fade">
-          <div v-if="result" class="feedback-msg success">
-            <div class="fb-icon"><Sparkles :size="18" /></div>
-            <div class="fb-text">
-              <div class="fb-title">兑换成功</div>
-              <div v-if="result.type === 'balance'" class="fb-detail">
-                账户余额 +${{ (result.amount || 0).toFixed(2) }}
-              </div>
-              <div v-else-if="result.type === 'time'" class="fb-detail">
-                账户有效期 +{{ Math.round((result.amount || 0) / 86400) }} 天
-              </div>
-              <div v-else class="fb-detail">激活码已应用</div>
-            </div>
-          </div>
-        </Transition>
-
-        <Transition name="slide-fade">
-          <div v-if="error" class="feedback-msg error">
-            <div class="fb-icon"><AlertCircle :size="18" /></div>
-            <div class="fb-text">
-              <div class="fb-title">兑换失败</div>
-              <div class="fb-detail">{{ error }}</div>
-            </div>
-          </div>
-        </Transition>
-      </div>
-    </WorldCard>
-
-    <!-- 信息提示 -->
-    <div class="hints">
-      <WorldCard padding="md" class="hint-card">
-        <div class="hint-row">
-          <div class="hint-icon"><ShoppingBag :size="14" /></div>
-          <div class="hint-text">
-            <div class="hint-title">在哪里购买？</div>
-            <div class="hint-sub">联系您的服务商或社群管理员获取激活码</div>
-          </div>
-        </div>
-      </WorldCard>
-      <WorldCard padding="md" class="hint-card">
-        <div class="hint-row">
-          <div class="hint-icon"><UserCircle :size="14" /></div>
-          <div class="hint-text">
-            <div class="hint-title">余额查询</div>
-            <div class="hint-sub">兑换后请前往「概览」页查看账户状态</div>
-          </div>
-        </div>
-      </WorldCard>
-    </div>
-
-    <!-- 充值历史 -->
-    <WorldCard padding="md" class="history-card">
-      <header class="history-head">
-        <div class="history-title-wrap">
-          <Receipt :size="16" />
-          <h3 class="history-title">充值记录</h3>
-        </div>
-        <span class="history-count" v-if="recordsTotal > 0">共 {{ recordsTotal }} 笔</span>
-      </header>
-
-      <div v-if="recordsLoading" class="history-empty">加载中…</div>
-      <div v-else-if="!records.length" class="history-empty">
-        <Calendar :size="20" />
-        <span>暂无充值记录</span>
-      </div>
-      <div v-else class="history-list">
-        <div v-for="(r, i) in records" :key="i" class="history-row">
-          <div class="row-left">
-            <WorldChip
-              :variant="typeLabel(r.type).variant"
-              size="sm"
-              :dot="true"
+  <div class="recharge stellar-scope">
+    <div class="grid-3 grid-3--recharge">
+      <!-- 左：充值入口 -->
+      <div class="grid-col">
+        <Tile>
+          <div class="tile__head"><span class="t-display">充值</span></div>
+          <span class="t-label">选择金额</span>
+          <div class="amount-chips">
+            <button
+              v-for="n in preset"
+              :key="n"
+              class="chip chip--amount"
+              :class="{ 'is-selected': amount === n }"
+              @click="pickAmount(n)"
             >
-              {{ typeLabel(r.type).text }}
-            </WorldChip>
-            <div class="row-meta">
-              <div class="row-time">{{ fmtTime(r.timestamp) }}</div>
-              <div v-if="r.code" class="row-code">码: {{ r.code }}</div>
-              <div v-if="r.note" class="row-note">{{ r.note }}</div>
-            </div>
+              ¥{{ n }}
+            </button>
           </div>
-          <div class="row-right">
-            <div class="amount-cny" v-if="r.amountCNY">+¥{{ r.amountCNY.toFixed(2) }}</div>
-            <div class="amount-usd">{{ r.amountUSD > 0 ? '+$' : '$' }}{{ (r.amountUSD || 0).toFixed(2) }}</div>
-            <div class="balance-flow">
-              余额: ${{ r.balanceBefore.toFixed(2) }} → ${{ r.balanceAfter.toFixed(2) }}
-            </div>
+          <div class="st-input st-input--lg">
+            <span class="st-input__prefix">¥</span>
+            <input
+              type="number"
+              :value="customAmount"
+              class="mono"
+              @input="(e) => onAmountInput((e.target as HTMLInputElement).value)"
+            />
+            <span class="st-input__suffix t-label tertiary">= ${{ gotUsd }} 虚拟$</span>
           </div>
-        </div>
+        </Tile>
+
+        <Tile>
+          <div class="tile__head"><span class="t-label">支付方式</span></div>
+          <div class="pay-grid">
+            <button
+              class="pay"
+              :class="{ 'is-selected': payMethod === 'wechat' }"
+              @click="payMethod = 'wechat'"
+            >
+              <MessageCircle :size="18" />
+              <div class="t-body-strong">微信支付</div>
+              <div class="t-label tertiary">推荐</div>
+              <span v-if="payMethod === 'wechat'" class="pay__corner"><Check :size="10" /></span>
+            </button>
+            <button
+              class="pay"
+              :class="{ 'is-selected': payMethod === 'alipay' }"
+              @click="payMethod = 'alipay'"
+            >
+              <CircleDollarSign :size="18" />
+              <div class="t-body-strong">支付宝</div>
+              <div class="t-label tertiary">即时到账</div>
+              <span v-if="payMethod === 'alipay'" class="pay__corner"><Check :size="10" /></span>
+            </button>
+            <button
+              class="pay"
+              :class="{ 'is-selected': payMethod === 'card' }"
+              @click="payMethod = 'card'"
+            >
+              <Ticket :size="18" />
+              <div class="t-body-strong">卡券码</div>
+              <div class="t-label tertiary">兑换专用</div>
+              <span v-if="payMethod === 'card'" class="pay__corner"><Check :size="10" /></span>
+            </button>
+          </div>
+        </Tile>
+
+        <Tile>
+          <div class="tile__head"><span class="t-label">或使用兑换码</span></div>
+          <div class="redeem">
+            <div class="st-input">
+              <input
+                v-model="code"
+                class="mono"
+                placeholder="STELLAR-XXXX-XXXX-XXXX"
+                @keyup.enter="doRedeem"
+              />
+            </div>
+            <button class="btn btn--secondary" :disabled="redeeming" @click="doRedeem">
+              {{ redeeming ? '兑换中...' : '兑换' }}
+            </button>
+          </div>
+        </Tile>
+
+        <button class="btn btn--primary btn--block btn--lg" @click="doRecharge">
+          确认充值 ¥{{ amount }} →
+        </button>
       </div>
 
-      <div v-if="totalPages > 1" class="pagination">
-        <WorldButton size="sm" variant="ghost" :disabled="page <= 1" @click="gotoPage(page - 1)">上一页</WorldButton>
-        <span class="page-info">{{ page }} / {{ totalPages }}</span>
-        <WorldButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(page + 1)">下一页</WorldButton>
+      <!-- 中：当前余额 + 套餐 -->
+      <div class="grid-col">
+        <Tile>
+          <div class="tile__head"><span class="t-label">CURRENT BALANCE</span></div>
+          <div class="hero-num">
+            <CounterNumber :value="totalBalance" prefix="$" :decimals="2" class="t-hero-lg mono" />
+          </div>
+          <div class="t-body sub">≈ ¥{{ cny }}</div>
+          <div class="hairline"></div>
+          <div class="t-label tertiary">充值 ${{ balance.toFixed(2) }} · 赠送 ${{ giftBalance.toFixed(2) }}</div>
+        </Tile>
+
+        <Tile>
+          <div class="tile__head"><span class="t-display">套餐</span></div>
+          <div class="pkg">
+            <div class="pkg__row">
+              <span class="pkg__amt mono">¥10</span>
+              <span class="pkg__arrow">→</span>
+              <span class="pkg__got mono">${{ (10 * dollarsPerYuan).toFixed(0) }}</span>
+              <span class="t-label tertiary pkg__note">无优惠</span>
+            </div>
+            <div class="hairline"></div>
+            <div class="pkg__row">
+              <span class="pkg__amt mono">¥50</span>
+              <span class="pkg__arrow">→</span>
+              <span class="pkg__got mono">${{ (50 * dollarsPerYuan * 1.04).toFixed(0) }}</span>
+              <span class="t-label pkg__note"><span class="chip chip--up">+4%</span></span>
+            </div>
+            <div class="hairline"></div>
+            <div class="pkg__row">
+              <span class="pkg__amt mono">¥100</span>
+              <span class="pkg__arrow">→</span>
+              <span class="pkg__got mono">${{ (100 * dollarsPerYuan * 1.08).toFixed(0) }}</span>
+              <span class="t-label pkg__note"><span class="chip chip--up">+8%</span></span>
+            </div>
+            <div class="hairline"></div>
+            <div class="pkg__row pkg__row--best">
+              <span class="pkg__amt mono">¥500</span>
+              <span class="pkg__arrow">→</span>
+              <span class="pkg__got mono">${{ (500 * dollarsPerYuan * 1.14).toFixed(0) }}</span>
+              <span class="t-label pkg__note"><span class="chip chip--up">+14%</span></span>
+              <span class="pkg__best">BEST</span>
+            </div>
+          </div>
+        </Tile>
       </div>
-    </WorldCard>
+
+      <!-- 右：充值历史 -->
+      <div class="grid-col">
+        <Tile>
+          <div class="tile__head tile__head--split">
+            <div>
+              <div class="t-display">充值记录</div>
+              <div class="t-label tertiary">RECENT {{ records.length }}</div>
+            </div>
+          </div>
+          <div class="recharge-list">
+            <div v-for="(r, i) in records.slice(0, 12)" :key="i" class="recharge-row">
+              <span class="time">{{ fmtDate(r) }}</span>
+              <span class="chip chip--mono">{{ typeLabel(r.type) }}</span>
+              <span class="amt">+${{ Math.abs(deltaUsd(r)).toFixed(2) }}</span>
+              <StatusDot status="ok" />
+            </div>
+            <div v-if="!records.length" class="t-label tertiary" style="padding: 12px 4px">还没有充值记录</div>
+          </div>
+        </Tile>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.recharge-page {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  max-width: 640px;
-  margin: 0 auto;
-}
+.hero-num { display: flex; align-items: baseline; flex-wrap: wrap; margin: 8px 0; }
+.amount-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
 
-.page-head { margin-bottom: 4px; }
-.eyebrow {
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--world-text-mute);
-}
-.page-title {
-  font-family: var(--world-font-display);
-  font-size: 1.75rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin: 4px 0 0;
-  color: var(--world-text-primary);
-}
-[data-world="daogui"] .page-title {
-  background: linear-gradient(135deg, #f3c66e 0%, var(--world-accent) 90%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.recharge-card {
-  text-align: center;
+.pay-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pay {
   position: relative;
-  overflow: hidden;
-}
-.recharge-card::before {
-  content: '';
-  position: absolute;
-  top: -100px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 320px;
-  height: 320px;
-  background: radial-gradient(circle, rgba(2, 132, 199, 0.10), transparent 70%);
-  pointer-events: none;
-  border-radius: 50%;
-}
-[data-world="daogui"] .recharge-card::before {
-  background: radial-gradient(circle, rgba(196, 30, 58, 0.18), transparent 70%);
-}
-
-.card-icon-wrap {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  margin-bottom: 16px;
-}
-.card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 64px;
-  height: 64px;
-  border-radius: var(--world-radius-2xl);
-  background: linear-gradient(135deg, var(--world-accent), var(--world-paper-aged, var(--world-accent-soft, #38bdf8)));
-  color: white;
-  box-shadow: 0 8px 28px -8px rgba(2, 132, 199, 0.5);
-}
-[data-world="daogui"] .card-icon {
-  box-shadow: 0 0 32px rgba(196, 30, 58, 0.4);
-}
-
-.card-body { position: relative; z-index: 1; }
-.card-title {
-  font-size: 1.125rem;
-  font-weight: 800;
-  margin: 0 0 4px;
-  color: var(--world-text-primary);
-  font-family: var(--world-font-display);
-}
-.card-helper {
-  font-size: 0.8125rem;
-  color: var(--world-text-mute);
-  margin: 0 0 24px;
-}
-
-.redeem-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-/* Feedback */
-.feedback-msg {
-  margin-top: 18px;
-  padding: 12px 14px;
-  border-radius: var(--world-radius-lg);
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 12px;
+  min-height: 88px;
+  background: rgba(255,255,255,0.04);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
   text-align: left;
+  font-family: inherit; color: inherit;
+  transition: background 150ms ease, box-shadow 150ms ease;
 }
-.feedback-msg.success {
-  background: rgba(16, 185, 129, 0.10);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  color: var(--world-success);
+.pay:hover { background: rgba(255,255,255,0.07); }
+.pay.is-selected { box-shadow: inset 0 0 0 1px rgba(11,212,112,0.4); background: rgba(11,212,112,0.05); }
+.pay svg { color: var(--st-text-pri); margin-bottom: 2px; }
+.pay__corner {
+  position: absolute; top: 6px; right: 6px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--st-success); color: var(--st-text-inv);
+  display: flex; align-items: center; justify-content: center;
 }
-.feedback-msg.error {
-  background: rgba(239, 68, 68, 0.10);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  color: var(--world-error);
-}
-[data-world="daogui"] .feedback-msg.success {
-  background: rgba(82, 121, 111, 0.12);
-  border-color: rgba(82, 121, 111, 0.32);
-  color: #95b5a8;
-}
-[data-world="daogui"] .feedback-msg.error {
-  background: rgba(196, 30, 58, 0.12);
-  border-color: rgba(196, 30, 58, 0.32);
-  color: #f5707f;
-  box-shadow: 0 0 18px rgba(196, 30, 58, 0.15);
-}
-.fb-icon { flex-shrink: 0; padding-top: 1px; }
-.fb-title {
-  font-size: 0.875rem;
-  font-weight: 800;
-  margin-bottom: 2px;
-}
-.fb-detail {
-  font-size: 0.8125rem;
-  color: var(--world-text-mute);
-}
+.pay__corner svg { color: var(--st-text-inv); margin: 0; }
 
-.slide-fade-enter-active { transition: all 280ms cubic-bezier(0.34, 1.56, 0.64, 1); }
-.slide-fade-leave-active { transition: all 200ms ease-in; }
-.slide-fade-enter-from   { opacity: 0; transform: translateY(-8px); }
-.slide-fade-leave-to     { opacity: 0; transform: translateY(-4px); }
+.redeem { display: flex; gap: 8px; }
+.redeem .st-input { flex: 1; }
 
-/* Hints */
-.hints {
+.pkg { display: flex; flex-direction: column; }
+.pkg__row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-@media (max-width: 600px) {
-  .hints { grid-template-columns: 1fr; }
-}
-.hint-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.hint-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
+  grid-template-columns: 60px 16px 80px 1fr auto;
   align-items: center;
-  justify-content: center;
-  border-radius: var(--world-radius-md);
-  background: rgba(2, 132, 199, 0.10);
-  color: var(--world-accent);
-  flex-shrink: 0;
+  gap: 12px;
+  height: 44px;
+  padding: 0 8px;
+  border-radius: 4px;
+  position: relative;
+  transition: background 150ms ease;
 }
-[data-world="daogui"] .hint-icon {
-  background: rgba(196, 30, 58, 0.12);
-  color: var(--world-accent);
-}
-.hint-title {
-  font-size: 0.8125rem;
-  font-weight: 800;
-  color: var(--world-text-primary);
-  margin-bottom: 2px;
-}
-.hint-sub {
-  font-size: 0.75rem;
-  color: var(--world-text-mute);
-  line-height: 1.4;
+.pkg__row:hover { background: rgba(255,255,255,0.02); }
+.pkg__amt { font-size: 15px; color: var(--st-text-sec); }
+.pkg__arrow { color: var(--st-text-ter); }
+.pkg__got { font-size: 15px; font-weight: 500; color: var(--st-text-pri); }
+.pkg__row--best { background: rgba(11,212,112,0.05); box-shadow: inset 0 0 0 1px rgba(11,212,112,0.25); padding-right: 60px; }
+.pkg__best {
+  position: absolute; right: 12px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+  color: var(--st-success);
+  background: rgba(11,212,112,0.12);
+  padding: 3px 6px; border-radius: 2px;
 }
 
-/* === 充值历史 === */
-.history-card { margin-top: 8px; }
-.history-head {
-  display: flex;
+.recharge-list { display: flex; flex-direction: column; margin-bottom: 12px; }
+.recharge-row {
+  display: grid;
+  grid-template-columns: 90px 70px 1fr 16px;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.history-title-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.history-title {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 800;
-  color: var(--world-text-primary);
-  font-family: var(--world-font-display);
-}
-.history-count {
-  font-size: 0.75rem;
-  color: var(--world-text-mute);
-  font-weight: 700;
-}
-.history-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 32px 16px;
-  color: var(--world-text-dim);
-  font-size: 0.875rem;
-}
-.history-list { display: flex; flex-direction: column; gap: 8px; }
-.history-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  background: var(--world-overlay-light);
-  border-radius: var(--world-radius-md);
-  border: 1px solid transparent;
-  transition: all 200ms ease;
+  height: 36px;
 }
-.history-row:hover {
-  border-color: var(--world-glass-border);
-  background: var(--world-overlay-strong, var(--world-overlay-light));
-}
-.row-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.row-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.row-time {
-  font-size: 0.78rem;
-  color: var(--world-text-primary);
-  font-family: var(--world-font-mono);
-  font-weight: 700;
-}
-.row-code, .row-note {
-  font-size: 0.7rem;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.row-right {
-  text-align: right;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.amount-cny {
-  font-size: 1rem;
-  font-weight: 800;
-  color: var(--world-success);
-  font-family: var(--world-font-mono);
-}
-.amount-usd {
-  font-size: 0.7rem;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
-}
-.balance-flow {
-  font-size: 0.65rem;
-  color: var(--world-text-dim);
-  font-family: var(--world-font-mono);
-}
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 14px;
-}
-.page-info {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
+.recharge-row + .recharge-row { border-top: 1px solid rgba(255,255,255,0.04); }
+.recharge-row .time { font-family: var(--st-font-mono); font-size: 11px; color: var(--st-text-ter); }
+.recharge-row .amt {
+  font-family: var(--st-font-mono); font-variant-numeric: tabular-nums;
+  color: var(--st-success); text-align: right; font-size: 13px;
 }
 </style>

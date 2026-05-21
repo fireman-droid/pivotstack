@@ -51,3 +51,30 @@ export function getSubBadge(type) {
   if (t.includes('PRO')) return { label: 'PRO', color: 'blue' }
   return { label: 'FREE', color: 'gray' }
 }
+
+// 金额自适应精度：避免 $0.000048 被 toFixed(4) round 成 $0.0000。
+// ≥0.01 → 2 位（'$1.23'），<0.01 → 4 位（'$0.0048'），<0.0001 → 6 位 trim 尾 0（'$0.000048'）。
+export function fmtCost(v) {
+  if (v == null || v === 0 || Number.isNaN(v)) return '$0'
+  const a = Math.abs(v)
+  if (a < 0.0001) {
+    const s = v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+    return '$' + s
+  }
+  if (a < 0.01) return '$' + v.toFixed(4)
+  return '$' + v.toFixed(2)
+}
+
+// 后端返回的 *_CNY 字段直接展示 ¥；不做单位换算（后端已用 PivotStackDollarsPerYuan 换算）。
+export function fmtMoneyCny(v) {
+  if (v == null || Number.isNaN(v)) return '¥-'
+  return '¥' + v.toFixed(2)
+}
+
+// API Key 套餐 plan 枚举值 → 中文 label。后端 value 仍是 credit/timed/hybrid，仅 UI 显示用中文。
+export function planLabel(plan) {
+  if (plan === 'credit') return '余额卡'
+  if (plan === 'timed') return '天卡'
+  if (plan === 'hybrid') return '混合'
+  return plan || '-'
+}

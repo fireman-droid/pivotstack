@@ -219,22 +219,32 @@ func pruneOldTimestamps(times []int64, now, windowSec int64) []int64 {
 var redeemAttempts = sync.Map{} // ip -> []int64 timestamps
 
 // CheckRedeemRateLimit checks if an IP has exceeded the redeem attempt limit.
-// Returns (allowed, reason). Max 5 failed attempts per IP per 60 seconds.
+// Returns (allowed, reason). Max 5 attempts per IP per 60s, then 5 min hard lock.
 func CheckRedeemRateLimit(ip string) (bool, string) {
 	now := time.Now().Unix()
 	v, _ := redeemAttempts.LoadOrStore(ip, &struct {
-		mu    sync.Mutex
-		times []int64
+		mu          sync.Mutex
+		times       []int64
+		lockedUntil int64
 	}{})
 	rl := v.(*struct {
-		mu    sync.Mutex
-		times []int64
+		mu          sync.Mutex
+		times       []int64
+		lockedUntil int64
 	})
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	if rl.lockedUntil > 0 {
+		if now < rl.lockedUntil {
+			return false, "too many redeem attempts, please try again later"
+		}
+		rl.lockedUntil = 0
+		rl.times = nil
+	}
 	rl.times = pruneOldTimestamps(rl.times, now, 60)
 	if len(rl.times) >= 5 {
+		rl.lockedUntil = now + int64((5 * time.Minute).Seconds())
 		return false, "too many redeem attempts, please try again later"
 	}
 	rl.times = append(rl.times, now)

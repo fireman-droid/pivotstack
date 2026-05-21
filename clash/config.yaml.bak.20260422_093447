@@ -1,0 +1,74 @@
+port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+  ipv6: true
+  nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  nameserver-policy:
+    geosite:cn,private:
+      - https://120.53.53.53/dns-query
+      - https://223.5.5.5/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.cloudflare.com/dns-query
+      - https://dns.google/dns-query
+  proxy-server-nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  respect-rules: true
+proxies:
+  - name: tw-04
+    type: anytls
+    server: 7c4b1e93.911-gt3-rs.com
+    port: 35122
+    password: 15de2fdc-1d3b-4655-ada8-9b238eee0655
+    client-fingerprint: chrome
+    udp: true
+    alpn: [h2, http/1.1]
+    sni: dl.emsfi.com
+  - name: tw-05
+    type: anytls
+    server: 7c4b1e93.911-gt3-rs.com
+    port: 35131
+    password: 15de2fdc-1d3b-4655-ada8-9b238eee0655
+    client-fingerprint: chrome
+    udp: true
+    alpn: [h2, http/1.1]
+    sni: dl.emsfi.com
+  - name: tw-07
+    type: anytls
+    server: 7c4b1e93.911-gt3-rs.com
+    port: 35128
+    password: 15de2fdc-1d3b-4655-ada8-9b238eee0655
+    client-fingerprint: chrome
+    udp: true
+    alpn: [h2, http/1.1]
+    sni: dl.emsfi.com
+proxy-groups:
+  - name: AWS-Pool
+    type: load-balance
+    strategy: round-robin
+    proxies:
+      - tw-04
+      - tw-05
+      - tw-07
+    url: https://www.gstatic.com/generate_204
+    interval: 120
+rules:
+  - DOMAIN-SUFFIX,amazonaws.com,AWS-Pool
+  - MATCH,DIRECT
+geodata-mode: true
+geo-auto-update: true
+geodata-loader: standard
+geo-update-interval: 24
+geox-url:
+  asn: https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
+  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -288,18 +287,7 @@ func hashAdminToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// clientIP 用于 admin login 的 IP 速率限制。
-// 故意只信任 r.RemoteAddr —— 不读 X-Forwarded-For / CF-Connecting-IP，
-// 因为攻击者可以伪造这俩 header 绕过 "同 IP 5 次失败锁 10 分钟" 限速。
-// 如果将来部署在可信反代（nginx/cloudflare）后面，需要走显式配置 + 校验
-// 代理来源 IP（trusted_proxies）才能启用，否则永远只看 socket 层 IP。
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
-}
+// clientIP / requestIP 已抽到 proxy/request_ip.go，所有 IP 相关限流统一走那里。
 
 func (h *Handler) requireAdminSession(w http.ResponseWriter, r *http.Request) (*adminSession, bool) {
 	sess, ok := h.adminSessions.Get(r)

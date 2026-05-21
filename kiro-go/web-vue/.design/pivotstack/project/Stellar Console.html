@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<!-- PivotStack User Console · Stellar Console theme v1 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PivotStack · Stellar Console</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+
+<link rel="stylesheet" href="stellar.css" />
+</head>
+<body>
+  <!-- ============== STARFIELD ============== -->
+  <div class="starfield" aria-hidden="true">
+    <div class="starfield__rot">
+      <div class="starfield__static"></div>
+      <div class="starfield__twinkle" id="twinkleLayer"></div>
+    </div>
+    <div class="starfield__meteors" id="meteorLayer"></div>
+    <div class="starfield__vignette"></div>
+  </div>
+
+  <!-- ============== TOP NAV ============== -->
+  <!-- naive-ui: 自定义 <header>，导航用 router-link + class，非 NMenu -->
+  <header class="nav">
+    <div class="nav__inner">
+      <div class="nav__brand">
+        <div class="nav__logo" aria-hidden="true">P</div>
+        <div class="nav__brand-text">
+          <span class="nav__brand-name">PivotStack</span>
+          <span class="nav__brand-role">USER</span>
+        </div>
+      </div>
+
+      <nav class="nav__center" role="tablist">
+        <button class="nav__item is-active" data-tab="dashboard" role="tab" aria-selected="true">
+          <i data-lucide="layout-dashboard"></i><span>概览</span>
+        </button>
+        <button class="nav__item" data-tab="recharge" role="tab">
+          <i data-lucide="wallet"></i><span>充值</span>
+        </button>
+        <button class="nav__item" data-tab="logs" role="tab">
+          <i data-lucide="list"></i><span>调用日志</span>
+        </button>
+        <button class="nav__item" data-tab="api" role="tab">
+          <i data-lucide="code-2"></i><span>接入示例</span>
+        </button>
+        <button class="nav__item" data-tab="reseller" role="tab">
+          <i data-lucide="users"></i><span>代理</span>
+        </button>
+      </nav>
+
+      <div class="nav__right">
+        <div class="live">
+          <span class="dot dot--green dot--pulse"></span>
+          <span class="t-label">Live</span>
+          <span class="t-label live__ago" id="liveAgo">· 12s ago</span>
+        </div>
+        <!-- naive-ui: NTag size="small" :bordered="false" type="success" -->
+        <div class="balance-chip" id="navBalance">
+          <i data-lucide="dollar-sign"></i>
+          <span class="t-num-strong">9.79</span>
+        </div>
+        <!-- naive-ui: NButton quaternary size="small" -->
+        <button class="btn btn--ghost btn--icon" title="退出"><i data-lucide="log-out"></i></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============== MAIN ============== -->
+  <main class="main">
+    <!-- ====================================================== -->
+    <!-- TAB 1 · DASHBOARD                                      -->
+    <!-- ====================================================== -->
+    <section class="tab is-active" data-tab-panel="dashboard">
+
+      <!-- ─── 三栏 ─── -->
+      <div class="grid-3">
+
+        <!-- ── 左栏 ── -->
+        <div class="col">
+          <!-- A · 余额 Hero -->
+          <div class="tile">
+            <div class="tile__head">
+              <span class="t-label">余额 BALANCE</span>
+              <span class="live live--mini"><span class="dot dot--green dot--pulse"></span><span class="t-micro">LIVE</span></span>
+            </div>
+            <div class="hero-num">
+              <span class="t-hero-xl mono" data-counter="9.79" data-prefix="$" data-decimals="2">$0.00</span>
+            </div>
+            <div class="t-body sub">≈ ¥9.79 &nbsp;·&nbsp; 够 ~12 天</div>
+            <div class="hairline"></div>
+            <div class="balance-split">
+              <div class="balance-split__item">
+                <span class="t-label tertiary">已充值</span>
+                <span class="mono t-body">$8.50</span>
+              </div>
+              <div class="balance-split__divider"></div>
+              <div class="balance-split__item">
+                <span class="t-label tertiary">赠送</span>
+                <span class="mono t-body" style="color:#0bd470">$1.29</span>
+              </div>
+            </div>
+            <!-- naive-ui: NButton type="primary" size="small" block -->
+            <button class="btn btn--primary btn--block" data-go="recharge">
+              <i data-lucide="plus"></i>立即充值
+            </button>
+          </div>
+
+          <!-- B · USAGE -->
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">USAGE</span></div>
+            <div class="usage-row">
+              <span class="usage-row__label t-body">今日</span>
+              <span class="usage-row__num t-num-strong" data-counter="142">0</span>
+              <span class="chip chip--up"><i data-lucide="trending-up"></i>+12%</span>
+            </div>
+            <div class="hairline"></div>
+            <div class="usage-row">
+              <span class="usage-row__label t-body">本月</span>
+              <span class="usage-row__num t-num-strong" data-counter="4283">0</span>
+              <span class="chip chip--mono">$42.50</span>
+            </div>
+            <div class="hairline"></div>
+            <div class="usage-row">
+              <span class="usage-row__label t-body">累计</span>
+              <span class="usage-row__num t-num-strong" data-counter="12847">0</span>
+              <span class="chip chip--mono">since 2025-12</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 中栏 ── -->
+        <div class="col">
+          <!-- A · 7d trend -->
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">调用趋势</div>
+                <div class="t-label tertiary">LAST 7 DAYS</div>
+              </div>
+              <div class="tile__head-right">
+                <div class="t-num-strong">743 <span class="t-body sub">calls</span></div>
+                <div class="t-label tertiary">TOTAL</div>
+              </div>
+            </div>
+            <div class="chart chart--lg" id="chartB1"></div>
+          </div>
+
+          <!-- B · model donut -->
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">模型分布</span></div>
+            <div class="donut-row">
+              <div class="chart chart--donut" id="chartB2"></div>
+              <div class="donut-legend">
+                <div class="donut-legend__item" data-idx="0">
+                  <span class="dot" style="background:#0bd470"></span>
+                  <div class="donut-legend__label">
+                    <span class="t-body-strong">opus-4-7</span>
+                    <span class="t-label tertiary">528 calls · 62%</span>
+                  </div>
+                  <span class="t-num-strong">$25.40</span>
+                </div>
+                <div class="donut-legend__item" data-idx="1">
+                  <span class="dot" style="background:#52a8ff"></span>
+                  <div class="donut-legend__label">
+                    <span class="t-body-strong">sonnet-4-6</span>
+                    <span class="t-label tertiary">238 calls · 28%</span>
+                  </div>
+                  <span class="t-num-strong">$11.20</span>
+                </div>
+                <div class="donut-legend__item" data-idx="2">
+                  <span class="dot" style="background:#f5a623"></span>
+                  <div class="donut-legend__label">
+                    <span class="t-body-strong">haiku-4-5</span>
+                    <span class="t-label tertiary">84 calls · 10%</span>
+                  </div>
+                  <span class="t-num-strong">$0.85</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- C · 分组路由 -->
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">分组路由</div>
+                <div class="t-label tertiary">PREFERENCES · 配置走哪个上游</div>
+              </div>
+            </div>
+
+            <div class="route-row" data-group="claude">
+              <div class="route-row__main">
+                <div class="t-body-strong">claude</div>
+                <div class="t-label tertiary">10× cache · 4 渠道可选</div>
+              </div>
+              <div class="route-row__chips">
+                <!-- naive-ui: NRadioGroup + NRadio -->
+                <span class="chip chip--selected" data-route><span class="dot dot--green"></span>aws稳定</span>
+                <span class="chip chip--mono" data-route>cc</span>
+                <span class="chip chip--mono" data-route>kiro高缓存</span>
+                <span class="chip chip--mono" data-route>反重力pro</span>
+              </div>
+              <i class="route-row__chev" data-lucide="chevron-right"></i>
+            </div>
+            <div class="hairline"></div>
+
+            <div class="route-row" data-group="gpt">
+              <div class="route-row__main">
+                <div class="t-body-strong">GPT 系列</div>
+                <div class="t-label tertiary">cost-optimized · 2 渠道可选</div>
+              </div>
+              <div class="route-row__chips">
+                <span class="chip chip--selected" data-route><span class="dot dot--green"></span>apijing-codex</span>
+                <span class="chip chip--mono" data-route>oai-direct</span>
+              </div>
+              <i class="route-row__chev" data-lucide="chevron-right"></i>
+            </div>
+            <div class="hairline"></div>
+
+            <div class="route-row" data-group="gemini">
+              <div class="route-row__main">
+                <div class="t-body-strong">Gemini 系列</div>
+                <div class="t-label tertiary">1M ctx · 1 渠道可选</div>
+              </div>
+              <div class="route-row__chips">
+                <span class="chip chip--selected" data-route><span class="dot dot--green"></span>vertex-1</span>
+              </div>
+              <i class="route-row__chev" data-lucide="chevron-right"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 右栏 ── -->
+        <div class="col">
+          <!-- A · 上游健康 -->
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">上游健康</div>
+                <div class="t-label tertiary">REAL-TIME</div>
+              </div>
+            </div>
+            <div class="health-list" id="healthList">
+              <!-- rows generated by JS so sparklines mount -->
+            </div>
+          </div>
+
+          <!-- B · API 接入快速复制 -->
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">接入</span></div>
+            <div class="kv">
+              <span class="t-label">ENDPOINT</span>
+              <div class="mono-value">
+                <span>https://api.pivotstack.cn/v1</span>
+                <button class="copy-btn" data-copy="https://api.pivotstack.cn/v1"><i data-lucide="copy"></i></button>
+              </div>
+            </div>
+            <div class="kv">
+              <span class="t-label">API KEY</span>
+              <div class="mono-value">
+                <span>sk-•••••••••••e3a2</span>
+                <button class="copy-btn" data-copy="sk-XYZ987654321ABCDEFGHe3a2"><i data-lucide="copy"></i></button>
+              </div>
+            </div>
+            <!-- naive-ui: NButton size="small" -->
+            <button class="btn btn--secondary btn--block" data-go="api">查看接入示例 →</button>
+          </div>
+
+          <!-- C · NOTICE -->
+          <div class="tile tile--notice">
+            <div class="hairline"></div>
+            <div class="notice">
+              <span class="t-label warn">NOTICE</span>
+              <div class="t-body">cc 渠道今日延迟偏高（&gt;300ms），延迟敏感请切换 aws稳定。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── 全宽: 热力图 ─── -->
+      <div class="tile tile--wide">
+        <div class="tile__head tile__head--split">
+          <div>
+            <div class="t-display">调用热力图</div>
+            <div class="t-label tertiary">WHEN YOU ARE BUSY</div>
+          </div>
+          <div class="heatmap-legend">
+            <span class="t-label tertiary">少</span>
+            <span class="heatmap-legend__swatches">
+              <i style="background:rgba(11,212,112,0.05)"></i>
+              <i style="background:rgba(11,212,112,0.15)"></i>
+              <i style="background:rgba(11,212,112,0.3)"></i>
+              <i style="background:rgba(11,212,112,0.55)"></i>
+              <i style="background:rgba(11,212,112,0.85)"></i>
+              <i style="background:#0bd470"></i>
+            </span>
+            <span class="t-label tertiary">多</span>
+          </div>
+        </div>
+        <div class="chart" id="chartB4" style="height:180px"></div>
+      </div>
+
+      <!-- ─── 全宽: 最近调用 ─── -->
+      <div class="tile tile--wide">
+        <div class="tile__head tile__head--split">
+          <div>
+            <div class="t-display">最近调用</div>
+            <div class="t-label tertiary">LATEST 10</div>
+          </div>
+          <button class="btn btn--ghost btn--sm" data-go="logs">全部日志 →</button>
+        </div>
+        <!-- naive-ui: NDataTable :columns :data size="small" -->
+        <div class="table">
+          <div class="table__head">
+            <div style="width:80px">时间</div>
+            <div style="width:120px">request_id</div>
+            <div style="flex:1">模型</div>
+            <div style="width:100px">上游</div>
+            <div style="width:64px;text-align:right">in</div>
+            <div style="width:64px;text-align:right">out</div>
+            <div style="width:72px;text-align:right">total</div>
+            <div style="width:72px;text-align:right">花费</div>
+            <div style="width:80px;text-align:right">延迟</div>
+            <div style="width:40px;text-align:center">状态</div>
+          </div>
+          <div class="table__body" id="recentCallsTable"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- TAB 2 · RECHARGE                                       -->
+    <!-- ====================================================== -->
+    <section class="tab" data-tab-panel="recharge">
+      <div class="grid-3 grid-3--recharge">
+
+        <!-- 左 -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">充值</span></div>
+            <span class="t-label">选择金额</span>
+            <div class="amount-chips" id="amountChips">
+              <span class="chip chip--amount is-selected" data-amount="50">¥50</span>
+              <span class="chip chip--amount" data-amount="10">¥10</span>
+              <span class="chip chip--amount" data-amount="100">¥100</span>
+              <span class="chip chip--amount" data-amount="500">¥500</span>
+            </div>
+            <!-- naive-ui: NInputNumber size="small" -->
+            <div class="input input--amount">
+              <span class="input__prefix">¥</span>
+              <input type="number" value="50" id="customAmount" class="mono" />
+              <span class="input__suffix t-label tertiary" id="amountConvert">= $52.00 虚拟$</span>
+            </div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">支付方式</span></div>
+            <div class="pay-grid">
+              <button class="pay is-selected" data-pay="wechat">
+                <i data-lucide="message-circle"></i>
+                <div class="t-body-strong">微信支付</div>
+                <div class="t-label tertiary">推荐</div>
+                <span class="pay__corner"><i data-lucide="check"></i></span>
+              </button>
+              <button class="pay" data-pay="alipay">
+                <i data-lucide="circle-dollar-sign"></i>
+                <div class="t-body-strong">支付宝</div>
+                <div class="t-label tertiary">即时到账</div>
+              </button>
+              <button class="pay" data-pay="card">
+                <i data-lucide="ticket"></i>
+                <div class="t-body-strong">卡券码</div>
+                <div class="t-label tertiary">兑换专用</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">或使用兑换码</span></div>
+            <div class="redeem">
+              <input type="text" class="input mono" placeholder="STELLAR-XXXX-XXXX-XXXX" />
+              <!-- naive-ui: NButton size="small" -->
+              <button class="btn btn--secondary">兑换</button>
+            </div>
+          </div>
+
+          <button class="btn btn--primary btn--block btn--lg" id="rechargeCta">确认充值 ¥50 →</button>
+        </div>
+
+        <!-- 中 -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">CURRENT BALANCE</span></div>
+            <div class="hero-num">
+              <span class="t-hero-lg mono">$9.79</span>
+            </div>
+            <div class="t-body sub">≈ ¥9.79 &nbsp;·&nbsp; 够 ~12 天</div>
+            <div class="hairline"></div>
+            <div class="t-label tertiary">充值 $8.50 &nbsp;·&nbsp; 赠送 $1.29</div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">套餐</span></div>
+            <div class="pkg">
+              <div class="pkg__row">
+                <span class="pkg__amt mono">¥10</span>
+                <span class="pkg__arrow">→</span>
+                <span class="pkg__got mono">$10</span>
+                <span class="t-label tertiary pkg__note">无优惠</span>
+              </div>
+              <div class="hairline"></div>
+              <div class="pkg__row">
+                <span class="pkg__amt mono">¥50</span>
+                <span class="pkg__arrow">→</span>
+                <span class="pkg__got mono">$52</span>
+                <span class="t-label pkg__note"><span class="chip chip--up">+$2 · 4%</span></span>
+              </div>
+              <div class="hairline"></div>
+              <div class="pkg__row">
+                <span class="pkg__amt mono">¥100</span>
+                <span class="pkg__arrow">→</span>
+                <span class="pkg__got mono">$108</span>
+                <span class="t-label pkg__note"><span class="chip chip--up">+$8 · 8%</span></span>
+              </div>
+              <div class="hairline"></div>
+              <div class="pkg__row pkg__row--best">
+                <span class="pkg__amt mono">¥500</span>
+                <span class="pkg__arrow">→</span>
+                <span class="pkg__got mono">$570</span>
+                <span class="t-label pkg__note"><span class="chip chip--up">+$70 · 14%</span></span>
+                <span class="pkg__best">BEST</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右 -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">充值记录</div>
+                <div class="t-label tertiary">RECENT</div>
+              </div>
+            </div>
+            <div class="recharge-list" id="rechargeList"></div>
+            <button class="btn btn--ghost btn--block btn--sm">查看全部 →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- TAB 3 · LOGS                                           -->
+    <!-- ====================================================== -->
+    <section class="tab" data-tab-panel="logs">
+      <!-- Stat Ribbon -->
+      <div class="stat-ribbon">
+        <div class="stat-tile">
+          <div class="stat-tile__head">
+            <span class="t-label">今日调用</span>
+            <span class="dot dot--green dot--pulse"></span>
+          </div>
+          <div class="stat-tile__num"><span class="t-hero-lg mono" data-counter="142">0</span></div>
+          <div class="chart stat-tile__chart" id="chartB5a"></div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile__head">
+            <span class="t-label">平均延迟</span>
+          </div>
+          <div class="stat-tile__num"><span class="t-hero-lg mono" data-counter="142" data-suffix="ms">0</span></div>
+          <div class="chart stat-tile__chart" id="chartB5b"></div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-tile__head">
+            <span class="t-label">错误率</span>
+          </div>
+          <div class="stat-tile__num"><span class="t-hero-lg mono" data-counter="0.4" data-decimals="1" data-suffix="%">0%</span></div>
+          <div class="chart stat-tile__chart" id="chartB5c"></div>
+        </div>
+      </div>
+
+      <!-- Filter Ribbon -->
+      <!-- naive-ui: 一组 NSelect + NInput + NSwitch -->
+      <div class="filter-ribbon">
+        <div class="filter-ribbon__left">
+          <div class="select"><i data-lucide="calendar"></i><span>今天</span><i data-lucide="chevron-down"></i></div>
+          <div class="select"><span>模型</span><i data-lucide="chevron-down"></i></div>
+          <div class="select"><span>全部状态</span><i data-lucide="chevron-down"></i></div>
+          <div class="select"><span>上游</span><i data-lucide="chevron-down"></i></div>
+          <div class="input input--search">
+            <i data-lucide="search"></i>
+            <input type="text" class="mono" placeholder="搜索 request_id 或关键词" />
+          </div>
+        </div>
+        <div class="filter-ribbon__right">
+          <button class="btn btn--secondary btn--sm"><i data-lucide="download"></i>导出 CSV</button>
+          <div class="switch">
+            <span class="t-label">自动刷新</span>
+            <span class="switch__track is-on"><span class="switch__thumb"></span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main table + drawer -->
+      <div class="logs-layout">
+        <div class="tile tile--logs">
+          <div class="table">
+            <div class="table__head">
+              <div style="width:88px">时间</div>
+              <div style="width:120px">request_id</div>
+              <div style="flex:1;min-width:150px">模型</div>
+              <div style="width:100px">上游</div>
+              <div style="width:64px;text-align:right">in</div>
+              <div style="width:64px;text-align:right">out</div>
+              <div style="width:80px;text-align:right">total</div>
+              <div style="width:72px;text-align:right">花费</div>
+              <div style="width:80px;text-align:right">延迟</div>
+              <div style="width:40px;text-align:center">状态</div>
+            </div>
+            <div class="table__body" id="logsTable"></div>
+          </div>
+        </div>
+
+        <aside class="drawer" id="logDrawer">
+          <div class="drawer__head">
+            <div>
+              <div class="t-label tertiary">REQUEST</div>
+              <div class="mono drawer__rid" id="drawerRid">abc12345-...-e3a2</div>
+            </div>
+            <button class="btn btn--ghost btn--icon" id="drawerClose"><i data-lucide="x"></i></button>
+          </div>
+
+          <div class="drawer__sect">
+            <div class="kv-row"><span class="t-label">时间</span><span class="mono t-body" id="drawerTime">2026-05-17 10:42:31 UTC+8</span></div>
+            <div class="kv-row"><span class="t-label">模型</span><span class="t-body" id="drawerModel">claude-opus-4-7</span></div>
+            <div class="kv-row"><span class="t-label">路由上游</span><span class="chip chip--mono" id="drawerUp">aws稳定</span></div>
+            <div class="kv-row"><span class="t-label">是否 retry</span><span class="t-body" id="drawerRetry">否 · 1 次命中</span></div>
+          </div>
+
+          <div class="drawer__sect">
+            <div class="t-label">TOKENS</div>
+            <div class="tok-row"><span>input</span><span class="mono">3,512</span></div>
+            <div class="tok-row"><span>cached</span><span class="mono">2,108</span></div>
+            <div class="tok-row"><span>output</span><span class="mono">728</span></div>
+            <div class="hairline"></div>
+            <div class="tok-row tok-row--total"><span class="t-body-strong">total</span><span class="mono t-num-strong">4,240</span></div>
+          </div>
+
+          <div class="drawer__sect">
+            <div class="t-label">COST</div>
+            <div class="tok-row"><span>input cost</span><span class="mono">$0.0351</span></div>
+            <div class="tok-row"><span>output cost</span><span class="mono">$0.0728</span></div>
+            <div class="tok-row"><span>cache discount</span><span class="mono" style="color:#0bd470">-$0.0179</span></div>
+            <div class="hairline"></div>
+            <div class="tok-row tok-row--total"><span class="t-body-strong">总花费</span><span class="mono t-num-strong" style="color:#0bd470">$0.0900</span></div>
+          </div>
+
+          <div class="drawer__sect">
+            <div class="t-label">延迟分布 vs 同模型</div>
+            <div class="chart" id="chartB6" style="height:100px"></div>
+          </div>
+
+          <div class="drawer__sect">
+            <div class="t-label">REQUEST BODY</div>
+            <pre class="code-block mono"><span class="tok-punc">{</span>
+  <span class="tok-key">"model"</span>: <span class="tok-str">"claude-opus-4-7"</span>,
+  <span class="tok-key">"messages"</span>: <span class="tok-punc">[</span>
+    <span class="tok-punc">{</span> <span class="tok-key">"role"</span>: <span class="tok-str">"user"</span>, <span class="tok-key">"content"</span>: <span class="tok-str">"分析这段日志..."</span> <span class="tok-punc">}</span>
+  <span class="tok-punc">]</span>,
+  <span class="tok-key">"max_tokens"</span>: <span class="tok-num">1024</span>
+<span class="tok-punc">}</span></pre>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- TAB 4 · API DOCS                                       -->
+    <!-- ====================================================== -->
+    <section class="tab" data-tab-panel="api">
+      <!-- HERO -->
+      <div class="tile api-hero">
+        <div class="api-hero__row">
+          <div class="t-label">你的 ENDPOINT</div>
+          <div class="mono-value mono-value--lg">
+            <span class="t-hero-lg mono">https://api.pivotstack.cn/v1</span>
+            <button class="copy-btn" data-copy="https://api.pivotstack.cn/v1"><i data-lucide="copy"></i></button>
+          </div>
+        </div>
+        <div class="hairline"></div>
+        <div class="api-hero__row">
+          <div class="t-label">你的 API KEY</div>
+          <div class="mono-value mono-value--lg">
+            <span class="t-hero-lg mono" id="apiKeyMasked">sk-•••••••••••••••e3a2</span>
+            <button class="btn btn--ghost btn--sm" id="apiKeyToggle"><i data-lucide="eye"></i>显示完整</button>
+            <button class="copy-btn" data-copy="sk-XYZ987654321ABCDEFGHe3a2"><i data-lucide="copy"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="api-grid">
+        <div class="tile">
+          <!-- naive-ui: NTabs -->
+          <div class="ctabs">
+            <button class="ctab is-active" data-ctab="curl">curl</button>
+            <button class="ctab" data-ctab="python-oai">python · openai-sdk</button>
+            <button class="ctab" data-ctab="python-anthropic">python · anthropic</button>
+            <button class="ctab" data-ctab="node">node</button>
+            <button class="ctab" data-ctab="cline">cline 配置</button>
+          </div>
+          <div class="code-wrap">
+            <button class="code-copy" data-copy-code><i data-lucide="copy"></i>复制</button>
+            <pre class="code-block code-block--full mono" data-cpanel="curl"><span class="tok-com"># 一次最简单的对话补全</span>
+<span class="tok-key">curl</span> https://api.pivotstack.cn/v1/chat/completions <span class="tok-punc">\</span>
+  -H <span class="tok-str">"Content-Type: application/json"</span> <span class="tok-punc">\</span>
+  -H <span class="tok-str">"Authorization: Bearer $PIVOTSTACK_KEY"</span> <span class="tok-punc">\</span>
+  -d <span class="tok-str">'{
+    "model": "claude-opus-4-7",
+    "messages": [
+      {"role": "user", "content": "你好"}
+    ]
+  }'</span></pre>
+            <pre class="code-block code-block--full mono" data-cpanel="python-oai" hidden><span class="tok-key">from</span> openai <span class="tok-key">import</span> OpenAI
+
+client = <span class="tok-key">OpenAI</span>(
+    api_key=<span class="tok-str">"sk-XYZ987654321ABCDEFGHe3a2"</span>,
+    base_url=<span class="tok-str">"https://api.pivotstack.cn/v1"</span>,
+)
+
+resp = client.chat.completions.<span class="tok-key">create</span>(
+    model=<span class="tok-str">"claude-opus-4-7"</span>,
+    messages=[{<span class="tok-str">"role"</span>: <span class="tok-str">"user"</span>, <span class="tok-str">"content"</span>: <span class="tok-str">"你好"</span>}],
+)
+<span class="tok-key">print</span>(resp.choices[<span class="tok-num">0</span>].message.content)</pre>
+            <pre class="code-block code-block--full mono" data-cpanel="python-anthropic" hidden><span class="tok-key">import</span> anthropic
+
+client = anthropic.<span class="tok-key">Anthropic</span>(
+    api_key=<span class="tok-str">"sk-XYZ987654321ABCDEFGHe3a2"</span>,
+    base_url=<span class="tok-str">"https://api.pivotstack.cn/v1"</span>,
+)
+
+msg = client.messages.<span class="tok-key">create</span>(
+    model=<span class="tok-str">"claude-opus-4-7"</span>,
+    max_tokens=<span class="tok-num">1024</span>,
+    messages=[{<span class="tok-str">"role"</span>: <span class="tok-str">"user"</span>, <span class="tok-str">"content"</span>: <span class="tok-str">"你好"</span>}],
+)</pre>
+            <pre class="code-block code-block--full mono" data-cpanel="node" hidden><span class="tok-key">import</span> OpenAI <span class="tok-key">from</span> <span class="tok-str">"openai"</span>;
+
+<span class="tok-key">const</span> client = <span class="tok-key">new</span> <span class="tok-key">OpenAI</span>({
+  apiKey: <span class="tok-str">"sk-XYZ987654321ABCDEFGHe3a2"</span>,
+  baseURL: <span class="tok-str">"https://api.pivotstack.cn/v1"</span>,
+});
+
+<span class="tok-key">const</span> resp = <span class="tok-key">await</span> client.chat.completions.<span class="tok-key">create</span>({
+  model: <span class="tok-str">"claude-opus-4-7"</span>,
+  messages: [{ role: <span class="tok-str">"user"</span>, content: <span class="tok-str">"你好"</span> }],
+});</pre>
+            <pre class="code-block code-block--full mono" data-cpanel="cline" hidden><span class="tok-com"># settings.json · cline / cursor 通用</span>
+<span class="tok-punc">{</span>
+  <span class="tok-key">"apiProvider"</span>: <span class="tok-str">"anthropic"</span>,
+  <span class="tok-key">"apiBaseUrl"</span>: <span class="tok-str">"https://api.pivotstack.cn/v1"</span>,
+  <span class="tok-key">"apiKey"</span>: <span class="tok-str">"sk-XYZ987654321ABCDEFGHe3a2"</span>,
+  <span class="tok-key">"model"</span>: <span class="tok-str">"claude-opus-4-7"</span>
+<span class="tok-punc">}</span></pre>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">测试连通</span></div>
+            <div class="kv">
+              <span class="t-label">模型</span>
+              <div class="select select--full"><span>claude-opus-4-7</span><i data-lucide="chevron-down"></i></div>
+            </div>
+            <div class="kv">
+              <span class="t-label">prompt</span>
+              <textarea class="textarea mono" rows="2">你好,简单介绍一下你自己</textarea>
+            </div>
+            <button class="btn btn--primary btn--block" id="testSendBtn"><i data-lucide="send"></i>发送测试</button>
+            <div class="test-result is-hidden" id="testResult">
+              <div class="hairline"></div>
+              <div class="tok-row"><span class="t-label">延迟</span><span class="mono">142 ms</span></div>
+              <div class="tok-row"><span class="t-label">花费</span><span class="mono" style="color:#0bd470">$0.0021</span></div>
+              <div class="tok-row"><span class="t-label">tokens</span><span class="mono">42 / 128</span></div>
+              <pre class="code-block mono">{
+  <span class="tok-key">"content"</span>: <span class="tok-str">"你好!我是基于 Claude 的助手..."</span>,
+  <span class="tok-key">"model"</span>: <span class="tok-str">"claude-opus-4-7"</span>
+}</pre>
+            </div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">你可用的模型</span></div>
+            <div class="model-table">
+              <div class="model-table__head">
+                <div style="flex:1">模型名</div>
+                <div style="width:80px;text-align:right">in / M</div>
+                <div style="width:80px;text-align:right">out / M</div>
+                <div style="width:130px">推荐场景</div>
+              </div>
+              <div class="model-table__row">
+                <div class="mono t-body-strong">opus-4-7</div>
+                <div class="mono" style="text-align:right">$10</div>
+                <div class="mono" style="text-align:right">$50</div>
+                <div class="t-label tertiary">长任务 / agent</div>
+              </div>
+              <div class="hairline"></div>
+              <div class="model-table__row">
+                <div class="mono t-body-strong">sonnet-4-6</div>
+                <div class="mono" style="text-align:right">$6</div>
+                <div class="mono" style="text-align:right">$30</div>
+                <div class="t-label tertiary">日常对话</div>
+              </div>
+              <div class="hairline"></div>
+              <div class="model-table__row">
+                <div class="mono t-body-strong">haiku-4-5</div>
+                <div class="mono" style="text-align:right">$2</div>
+                <div class="mono" style="text-align:right">$10</div>
+                <div class="t-label tertiary">高频快任务</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================== -->
+    <!-- TAB 5 · RESELLER                                       -->
+    <!-- ====================================================== -->
+    <section class="tab" data-tab-panel="reseller">
+      <div class="grid-3 grid-3--reseller">
+
+        <!-- 左 · 池子状态 -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">我的余额</span></div>
+            <div class="hero-num"><span class="t-hero-lg mono">$9.79</span></div>
+            <div class="t-body sub">可分发</div>
+          </div>
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">已分发</span></div>
+            <div class="hero-num"><span class="t-hero-lg mono">$12.40</span></div>
+            <div class="t-body sub">给 8 个子 key</div>
+          </div>
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">累计利润</span></div>
+            <div class="hero-num">
+              <span class="t-hero-lg mono">$3.21</span>
+              <span class="chip chip--up" style="margin-left:8px"><i data-lucide="trending-up"></i>+24% vs 上月</span>
+            </div>
+            <div class="t-body sub">扣除上游成本后</div>
+          </div>
+        </div>
+
+        <!-- 中 · 子 key -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">我的子 key</div>
+                <div class="t-label tertiary">8 个 · 5 个活跃</div>
+              </div>
+              <button class="btn btn--primary btn--sm"><i data-lucide="plus"></i>创建子 key</button>
+            </div>
+            <div class="table">
+              <div class="table__head">
+                <div style="flex:1;min-width:140px">alias</div>
+                <div style="width:80px;text-align:right">余额</div>
+                <div style="width:96px;text-align:right">累计调用</div>
+                <div style="width:96px">最近活跃</div>
+                <div style="width:40px;text-align:center">状态</div>
+                <div style="width:96px">操作</div>
+              </div>
+              <div class="table__body" id="subkeyTable"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右 · 利润 + 操作 -->
+        <div class="col">
+          <div class="tile">
+            <div class="tile__head tile__head--split">
+              <div>
+                <div class="t-display">利润趋势</div>
+                <div class="t-label tertiary">LAST 30 DAYS</div>
+              </div>
+            </div>
+            <div class="chart" id="chartB7" style="height:160px"></div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-display">子 key 余额分布</span></div>
+            <div class="chart" id="chartB8" style="height:200px"></div>
+          </div>
+
+          <div class="tile">
+            <div class="tile__head"><span class="t-label">批量操作</span></div>
+            <button class="btn btn--secondary btn--block"><i data-lucide="zap"></i>批量充值</button>
+            <button class="btn btn--secondary btn--block"><i data-lucide="download"></i>导出明细</button>
+            <button class="btn btn--ghost btn--block"><i data-lucide="settings-2"></i>代理规则设置</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+<script src="stellar.js"></script>
+</body>
+</html>

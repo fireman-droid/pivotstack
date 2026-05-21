@@ -1,734 +1,497 @@
-<script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import * as echarts from 'echarts'
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
 import { userApi } from '../../api/user'
-import {
-  FileX, Database, Coins, Timer, ChevronLeft, ChevronRight,
-  CheckCircle2, XCircle, Activity, Sparkles, Calendar, TrendingUp,
-} from 'lucide-vue-next'
-import WorldCard from '../../components/world/WorldCard.vue'
-import WorldChip from '../../components/world/WorldChip.vue'
-import WorldStat from '../../components/world/WorldStat.vue'
-import WorldTimeline from '../../components/world/WorldTimeline.vue'
-import WorldButton from '../../components/world/WorldButton.vue'
+import { useMessage, NSelect, NDatePicker } from 'naive-ui'
+import { Search, Download, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import LogStatRibbon from '../../components/user/logs/LogStatRibbon.vue'
+import LogDrawer, { type LogDetail } from '../../components/user/logs/LogDrawer.vue'
+import StatusDot from '../../components/user/stellar/StatusDot.vue'
+import { fmtCost } from '../../utils/format'
 
-// ===== 7 天活跃度 =====
-const activity = ref({
-  daily: [],
-  totalCalls: 0,
-  totalErrors: 0,
-  totalTokens: 0,
-  totalCostUSD: 0,
-  promotion: { active: false },
-})
-const activityLoading = ref(true)
+const message = useMessage()
 
-// ===== 当天/某日日志 =====
-const logs = ref([])
-const loading = ref(true)
-const selectedDate = ref('today') // 'today' | 'YYYY-MM-DD' | 'all'
+interface UserLog extends LogDetail {}
+
+const logs = ref<UserLog[]>([])
+const loading = ref(false)
+// mode: today=当天 / date=指定某天 / all=全部历史
+const mode = ref<'today' | 'date' | 'all'>('today')
+const selectedDate = ref<string>(todayStr()) // YYYY-MM-DD
 const page = ref(1)
 const limit = ref(50)
 const total = ref(0)
-const respDate = ref('') // 后端返回的当前查询日期
+const search = ref('')
+const onlyError = ref(false)
+const autoRefresh = ref(false)
+let autoTimer: number | undefined
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit.value)))
-const hasMore = computed(() => page.value < totalPages.value)
+const selected = ref<UserLog | null>(null)
 
-// ===== ECharts =====
-const chartEl = ref(null)
-let chartInstance = null
-
-function pickCss(name, fallback = '#000') {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name)
-  return (v && v.trim()) || fallback
+function todayStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function buildChartOption() {
-  const daily = activity.value.daily || []
-  const dates = daily.map(d => d.date.slice(5)) // "MM-DD"
-  const calls = daily.map(d => d.calls || 0)
-  const errors = daily.map(d => d.errors || 0)
-  const tokensK = daily.map(d => Math.round((d.tokens || 0) / 100) / 10) // 1 dec K
-
-  const accent = pickCss('--world-accent', '#7c3aed')
-  const success = pickCss('--world-success', '#10b981')
-  const error = pickCss('--world-error', '#ef4444')
-  const textMute = pickCss('--world-text-mute', '#9ca3af')
-  const textDim = pickCss('--world-text-dim', '#6b7280')
-  const border = pickCss('--world-glass-border', 'rgba(0,0,0,0.08)')
-  const bg = pickCss('--world-glass-bg', 'rgba(255,255,255,0.6)')
-  const isDaogui = document.documentElement.getAttribute('data-world') === 'daogui'
-
-  return {
-    backgroundColor: 'transparent',
-    grid: { left: 12, right: 16, top: 36, bottom: 28, containLabel: true },
-    legend: {
-      top: 0,
-      right: 8,
-      itemWidth: 12,
-      itemHeight: 12,
-      itemGap: 14,
-      textStyle: { color: textMute, fontSize: 11, fontWeight: 600 },
-      icon: 'roundRect',
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      backgroundColor: bg,
-      borderColor: border,
-      borderWidth: 1,
-      padding: [8, 12],
-      textStyle: { color: pickCss('--world-text-primary', '#111'), fontSize: 12 },
-      extraCssText: 'backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-radius: 10px;',
-    },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      axisLine: { lineStyle: { color: border } },
-      axisTick: { show: false },
-      axisLabel: {
-        color: textMute, fontSize: 11, fontWeight: 600,
-        fontFamily: 'var(--world-font-mono)',
-      },
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: '调用',
-        nameTextStyle: { color: textDim, fontSize: 10, fontWeight: 600, padding: [0, 0, 0, -20] },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { lineStyle: { color: border, type: 'dashed' } },
-        axisLabel: { color: textDim, fontSize: 10 },
-        minInterval: 1,
-      },
-      {
-        type: 'value',
-        name: 'K Tokens',
-        nameTextStyle: { color: textDim, fontSize: 10, fontWeight: 600, padding: [0, -20, 0, 0] },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { show: false },
-        axisLabel: { color: textDim, fontSize: 10 },
-      },
-    ],
-    series: [
-      {
-        name: '成功',
-        type: 'bar',
-        stack: 'calls',
-        data: calls,
-        barMaxWidth: 28,
-        itemStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: accent },
-              { offset: 1, color: isDaogui ? '#7a1f3a' : accent + 'aa' },
-            ],
-          },
-          borderRadius: [4, 4, 0, 0],
-        },
-        emphasis: { itemStyle: { color: success } },
-      },
-      {
-        name: '失败',
-        type: 'bar',
-        stack: 'calls',
-        data: errors,
-        barMaxWidth: 28,
-        itemStyle: {
-          color: error,
-          borderRadius: [4, 4, 0, 0],
-          opacity: 0.7,
-        },
-      },
-      {
-        name: 'Tokens (K)',
-        type: 'line',
-        yAxisIndex: 1,
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 7,
-        data: tokensK,
-        lineStyle: { width: 2.5, color: success },
-        itemStyle: { color: success, borderColor: bg, borderWidth: 2 },
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: success + '40' },
-              { offset: 1, color: success + '00' },
-            ],
-          },
-        },
-      },
-    ],
+function buildLogsQS(): string {
+  const qs = new URLSearchParams()
+  qs.set('page', String(page.value))
+  qs.set('limit', String(limit.value))
+  if (mode.value === 'today') {
+    qs.set('date', todayStr())
+  } else if (mode.value === 'date') {
+    qs.set('date', selectedDate.value || todayStr())
+  } else {
+    qs.set('date', 'all')
   }
+  return qs.toString()
 }
 
-function renderChart() {
-  if (!chartEl.value) return
-  if (!chartInstance) chartInstance = echarts.init(chartEl.value)
-  chartInstance.setOption(buildChartOption(), { notMerge: true })
-}
-
-function handleResize() { chartInstance && chartInstance.resize() }
-
-// ===== 数据加载 =====
-async function loadActivity() {
-  activityLoading.value = true
-  try {
-    const data = await userApi('/activity?days=7')
-    activity.value = data
-  } catch {}
-  activityLoading.value = false
-  await nextTick()
-  renderChart()
-}
-
-async function loadLogs() {
+async function fetchLogs() {
   loading.value = true
   try {
-    const dateParam = selectedDate.value === 'today' ? '' :
-      (selectedDate.value === 'all' ? 'all' : selectedDate.value)
-    const qs = `page=${page.value}&limit=${limit.value}` +
-      (dateParam ? `&date=${dateParam}` : '')
-    const data = await userApi('/logs?' + qs)
-    logs.value = data.logs || []
-    total.value = data.total || 0
-    respDate.value = data.date || ''
-  } catch {}
-  loading.value = false
+    const resp = await userApi(`/logs?${buildLogsQS()}`)
+    logs.value = resp.logs || []
+    total.value = resp.total || 0
+  } catch (e: any) {
+    message.error(e?.message || '加载日志失败')
+  } finally {
+    loading.value = false
+  }
 }
 
-// ===== 日期切换 =====
-const dateChips = computed(() => {
-  const out = [{ key: 'today', label: '今日', sub: '' }]
-  const today = new Date()
-  for (let i = 1; i < 7; i++) {
-    const d = new Date(today)
-    d.setDate(d.getDate() - i)
-    const ymd = d.toISOString().slice(0, 10)
-    out.push({
-      key: ymd,
-      label: ymd.slice(5).replace('-', '/'),
-      sub: ['日','一','二','三','四','五','六'][d.getDay()],
-    })
-  }
-  out.push({ key: 'all', label: '全部', sub: '' })
-  return out
-})
-
-function pickDate(key) {
-  if (selectedDate.value === key) return
-  selectedDate.value = key
+function setMode(m: 'today' | 'date' | 'all') {
+  if (mode.value === m && m !== 'date') return
+  mode.value = m
   page.value = 1
-  loadLogs()
+  fetchLogs()
 }
 
-// ===== 分页 =====
-function prevPage() { if (page.value > 1) { page.value--; loadLogs() } }
-function nextPage() { if (hasMore.value) { page.value++; loadLogs() } }
-function gotoPage(p) { page.value = p; loadLogs() }
+function onDateChange(v: string) {
+  selectedDate.value = v
+  mode.value = 'date'
+  page.value = 1
+  fetchLogs()
+}
 
-// ===== Lifecycle =====
-onMounted(() => {
-  loadActivity()
-  loadLogs()
-  window.addEventListener('resize', handleResize)
+// NDatePicker 用 timestamp(ms) 不是 string，做一层桥接到 selectedDate(YYYY-MM-DD)。
+const dateTs = computed<number | null>(() => {
+  if (!selectedDate.value) return null
+  const [y, m, d] = selectedDate.value.split('-').map(Number)
+  if (!y || !m || !d) return null
+  return new Date(y, m - 1, d).getTime()
 })
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleResize)
-  chartInstance && chartInstance.dispose()
-})
+function onDateTsChange(ts: number | null) {
+  if (ts == null) {
+    selectedDate.value = todayStr()
+    mode.value = 'today'
+  } else {
+    const dt = new Date(ts)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    selectedDate.value = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`
+    mode.value = 'date'
+  }
+  page.value = 1
+  fetchLogs()
+}
+function disableFuture(ts: number) {
+  return ts > Date.now()
+}
 
-// 主题切换时重画
-const themeObserver = ref(null)
-onMounted(() => {
-  themeObserver.value = new MutationObserver(() => renderChart())
-  themeObserver.value.observe(document.documentElement, { attributes: true, attributeFilter: ['data-world'] })
-})
-onBeforeUnmount(() => themeObserver.value && themeObserver.value.disconnect())
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit.value)))
+function goPage(p: number) {
+  if (p < 1 || p > totalPages.value || p === page.value) return
+  page.value = p
+  fetchLogs()
+}
 
-watch(() => activity.value.daily, () => nextTick(renderChart), { deep: true })
+const pageSizeOptions = [
+  { label: '20 / 页', value: 20 },
+  { label: '50 / 页', value: 50 },
+  { label: '100 / 页', value: 100 },
+  { label: '200 / 页', value: 200 },
+  { label: '500 / 页', value: 500 },
+]
+function onLimitChange(v: number) {
+  limit.value = v
+  page.value = 1
+  fetchLogs()
+}
 
-// ===== 渲染辅助 =====
-function fmtTime(ts) {
-  if (!ts) return '-'
-  const ms = typeof ts === 'number' ? ts * 1000 : ts
-  return new Date(ms).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
+function toggleAutoRefresh() {
+  autoRefresh.value = !autoRefresh.value
+  if (autoRefresh.value) {
+    autoTimer = window.setInterval(fetchLogs, 15_000)
+  } else if (autoTimer) {
+    window.clearInterval(autoTimer)
+    autoTimer = undefined
+  }
+}
+
+const filteredLogs = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return logs.value.filter(l => {
+    if (onlyError.value && !(l.error || l.status === 'error')) return false
+    if (!q) return true
+    return (l.request_id || '').toLowerCase().includes(q) ||
+      (l.original_model || '').toLowerCase().includes(q) ||
+      (l.actual_model || '').toLowerCase().includes(q) ||
+      (l.channel_alias || '').toLowerCase().includes(q) ||
+      (l.channel_id || '').toLowerCase().includes(q)
   })
+})
+
+// stat ribbon 数据：今天 24 小时桶
+function buildHourBuckets() {
+  const calls = new Array(24).fill(0)
+  const latencyAcc = new Array(24).fill(0)
+  const latencyCnt = new Array(24).fill(0)
+  const errors = new Array(24).fill(0)
+  for (const log of logs.value) {
+    const t = log.timestamp ? new Date(log.timestamp * 1000) : (log.time ? new Date(log.time) : null)
+    if (!t) continue
+    const h = t.getHours()
+    calls[h] += 1
+    if (typeof log.duration_ms === 'number' && log.duration_ms > 0) {
+      latencyAcc[h] += log.duration_ms
+      latencyCnt[h] += 1
+    }
+    if (log.error || log.status === 'error') errors[h] += 1
+  }
+  const latency = latencyAcc.map((a, i) => latencyCnt[i] ? a / latencyCnt[i] : 0)
+  return { calls, latency, errors }
 }
 
-// 反穿帮硬约束：必须保留 actual_model || original_model fallback
-function modelOf(log) {
-  return log.actual_model || log.original_model || '-'
-}
-
-function creditToUSD(credits, model) {
-  if (!credits) return '0.00'
-  const m = (model || '').toLowerCase()
-  const isProPool = m.includes('opus') || (m.includes('sonnet') && (m.includes('4.6') || m.includes('4-6')))
-  const pricePerCredit = isProPool ? 0.20 : 0.04
-  return (credits * pricePerCredit).toFixed(4)
-}
-
-const items = computed(() => logs.value.map((log, i) => ({
-  id: log.request_id || `log-${i}`,
-  time: fmtTime(log.timestamp),
-  status: log.status === 'error' ? 'danger' : 'success',
-  raw: log,
-})))
-
-// 活跃度状态描述
-const activityHeadline = computed(() => {
-  const a = activity.value
-  if (!a || activityLoading.value) return { value: '—', hint: '' }
+const ribbon = computed(() => {
+  const b = buildHourBuckets()
+  const total = b.calls.reduce((s, v) => s + v, 0)
+  const latencyAll = logs.value.filter(l => l.duration_ms).map(l => l.duration_ms || 0)
+  const avgLat = latencyAll.length ? latencyAll.reduce((s, v) => s + v, 0) / latencyAll.length : 0
+  const errCount = logs.value.filter(l => l.error || l.status === 'error').length
+  const errPct = total ? (errCount / total) * 100 : 0
   return {
-    value: a.totalCalls,
-    hint: a.totalErrors > 0 ? `含 ${a.totalErrors} 次失败` : '7 天累计',
+    todayCount: total,
+    avgLatencyMs: avgLat,
+    errorRatePct: errPct,
+    callsPerHour: b.calls,
+    latencyPerHour: b.latency,
+    errorsPerHour: b.errors,
   }
 })
 
-const tokenHeadline = computed(() => {
-  const t = activity.value.totalTokens || 0
-  if (t < 1000) return { value: t.toString(), unit: 'tk' }
-  if (t < 1_000_000) return { value: (t / 1000).toFixed(1), unit: 'K' }
-  return { value: (t / 1_000_000).toFixed(2), unit: 'M' }
-})
+function fmtTime(l: UserLog) {
+  const t = l.timestamp ? new Date(l.timestamp * 1000) : (l.time ? new Date(l.time) : null)
+  if (!t) return '-'
+  return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}`
+}
+function fmtNum(n?: number) { return (n || 0).toLocaleString('en-US') }
+function dollar(n?: number) { return fmtCost(n) }
+function statusLabel(l: UserLog): string {
+  if (l.error || l.status === 'error') return 'ERR'
+  if (typeof l.status === 'number') return String(l.status)
+  if (typeof l.status === 'string' && l.status) return l.status
+  return 'OK'
+}
+function latencyClass(ms?: number) {
+  const v = ms || 0
+  if (v && v < 150) return 'num--green'
+  if (v && v < 280) return ''
+  if (v) return 'num--warn'
+  return ''
+}
+function statusOf(l: UserLog): 'ok' | 'warn' | 'err' {
+  if (l.error || l.status === 'error') return 'err'
+  if ((l.duration_ms || 0) > 800) return 'warn'
+  return 'ok'
+}
+function shortRid(r?: string) { return (r || '').slice(0, 8) }
 
-const promoStatus = computed(() => {
-  const p = activity.value.promotion
-  if (!p || !p.active) return null
-  const need = p.minRecentCalls
-  const have = p.recentCalls
-  const pct = need > 0 ? Math.min(100, Math.round((have / need) * 100)) : 0
-  return {
-    name: p.name || '当期活动',
-    eligible: p.eligible,
-    whitelisted: p.whitelisted,
-    need, have, pct,
-    days: p.recentCallsDays,
-    proPrice: p.proPoolPriceUSD,
-    freePrice: p.freePoolPriceUSD,
+function exportCsv() {
+  if (!filteredLogs.value.length) {
+    message.warning('当前没有可导出的日志')
+    return
   }
+  const headers = ['time', 'request_id', 'model', 'channel', 'in', 'out', 'total', 'cost_usd', 'duration_ms', 'status']
+  const rows = filteredLogs.value.map(l => [
+    fmtTime(l),
+    l.request_id || '',
+    l.original_model || l.actual_model || '',
+    l.channel_alias || l.channel_id || '',
+    l.input_tokens || 0,
+    l.output_tokens || 0,
+    (l.input_tokens || 0) + (l.output_tokens || 0),
+    l.cost_usd || 0,
+    l.duration_ms || 0,
+    l.error ? 'error' : 'ok',
+  ])
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `logs-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+  message.success('已导出 CSV')
+}
+
+function openDrawer(l: UserLog) { selected.value = l }
+function closeDrawer() { selected.value = null }
+
+// 给抽屉的 baseline：同模型最近 N 次延迟
+const drawerBaseline = computed(() => {
+  if (!selected.value) return []
+  const m = selected.value.original_model || selected.value.actual_model
+  return logs.value
+    .filter(l => (l.original_model || l.actual_model) === m && typeof l.duration_ms === 'number' && l.duration_ms > 0)
+    .map(l => l.duration_ms as number)
+    .slice(0, 50)
 })
 
-const titleOfDate = computed(() => {
-  if (selectedDate.value === 'today') return '今日调用'
-  if (selectedDate.value === 'all') return '全部记录'
-  return `${selectedDate.value} 调用`
-})
+onMounted(fetchLogs)
 </script>
 
 <template>
-  <div class="logs-page">
-    <!-- 顶部 -->
-    <header class="page-head">
-      <div class="title-row">
-        <div class="title-wrap">
-          <div class="eyebrow">用户中心 · 日志</div>
-          <h1 class="page-title">活跃度 &amp; 调用记录</h1>
-        </div>
-        <WorldChip variant="info" :dot="true">
-          <Activity :size="11" />
-          {{ activity.totalCalls }} 次 / 7 天
-        </WorldChip>
-      </div>
-    </header>
+  <div class="logs stellar-scope">
+    <LogStatRibbon
+      :today-count="ribbon.todayCount"
+      :avg-latency-ms="ribbon.avgLatencyMs"
+      :error-rate-pct="ribbon.errorRatePct"
+      :calls-per-hour="ribbon.callsPerHour"
+      :latency-per-hour="ribbon.latencyPerHour"
+      :errors-per-hour="ribbon.errorsPerHour"
+    />
 
-    <!-- 顶部数据卡 -->
-    <div class="stat-grid">
-      <WorldStat
-        label="7 天调用"
-        :value="activityHeadline.value"
-        unit="次"
-        :hint="activityHeadline.hint"
-        :icon="Activity"
-        variant="primary"
-      />
-      <WorldStat
-        label="7 天 Tokens"
-        :value="tokenHeadline.value"
-        :unit="tokenHeadline.unit"
-        hint="input + output 累计"
-        :icon="Database"
-        variant="info"
-      />
-      <WorldStat
-        label="7 天花费"
-        :value="`$${(activity.totalCostUSD || 0).toFixed(2)}`"
-        :hint="`≈ ¥${((activity.totalCostUSD || 0) * 0.05).toFixed(2)}（1¥=20$）`"
-        :icon="Coins"
-        variant="warning"
-      />
-      <WorldStat
-        v-if="promoStatus"
-        :label="`活动门槛 · ${promoStatus.name}`"
-        :value="promoStatus.eligible ? '已达标' : `${promoStatus.have}/${promoStatus.need}`"
-        :hint="promoStatus.eligible ?
-          (promoStatus.whitelisted ? '白名单永久享受' : `${promoStatus.days} 天内调用满足`) :
-          `还差 ${Math.max(0, promoStatus.need - promoStatus.have)} 次（${promoStatus.days} 天内）`"
-        :icon="Sparkles"
-        :variant="promoStatus.eligible ? 'success' : 'warning'"
-      />
-      <WorldStat
-        v-else
-        label="活动状态"
-        value="未开放"
-        hint="管理员开启活动后自动显示"
-        :icon="Sparkles"
-        variant="info"
-      />
+    <!-- Filter ribbon -->
+    <div class="filter-ribbon">
+      <div class="filter-ribbon__left">
+        <button class="st-select" :class="{ 'is-active': mode === 'today' }" @click="setMode('today')">
+          <span>今天</span>
+        </button>
+        <n-date-picker
+          type="date"
+          size="small"
+          :value="dateTs"
+          :is-date-disabled="disableFuture"
+          :class="{ 'is-active': mode === 'date' }"
+          class="st-date"
+          format="yyyy-MM-dd"
+          placement="bottom"
+          clearable
+          placeholder="选择日期"
+          @update:value="onDateTsChange"
+        />
+        <button class="st-select" :class="{ 'is-active': mode === 'all' }" @click="setMode('all')">
+          <span>全部历史</span>
+        </button>
+        <button class="st-select" :class="{ 'is-active': onlyError }" @click="onlyError = !onlyError">
+          <span>{{ onlyError ? '仅错误' : '全部状态' }}</span>
+        </button>
+        <div class="st-input st-input--search">
+          <Search :size="13" />
+          <input v-model="search" class="mono" placeholder="搜索 request_id / 模型 / 渠道" />
+        </div>
+      </div>
+      <div class="filter-ribbon__right">
+        <button class="btn btn--secondary btn--sm" @click="exportCsv">
+          <Download :size="13" />导出 CSV
+        </button>
+        <div class="st-switch">
+          <span class="t-label">自动刷新</span>
+          <button
+            class="st-switch__track"
+            :class="{ 'is-on': autoRefresh }"
+            @click="toggleAutoRefresh"
+          ><span class="st-switch__thumb"></span></button>
+        </div>
+      </div>
     </div>
 
-    <!-- ECharts 7 天趋势 -->
-    <WorldCard padding="md" class="chart-card">
-      <div class="chart-head">
-        <div class="chart-title">
-          <TrendingUp :size="16" />
-          <span>近 7 天活跃度趋势</span>
-        </div>
-        <div class="chart-meta">
-          <span class="meta-pill"><span class="dot d-accent"></span>调用次数</span>
-          <span class="meta-pill"><span class="dot d-success"></span>Tokens (K)</span>
-        </div>
-      </div>
-      <div ref="chartEl" class="chart-canvas"></div>
-    </WorldCard>
-
-    <!-- 日期切换 -->
-    <WorldCard padding="md" class="date-card">
-      <div class="date-head">
-        <Calendar :size="14" />
-        <span>{{ titleOfDate }}</span>
-        <span class="date-total">{{ total }} 条</span>
-      </div>
-      <div class="date-chips">
-        <button
-          v-for="c in dateChips"
-          :key="c.key"
-          @click="pickDate(c.key)"
-          :class="['date-chip', { active: selectedDate === c.key, all: c.key === 'all' }]"
-        >
-          <span class="cl">{{ c.label }}</span>
-          <span v-if="c.sub" class="cs">周{{ c.sub }}</span>
-        </button>
-      </div>
-    </WorldCard>
-
-    <!-- 日志列表 -->
-    <WorldCard padding="md" v-if="loading">
-      <div class="loading-state">
-        <div v-for="i in 4" :key="i" class="skeleton-line" />
-      </div>
-    </WorldCard>
-
-    <WorldCard padding="lg" v-else-if="!logs.length">
-      <div class="empty-state">
-        <div class="empty-icon"><FileX :size="32" /></div>
-        <h4>{{ selectedDate === 'today' ? '今天还没有调用记录' : '当前日期没有调用记录' }}</h4>
-        <p>{{ selectedDate === 'today' ? '快试试发起第一次请求吧' : '试试切换其他日期查看' }}</p>
-      </div>
-    </WorldCard>
-
-    <WorldCard v-else padding="md">
-      <WorldTimeline :items="items" empty-text="没有查询到日志">
-        <template #title="{ item }">
-          <span class="model-name">{{ modelOf(item.raw) }}</span>
-        </template>
-        <template #body="{ item }">
-          <div class="log-meta">
-            <span class="meta-item"><Database :size="12" />
-              {{ (((item.raw.input_tokens || 0) + (item.raw.output_tokens || 0)) / 1000).toFixed(1) }}K Tokens
-            </span>
-            <span class="meta-item"><Coins :size="12" />
-              ${{ item.raw.cost_usd ? item.raw.cost_usd.toFixed(4) : creditToUSD(item.raw.credits, modelOf(item.raw)) }}
-            </span>
-            <span class="meta-item" v-if="item.raw.duration_ms">
-              <Timer :size="12" />{{ item.raw.duration_ms }}ms
-            </span>
-            <WorldChip
-              :variant="item.raw.status === 'error' ? 'danger' : 'success'"
-              :dot="true"
-              size="sm"
-            >
-              <component :is="item.raw.status === 'error' ? XCircle : CheckCircle2" :size="11" />
-              {{ item.raw.status === 'error' ? 'ERROR' : (item.raw.stop_reason || 'SUCCESS') }}
-            </WorldChip>
+    <!-- Table + Drawer -->
+    <div class="logs-layout">
+      <div class="tile tile--logs">
+        <div class="table">
+          <div class="table__head">
+            <div style="width:88px">时间</div>
+            <div style="width:100px">request_id</div>
+            <div style="flex:1;min-width:150px">模型</div>
+            <div style="width:100px">上游</div>
+            <div style="width:64px;text-align:right">in</div>
+            <div style="width:64px;text-align:right">out</div>
+            <div style="width:80px;text-align:right">total</div>
+            <div style="width:72px;text-align:right">花费</div>
+            <div style="width:80px;text-align:right">延迟</div>
+            <div style="width:40px;text-align:center">状态</div>
           </div>
-          <div v-if="item.raw.error" class="error-detail">{{ item.raw.error }}</div>
-        </template>
-      </WorldTimeline>
-    </WorldCard>
+          <div class="table__body">
+            <div
+              v-for="l in filteredLogs"
+              :key="l.request_id || `${l.timestamp}-${l.original_model}`"
+              class="table__row"
+              :class="{ 'is-selected': selected?.request_id === l.request_id }"
+              @click="openDrawer(l)"
+            >
+              <div class="time" style="width:88px">{{ fmtTime(l) }}</div>
+              <div style="width:100px" class="mono">{{ shortRid(l.request_id) }}</div>
+              <div style="flex:1;min-width:150px">{{ l.original_model || l.actual_model || '-' }}</div>
+              <div style="width:100px"><span class="chip chip--mono">{{ l.channel_alias || l.channel_id || '-' }}</span></div>
+              <div class="num" style="width:64px;text-align:right">{{ fmtNum(l.input_tokens) }}</div>
+              <div class="num" style="width:64px;text-align:right">{{ fmtNum(l.output_tokens) }}</div>
+              <div class="num num--strong" style="width:80px;text-align:right">{{ fmtNum((l.input_tokens || 0) + (l.output_tokens || 0)) }}</div>
+              <div class="num num--green" style="width:72px;text-align:right">{{ dollar(l.cost_usd) }}</div>
+              <div class="num" :class="latencyClass(l.duration_ms)" style="width:80px;text-align:right">{{ l.duration_ms || 0 }}ms</div>
+              <div class="status-cell" :class="`status--${statusOf(l)}`">
+                <StatusDot :status="statusOf(l)" />
+                <span class="status-text">{{ statusLabel(l) }}</span>
+              </div>
+            </div>
+            <div v-if="!loading && !filteredLogs.length" class="t-label tertiary" style="padding: 24px 12px">
+              {{ search.trim() || onlyError ? '无符合条件的日志 · 调整筛选条件后再试' : '还没有调用记录' }}
+            </div>
+          </div>
+          <!-- pagination footer -->
+          <div v-if="total > 0" class="pager">
+            <div class="pager__info">
+              共 <b>{{ total.toLocaleString('en-US') }}</b> 条
+              <span v-if="filteredLogs.length !== logs.length" class="pager__filtered">（当前页过滤后 {{ filteredLogs.length }}）</span>
+              · 第 {{ page }} / {{ totalPages }} 页
+            </div>
+            <div class="pager__ctrl">
+              <button class="st-select" :disabled="page <= 1" @click="goPage(page - 1)" title="上一页">
+                <ChevronLeft :size="13" />
+              </button>
+              <input
+                type="number"
+                class="pager__jump mono"
+                :value="page"
+                :min="1"
+                :max="totalPages"
+                @change="goPage(Number(($event.target as HTMLInputElement).value))"
+              />
+              <button class="st-select" :disabled="page >= totalPages" @click="goPage(page + 1)" title="下一页">
+                <ChevronRight :size="13" />
+              </button>
+              <n-select
+                :value="limit"
+                :options="pageSizeOptions"
+                size="small"
+                class="pager__limit"
+                :consistent-menu-width="false"
+                @update:value="onLimitChange"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <!-- 分页 -->
-    <div v-if="total > limit && !loading" class="pagination">
-      <WorldButton variant="secondary" size="sm" :disabled="page <= 1" @click="prevPage">
-        <ChevronLeft :size="14" /><span>上一页</span>
-      </WorldButton>
-      <span class="pg-info">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-      <WorldButton variant="secondary" size="sm" :disabled="!hasMore" @click="nextPage">
-        <span>下一页</span><ChevronRight :size="14" />
-      </WorldButton>
+      <LogDrawer
+        :log="selected"
+        :baseline="drawerBaseline"
+        @close="closeDrawer"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
-.logs-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.filter-ribbon {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  min-height: 56px;
 }
+.filter-ribbon__left, .filter-ribbon__right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.st-select.is-active { background: rgba(11,212,112,0.08); color: var(--st-success); box-shadow: inset 0 0 0 1px rgba(11,212,112,0.3); }
+.st-input--search { flex: 1; min-width: 200px; max-width: 280px; gap: 8px; height: 32px; }
+.st-input--search input { font-size: 12px; }
 
-/* === 头部 === */
-.page-head { display: flex; flex-direction: column; gap: 12px; }
-.title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.title-wrap { display: flex; flex-direction: column; gap: 2px; }
-.eyebrow {
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--world-text-mute);
-}
-.page-title {
-  font-family: var(--world-font-display);
-  font-size: 1.5rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin: 0;
-  color: var(--world-text-primary);
-}
-
-/* === 统计卡片网格 === */
-.stat-grid {
+.logs-layout {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: 1fr 420px;
+  gap: 24px;
+  align-items: flex-start;
 }
-@media (max-width: 920px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
+.tile--logs { padding: 16px 0; min-height: 600px; background: rgba(255,255,255,0.02); border-radius: 8px; }
+.tile--logs .table__head { padding-left: 24px; padding-right: 24px; }
+.tile--logs .table__row { padding-left: 24px; padding-right: 24px; }
+.tile--logs .table__row.is-selected { background: rgba(11,212,112,0.06); }
 
-/* === ECharts 卡片 === */
-.chart-card { padding: 18px 20px; }
-.chart-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 8px;
+@media (max-width: 1280px) {
+  .logs-layout { grid-template-columns: 1fr 380px; }
 }
-.chart-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 800;
-  font-size: 0.95rem;
-  color: var(--world-text-primary);
-  letter-spacing: -0.01em;
+@media (max-width: 1024px) {
+  .logs-layout { grid-template-columns: 1fr; }
 }
-.chart-title svg { color: var(--world-accent); }
-.chart-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
+@media (max-width: 768px) {
+  .tile--logs .table__head, .tile--logs .table__row { padding-left: 12px; padding-right: 12px; }
+  .logs-layout { overflow-x: auto; }
 }
-.meta-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
-  letter-spacing: 0.04em;
-}
-.dot { width: 8px; height: 8px; border-radius: 2px; }
-.d-accent  { background: var(--world-accent); }
-.d-success { background: var(--world-success); }
-.chart-canvas {
-  width: 100%;
-  height: 280px;
-}
-@media (max-width: 480px) { .chart-canvas { height: 220px; } }
 
-/* === 日期切换器 === */
-.date-card { padding: 14px 16px; }
-.date-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 0.85rem;
-  color: var(--world-text-primary);
-  margin-bottom: 10px;
-}
-.date-head svg { color: var(--world-text-mute); }
-.date-total {
-  margin-left: auto;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
-  background: var(--world-overlay-light);
-  padding: 3px 10px;
-  border-radius: var(--world-radius-full);
-}
-.date-chips {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.date-chip {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  min-width: 56px;
-  padding: 8px 10px;
-  background: transparent;
-  border: 1px solid var(--world-glass-border);
-  border-radius: var(--world-radius-md);
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
+/* date picker — 跟其他 st-select 视觉同步 */
+.st-date {
+  height: 28px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  color: #ededed;
+  font-family: var(--st-font-mono, "Geist Mono", monospace);
+  font-size: 12px;
   cursor: pointer;
-  transition: all 200ms ease;
+  transition: border-color 0.12s, background 0.12s;
 }
-.date-chip .cl { font-size: 0.78rem; font-weight: 800; letter-spacing: -0.01em; }
-.date-chip .cs { font-size: 0.62rem; opacity: 0.7; letter-spacing: 0.06em; }
-.date-chip:hover {
-  border-color: var(--world-accent);
-  color: var(--world-text-primary);
-  transform: translateY(-1px);
-}
-.date-chip.active {
-  background: var(--world-accent);
-  border-color: var(--world-accent);
-  color: #fff;
-  box-shadow: 0 4px 14px -4px var(--world-accent);
-}
-.date-chip.active .cs { opacity: 0.85; }
-.date-chip.all {
-  background: transparent;
-  border-style: dashed;
-}
-.date-chip.all.active {
-  background: var(--world-text-primary);
-  border-color: var(--world-text-primary);
-  color: var(--world-bg-primary, #fff);
+.st-date::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
+.st-date:hover { border-color: rgba(255, 255, 255, 0.20); background: rgba(255, 255, 255, 0.05); }
+.st-date.is-active {
+  border-color: rgba(82, 168, 255, 0.50);
+  background: rgba(82, 168, 255, 0.08);
+  color: #52a8ff;
 }
 
-/* === 分页 === */
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 6px 0;
+/* pagination footer */
+.pager {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.01);
 }
-.pg-info {
-  font-size: 0.78rem;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
+.pager__info { color: #a3a3a3; font-size: 12px; }
+.pager__info b { color: #ededed; font-variant-numeric: tabular-nums; }
+.pager__filtered { color: #707070; }
+.pager__ctrl { display: flex; align-items: center; gap: 6px; }
+.pager__ctrl .st-select { padding: 0 10px; min-width: 32px; height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+.pager__ctrl .st-select:disabled { opacity: 0.4; cursor: not-allowed; }
+.pager__jump {
+  width: 56px; height: 28px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  color: #ededed; text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
 }
+.pager__jump::-webkit-outer-spin-button,
+.pager__jump::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pager__jump:focus { outline: none; border-color: rgba(82, 168, 255, 0.50); }
+.pager__limit { width: 96px; }
 
-/* === loading skeleton === */
-.loading-state { display: flex; flex-direction: column; gap: 14px; padding: 4px 0; }
-.skeleton-line {
-  height: 60px;
-  border-radius: var(--world-radius-md);
-  background: linear-gradient(
-    90deg,
-    var(--world-overlay-light) 0%,
-    var(--world-overlay-medium) 50%,
-    var(--world-overlay-light) 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.4s linear infinite;
-}
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* === empty === */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 24px 12px;
-  gap: 12px;
-}
-.empty-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--world-overlay-light);
-  color: var(--world-text-mute);
-}
-.empty-state h4 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 800;
-  color: var(--world-text-primary);
-}
-.empty-state p {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--world-text-mute);
-}
-
-/* === log entries === */
-.model-name {
-  font-family: var(--world-font-mono);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--world-text-primary);
-  letter-spacing: 0.02em;
-}
-[data-world="daogui"] .model-name {
-  color: var(--world-paper-aged);
-}
-.log-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-}
-.meta-item {
+/* 状态列：圆点 + 文本（200 / ERR / OK）— 修复仅显示圆点没数字的 user/admin 不一致 */
+.status-cell {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.75rem;
-  color: var(--world-text-mute);
-  font-family: var(--world-font-mono);
+  gap: 6px;
+  justify-content: center;
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--st-font-mono, 'Geist Mono', monospace);
+  font-size: 11px;
+  font-weight: 600;
 }
-.error-detail {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: rgba(239, 68, 68, 0.08);
-  border-left: 2px solid var(--world-error);
-  border-radius: var(--world-radius-sm);
-  font-size: 0.75rem;
-  color: var(--world-error);
-  font-family: var(--world-font-mono);
-  word-break: break-all;
-}
-[data-world="daogui"] .error-detail {
-  background: rgba(196, 30, 58, 0.10);
-  color: #f5707f;
-}
+.status-cell .status-text { letter-spacing: 0.04em; }
+.status--ok  .status-text { color: var(--st-success, #0bd470); }
+.status--warn .status-text { color: var(--st-warning, #f5a623); }
+.status--err .status-text { color: var(--st-error, #ff4d4d); }
 </style>

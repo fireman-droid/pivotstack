@@ -1,96 +1,44 @@
 <script setup>
-const props = defineProps({
-  modelValue: { type: Boolean, default: false },
-  disabled:   { type: Boolean, default: false },
-  size:       { type: String,  default: 'md' }, // sm | md | lg
-})
+// 最小 Switch shim：legacy view (Accounts/Settings/Stealth) 还在用。
+// v6 view 全部用 naive-ui NSwitch，不应再 import 此文件。
+const props = defineProps({ modelValue: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue'])
-function onToggle(e) {
-  if (props.disabled) return
-  emit('update:modelValue', e.target.checked)
-}
+function toggle() { emit('update:modelValue', !props.modelValue) }
 </script>
 
 <template>
-  <label class="ws-switch" :class="[`s-${size}`, { 'is-disabled': disabled }]">
-    <input
-      type="checkbox"
-      :checked="modelValue"
-      :disabled="disabled"
-      @change="onToggle"
-    />
-    <span class="toggle-track">
-      <span class="toggle-knob" />
-    </span>
-  </label>
+  <button
+    type="button"
+    role="switch"
+    :aria-checked="modelValue"
+    class="switch"
+    :class="{ 'switch--on': modelValue }"
+    @click="toggle"
+  >
+    <span class="switch__thumb" />
+  </button>
 </template>
 
 <style scoped>
-.ws-switch {
+.switch {
   position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 24px;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
   cursor: pointer;
-  flex-shrink: 0;
+  padding: 0;
+  transition: background 150ms;
 }
-.s-sm { width: 32px; height: 18px; }
-.s-lg { width: 52px; height: 28px; }
-.is-disabled { opacity: 0.5; cursor: not-allowed; }
-
-.ws-switch input {
+.switch--on { background: #0bd470; border-color: #0bd470; }
+.switch__thumb {
   position: absolute;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  cursor: inherit;
-  margin: 0;
+  top: 1px; left: 1px;
+  width: 14px; height: 14px;
+  border-radius: 999px;
+  background: #ededed;
+  transition: transform 150ms;
 }
-
-.toggle-track {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: var(--world-border);
-  border-radius: var(--world-radius-full);
-  transition: background 220ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.toggle-knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 20px;
-  height: 20px;
-  background: #ffffff;
-  border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.20);
-  transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-.s-sm .toggle-knob { width: 14px; height: 14px; }
-.s-lg .toggle-knob { width: 24px; height: 24px; }
-
-/* === On state: sibling selectors propagate properly === */
-.ws-switch input:checked ~ .toggle-track {
-  background: var(--world-accent);
-}
-.ws-switch input:checked ~ .toggle-track .toggle-knob {
-  transform: translateX(20px);
-}
-.s-sm input:checked ~ .toggle-track .toggle-knob { transform: translateX(14px); }
-.s-lg input:checked ~ .toggle-track .toggle-knob { transform: translateX(24px); }
-
-.ws-switch input:focus-visible ~ .toggle-track {
-  box-shadow: var(--world-focus-ring);
-}
-
-/* === Daogui state polish === */
-[data-world="daogui"] .ws-switch input:checked ~ .toggle-track {
-  background: linear-gradient(135deg, var(--world-accent), var(--world-accent-deep, #8b1626));
-  box-shadow: 0 0 12px rgba(196, 30, 58, 0.45);
-}
-[data-world="daogui"] .ws-switch input:checked ~ .toggle-track .toggle-knob {
-  background: var(--world-paper-aged);
-  box-shadow: 0 0 8px rgba(184, 134, 11, 0.6);
-}
+.switch--on .switch__thumb { transform: translateX(16px); background: #000; }
 </style>

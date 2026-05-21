@@ -3,7 +3,9 @@ package proxy
 import (
 	"errors"
 	"fmt"
+
 	"kiro-api-proxy/config"
+	"kiro-api-proxy/users"
 )
 
 // ErrSellPriceMissing 表示 token 模式下 model 没配售价 — 必须 fail closed，
@@ -21,6 +23,9 @@ type TokenUsage struct {
 // Action 由 PreAuthorizeTokens 固化（"free" / "deduct"），Reconcile 阶段不再 validate。
 // ChannelID 用于标识渠道；InputPerM / OutputPerM 锁住 PreAuth 时价格，
 // 避免 admin 中途改价导致预扣与结算价格不一致。
+//
+// Settled 标识 reservation 已结算或退款 — 重复调用 Reconcile / Refund 直接返回缓存值，
+// 防御 defer cleanup、错误重试等场景下的"重复执行 → 重复给钱"漏洞（billing_audit P0-1/2）。
 type TokenReservation struct {
 	KeyID      string
 	ChannelID  string
@@ -31,6 +36,10 @@ type TokenReservation struct {
 	OutputPerM float64
 	PrePaidUSD float64
 	PreGiftUSD float64
+	// 结算状态（同一 reservation 只能 Reconcile/Refund 一次）
+	Settled         bool
+	SettledPaidUSD  float64
+	SettledGiftUSD  float64
 }
 
 // TokenCost 按售价 × tokens 计算费用（虚拟$）。
@@ -42,10 +51,15 @@ func TokenCost(model string, usage TokenUsage) (float64, error) {
 
 // TokenCostForChannel 渠道感知的费用计算 — 优先用渠道内部定价，回退到全局售价。
 // channelID 为空时退化为 TokenCost 行为。
+// 负价格 fail closed（billing_audit P0-5）：admin 误输负数 / config 坏数据不能反向给用户充钱。
 func TokenCostForChannel(channelID, model string, usage TokenUsage) (float64, error) {
-	price, ok := config.GetSellPriceForChannel(channelID, model)
+	price, ok := resolveSellPriceForChannel(channelID, model)
 	if !ok {
 		return 0, fmt.Errorf("%w: %s (channel=%q)", ErrSellPriceMissing, model, channelID)
+	}
+	if price.InputPerM < 0 || price.OutputPerM < 0 {
+		return 0, fmt.Errorf("invalid sell price (negative): %s in=%.4f out=%.4f (channel=%q)",
+			model, price.InputPerM, price.OutputPerM, channelID)
 	}
 	in := float64(usage.InputTokens) * price.InputPerM / 1_000_000.0
 	out := float64(usage.OutputTokens) * price.OutputPerM / 1_000_000.0
@@ -66,7 +80,7 @@ func PreAuthorizeTokensForChannel(keyID, channelID, model string, est TokenUsage
 	if keyID == "" {
 		return nil, nil
 	}
-	info := config.FindApiKeyByID(keyID)
+	info := users.OverlayWalletOnKey(config.FindApiKeyByID(keyID))
 	if info == nil {
 		return nil, nil
 	}
@@ -76,9 +90,14 @@ func PreAuthorizeTokensForChannel(keyID, channelID, model string, est TokenUsage
 	if err != nil {
 		return nil, err
 	}
-	price, priceOK := config.GetSellPriceForChannel(channelID, model)
+	price, priceOK := resolveSellPriceForChannel(channelID, model)
 	if !priceOK {
 		return nil, fmt.Errorf("%w: %s (channel=%q)", ErrSellPriceMissing, model, channelID)
+	}
+	// 负价格 fail closed（billing_audit P0-5）
+	if price.InputPerM < 0 || price.OutputPerM < 0 {
+		return nil, fmt.Errorf("invalid sell price (negative): %s in=%.4f out=%.4f (channel=%q)",
+			model, price.InputPerM, price.OutputPerM, channelID)
 	}
 	if action == "free" {
 		return &TokenReservation{
@@ -95,7 +114,7 @@ func PreAuthorizeTokensForChannel(keyID, channelID, model string, est TokenUsage
 	estCost := float64(est.InputTokens)*price.InputPerM/1_000_000.0 +
 		float64(est.OutputTokens)*price.OutputPerM/1_000_000.0
 
-	ok, remaining, paid, gift := config.DeductKeyBalance(keyID, estCost)
+	ok, remaining, paid, gift := users.DeductWalletBalance(keyID, estCost)
 	if !ok {
 		return nil, fmt.Errorf("insufficient balance (need $%.4f, have $%.4f)", estCost, remaining)
 	}
@@ -119,12 +138,18 @@ func PreAuthorizeTokensForChannel(keyID, channelID, model string, est TokenUsage
 // ReconcileTokenUsage 按实际 token 用量结算 — 差额补扣 / 多扣退还。
 // 返回 (actualPaidUSD, actualGiftUSD, error)。
 // Reconcile 阶段不再重复 ValidateKeyAccessForModel — Action 由 PreAuthorize 固化。
+//
+// 幂等：同一 reservation 重复调用直接返回首次结果（billing_audit P0-2）。
+// defer cleanup、上游重试、reconcile worker 重跑等场景都不会重复扣账。
 func ReconcileTokenUsage(res *TokenReservation, actual TokenUsage) (float64, float64, error) {
 	if res == nil || res.KeyID == "" {
 		return 0, 0, nil
 	}
 	if res.Action == "" || res.Action == "free" {
 		return 0, 0, nil
+	}
+	if res.Settled {
+		return res.SettledPaidUSD, res.SettledGiftUSD, nil
 	}
 
 	// Reconcile 使用 PreAuth 阶段锁住的价格快照，避免 admin 中途改价影响在途请求。
@@ -139,7 +164,7 @@ func ReconcileTokenUsage(res *TokenReservation, actual TokenUsage) (float64, flo
 
 	switch {
 	case diff > 0:
-		ok, _, addedPaid, addedGift := config.DeductKeyBalance(res.KeyID, diff)
+		ok, _, addedPaid, addedGift := users.DeductWalletBalance(res.KeyID, diff)
 		if !ok {
 			fmt.Printf("[Billing-Token] Reconcile key=%s UNDERPAID by $%.6f\n",
 				safeKeyShort(res.KeyID), diff)
@@ -156,7 +181,7 @@ func ReconcileTokenUsage(res *TokenReservation, actual TokenUsage) (float64, flo
 			refundGift = res.PreGiftUSD
 			refundPaid = over - res.PreGiftUSD
 		}
-		_ = config.AddKeyBalance(res.KeyID, refundPaid, refundGift)
+		_ = users.AddWalletBalance(res.KeyID, refundPaid, refundGift)
 		paid -= refundPaid
 		gift -= refundGift
 	}
@@ -164,19 +189,30 @@ func ReconcileTokenUsage(res *TokenReservation, actual TokenUsage) (float64, flo
 	fmt.Printf("[Billing-Token] Reconcile key=%s channel=%s model=%s in=%d out=%d cost=$%.6f paid=$%.6f gift=$%.6f\n",
 		safeKeyShort(res.KeyID), res.ChannelID, res.Model, actual.InputTokens, actual.OutputTokens, actualCost, paid, gift)
 
+	res.Settled = true
+	res.SettledPaidUSD = paid
+	res.SettledGiftUSD = gift
 	return paid, gift, nil
 }
 
 // RefundTokenReservation 全额退回预扣（请求失败时调用）。
+// 幂等：已结算（Reconcile 过或 Refund 过）直接 return（billing_audit P0-1）。
+// defer cleanup + 错误退款叠加触发不会多还钱。
 func RefundTokenReservation(res *TokenReservation) {
 	if res == nil || res.KeyID == "" {
 		return
 	}
+	if res.Settled {
+		return
+	}
 	if res.PrePaidUSD > 0 || res.PreGiftUSD > 0 {
-		_ = config.AddKeyBalance(res.KeyID, res.PrePaidUSD, res.PreGiftUSD)
+		_ = users.AddWalletBalance(res.KeyID, res.PrePaidUSD, res.PreGiftUSD)
 		fmt.Printf("[Billing-Token] Refund key=%s paid=$%.6f gift=$%.6f\n",
 			safeKeyShort(res.KeyID), res.PrePaidUSD, res.PreGiftUSD)
 	}
+	res.Settled = true
+	res.SettledPaidUSD = 0
+	res.SettledGiftUSD = 0
 }
 
 func safeKeyShort(id string) string {

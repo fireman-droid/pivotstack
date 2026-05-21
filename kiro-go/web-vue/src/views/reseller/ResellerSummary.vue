@@ -1,14 +1,34 @@
-<script setup>
-import { ref, computed, onMounted } from 'vue'
+<script setup lang="ts">
+import { ref, computed, onMounted, h } from 'vue'
 import { userApi } from '../../api/user'
-import { Wallet, Users, ShoppingCart } from 'lucide-vue-next'
-import WorldCard from '../../components/world/WorldCard.vue'
-import WorldStat from '../../components/world/WorldStat.vue'
-import WorldTable from '../../components/world/WorldTable.vue'
-import WorldLoader from '../../components/world/WorldLoader.vue'
+import { useSystemUnit } from '../../composables/useSystemUnit'
+import { NDataTable, NSpin, type DataTableColumns } from 'naive-ui'
+import PageContainer from '../../components/common/PageContainer.vue'
+import PageHeader from '../../components/common/PageHeader.vue'
+import MonoValue from '../../components/common/MonoValue.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 
-const summary = ref(null)
-const keys = ref([])
+interface ChildKey {
+  id: string
+  note?: string
+  keyMasked?: string
+  totalBalance?: number
+  requests?: number
+  recentCalls7d?: number
+}
+interface Summary {
+  totalBalance?: number
+  childCount?: number
+  maxChildKeys?: number
+  soldToChildren?: number
+  totalRecharged?: number
+  childTotalBalance?: number
+  childTotalRequests?: number
+  childTotalCredits?: number
+}
+
+const summary = ref<Summary | null>(null)
+const keys = ref<ChildKey[]>([])
 const loading = ref(true)
 
 async function load() {
@@ -19,161 +39,117 @@ async function load() {
     ])
     summary.value = s
     keys.value = k.keys || []
-  } catch (e) {
-    console.error('Failed to load reseller summary', e)
-  }
+  } catch (e) { /* silent */ }
   loading.value = false
 }
 
 onMounted(load)
 
-const balanceCNY = computed(() => ((summary.value?.totalBalance || 0) * 0.05))
-const soldCNY    = computed(() => ((summary.value?.soldToChildren || 0) * 0.05))
-const rechargedCNY = computed(() => ((summary.value?.totalRecharged || 0) * 0.05))
+const { toCny } = useSystemUnit()
+const cny = (usd: number) => toCny(usd).toFixed(2)
+const balanceClass = computed(() => (summary.value?.totalBalance ?? 0) < 1 ? 'bad' : 'good')
 
-const balanceVariant = computed(() => (summary.value?.totalBalance || 0) < 1 ? 'danger' : 'success')
-
-// Top-5 子 key 按 7 天调用排序
-const topChildren = computed(() => {
+interface TopRow { note: string; keyMasked: string; balance: string; recent7d: string }
+const topRows = computed<TopRow[]>(() => {
   return [...keys.value]
     .sort((a, b) => (b.recentCalls7d || 0) - (a.recentCalls7d || 0))
-    .slice(0, 5)
+    .slice(0, 6)
     .map(k => ({
       note: k.note || k.id.slice(0, 8),
-      keyMasked: k.keyMasked,
-      balance: '$' + (k.totalBalance || 0).toFixed(2),
-      requests: (k.requests || 0).toLocaleString(),
+      keyMasked: k.keyMasked || '-',
+      balance: `$${(k.totalBalance || 0).toFixed(2)}`,
       recent7d: (k.recentCalls7d || 0).toLocaleString(),
     }))
 })
+
+const columns: DataTableColumns<TopRow> = [
+  { title: '备注', key: 'note', width: 240, ellipsis: { tooltip: true }, render: r => r.note },
+  { title: 'Key', key: 'keyMasked', width: 200, render: r => h(MonoValue, { value: r.keyMasked }) },
+  { title: '余额', key: 'balance', width: 120, align: 'center', render: r => h('span', { class: 'mono' }, r.balance) },
+  { title: '近 7 天', key: 'recent7d', width: 120, align: 'center', render: r => h('span', { class: 'mono' }, r.recent7d) },
+]
 </script>
 
 <template>
-  <div v-if="!loading" class="summary-page">
-    <!-- 3 个核心指标（移除"估算利润"——利润由 admin 出激活码时手算让利，系统不再估算） -->
-    <div class="stat-grid">
-      <WorldStat
-        label="我的余额"
-        :value="`$${(summary?.totalBalance || 0).toFixed(2)}`"
-        :hint="`折合 ¥${balanceCNY.toFixed(2)}`"
-        :variant="balanceVariant"
-        :icon="Wallet"
-      />
-      <WorldStat
-        label="子 Key 数量"
-        :value="String(summary?.childCount || 0)"
-        :hint="summary?.maxChildKeys ? `上限 ${summary.maxChildKeys}` : '无上限'"
-        variant="info"
-        :icon="Users"
-      />
-      <WorldStat
-        label="累计已转出"
-        :value="`$${(summary?.soldToChildren || 0).toFixed(2)}`"
-        :hint="`折合 ¥${soldCNY.toFixed(2)} · 累计进货 ¥${rechargedCNY.toFixed(2)}`"
-        variant="primary"
-        :icon="ShoppingCart"
-      />
-    </div>
+  <PageContainer>
+    <PageHeader kicker="代理商 · 概览" :kicker-dot="'#707070'" title="代理总览" desc="子 Key 管理与销售汇总" />
 
-    <!-- 子 key 7 天调用排行 -->
-    <WorldCard padding="md">
-      <h3 class="section-title">子 Key 活跃排行（近 7 天）</h3>
-      <WorldTable
-        v-if="topChildren.length > 0"
-        :columns="[
-          { key: 'note',     label: '备注', mono: false },
-          { key: 'keyMasked', label: 'Key', mono: true },
-          { key: 'balance',  label: '余额', align: 'right' },
-          { key: 'requests', label: '总请求', align: 'right' },
-          { key: 'recent7d', label: '近 7 天', align: 'right' },
-        ]"
-        :rows="topChildren"
-        :compact="true"
-      />
-      <div v-else class="empty-row">
-        暂无子 Key。前往「子 Key 管理」创建。
-      </div>
-    </WorldCard>
+    <n-spin v-if="loading" />
 
-    <!-- 子 key 总览 -->
-    <WorldCard padding="md">
-      <h3 class="section-title">子 Key 汇总</h3>
-      <div class="agg-grid">
-        <div class="agg-cell">
-          <div class="agg-label">子 Key 总余额</div>
-          <div class="agg-val">${{ (summary?.childTotalBalance || 0).toFixed(2) }}</div>
+    <template v-else>
+      <section class="hero-grid">
+        <div class="card">
+          <span class="card__label">我的余额</span>
+          <span class="card__value mono" :class="balanceClass">${{ (summary?.totalBalance ?? 0).toFixed(2) }}</span>
+          <span class="card__sub">折合 ¥{{ cny(summary?.totalBalance ?? 0) }}</span>
         </div>
-        <div class="agg-cell">
-          <div class="agg-label">子 Key 总请求数</div>
-          <div class="agg-val">{{ (summary?.childTotalRequests || 0).toLocaleString() }}</div>
+        <div class="card">
+          <span class="card__label">子 Key 数量</span>
+          <span class="card__value mono">{{ summary?.childCount ?? 0 }}</span>
+          <span class="card__sub">{{ summary?.maxChildKeys ? `上限 ${summary.maxChildKeys}` : '无上限' }}</span>
         </div>
-        <div class="agg-cell">
-          <div class="agg-label">子 Key 总消耗 Credits</div>
-          <div class="agg-val">{{ (summary?.childTotalCredits || 0).toFixed(2) }}</div>
+        <div class="card">
+          <span class="card__label">累计已转出</span>
+          <span class="card__value mono">${{ (summary?.soldToChildren ?? 0).toFixed(2) }}</span>
+          <span class="card__sub">折合 ¥{{ cny(summary?.soldToChildren ?? 0) }}</span>
         </div>
-        <div class="agg-cell">
-          <div class="agg-label">累计充值（admin 给我）</div>
-          <div class="agg-val">${{ (summary?.totalRecharged || 0).toFixed(2) }}</div>
+        <div class="card">
+          <span class="card__label">累计进货</span>
+          <span class="card__value mono">${{ (summary?.totalRecharged ?? 0).toFixed(2) }}</span>
+          <span class="card__sub">折合 ¥{{ cny(summary?.totalRecharged ?? 0) }}</span>
         </div>
-      </div>
-    </WorldCard>
-  </div>
+      </section>
 
-  <div v-else class="loading-wrap">
-    <WorldLoader :size="48" label="载入数据中" />
-  </div>
+      <section class="panel">
+        <h3 class="section-title">子 Key 活跃排行（近 7 天）</h3>
+        <n-data-table
+          v-if="topRows.length"
+          :columns="columns"
+          :data="topRows"
+          :row-key="r => r.keyMasked"
+          :scroll-x="680"
+          size="small"
+          striped
+        />
+        <EmptyState v-else icon="○" title="暂无子 Key" desc="前往「子 Key 管理」创建" />
+      </section>
+
+      <section class="panel">
+        <h3 class="section-title">子 Key 汇总</h3>
+        <dl class="kv">
+          <div class="kv__row"><dt>子 Key 总余额</dt><dd class="mono">${{ (summary?.childTotalBalance ?? 0).toFixed(2) }}</dd></div>
+          <div class="kv__row"><dt>子 Key 总请求数</dt><dd class="mono">{{ (summary?.childTotalRequests ?? 0).toLocaleString() }}</dd></div>
+          <div class="kv__row"><dt>子 Key 总消耗 Credits</dt><dd class="mono">{{ (summary?.childTotalCredits ?? 0).toFixed(2) }}</dd></div>
+        </dl>
+      </section>
+    </template>
+  </PageContainer>
 </template>
 
 <style scoped>
-.summary-page { display: flex; flex-direction: column; gap: 18px; }
-.stat-grid {
+.hero-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  margin-bottom: 20px;
 }
-@media (max-width: 920px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
+.card { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; background: #0a0a0a; }
+.card__label { font-size: 11px; color: #707070; text-transform: uppercase; letter-spacing: 0.06em; }
+.card__value { font-size: 24px; font-weight: 600; color: #ededed; }
+.card__sub { font-size: 11px; color: #707070; }
+.mono { font-family: "Geist Mono", ui-monospace, monospace; }
+.mono.good { color: #0bd470; }
+.mono.bad { color: #ff7a7a; }
 
-.section-title {
-  font-size: 0.95rem;
-  font-weight: 800;
-  margin: 0 0 14px;
-  color: var(--world-text-primary);
-  font-family: var(--world-font-display);
-}
-[data-world="daogui"] .section-title { color: var(--world-paper-aged); }
+.panel { padding: 16px; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; background: #0a0a0a; margin-bottom: 16px; }
+.section-title { margin: 0 0 12px; color: #ededed; font-size: 14px; font-weight: 600; }
 
-.empty-row {
-  padding: 24px;
-  text-align: center;
-  color: var(--world-text-mute);
-  font-size: 0.85rem;
-}
+.kv { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.kv__row { display: grid; grid-template-columns: 180px 1fr; font-size: 13px; }
+.kv__row dt { color: #707070; }
+.kv__row dd { color: #ededed; margin: 0; }
 
-.agg-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
-}
-.agg-cell { display: flex; flex-direction: column; gap: 4px; }
-.agg-label {
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--world-text-mute);
-}
-.agg-val {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: var(--world-text-primary);
-  font-family: var(--world-font-mono);
-}
-
-.loading-wrap {
-  min-height: 50vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+@media (max-width: 900px) {
+  .hero-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>
