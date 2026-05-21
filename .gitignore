@@ -37,7 +37,6 @@ deploy-kiro.sh
 deploy-server.sh
 deploy-update.sh
 import_accounts.py
-kiro-go/proxy/db_import.go
 
 # 本地编译产物（v6 时期遗留）
 kiro-go/kiro-api-proxy.exe
