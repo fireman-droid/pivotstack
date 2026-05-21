@@ -154,3 +154,46 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 upload-data-to-jp.ps1
+
+# ==============================
+# v10 cleanup 补充（2026-05-21）
+# ==============================
+# 前端 scratch / design 实验产物
+kiro-go/web-vue/.design/
+kiro-go/web-vue/.tmp/
+kiro-go/web-vue/.scratch-*.txt
+kiro-go/web-vue/__verify_logs_detail.jpeg
+
+# 运行时数据备份残留兜底（live 文件不会匹配这些模式）
+kiro-go/data/*.bak*
+kiro-go/data/*.pre-v8.*
+kiro-go/data/*.before-*
+kiro-go/data/*.wallet-*
+kiro-go/data/*.v5.bak.*
+kiro-go/data/debug.log
+
+# v4-v5 期 settlement 结算报告（含 admin 邮箱等 PII，禁 commit）
+kiro-go/data/settlement_*.csv
+kiro-go/data/settlement_*.json
+kiro-go/data/restored_keys_*.csv
+kiro-go/data/summary.txt
+
+# 顶级测试输出
+test_creds.json
+credit_*.json
+credit_output.txt
+*_test_results.json
+
+# kiro-go 顶级编译产物 / 测试 dump
+kiro-go/*.exe
+kiro-go/*.exe~
+kiro-go/kiro-api-proxy-linux
+kiro-go/*.b64
+kiro-go/dump.txt
+kiro-go/out.txt
+kiro-go/test_out.txt
+
+# 项目级离线打包
+kiro-go-v*.tar.gz
+kiro-stack-local-backup-*.zip
+*.tgz

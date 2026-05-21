@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-    import credit_calculator; credit_calculator.main()
-                              ^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: module 'credit_calculator' has no attribute 'main'
